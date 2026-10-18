@@ -1,6 +1,24 @@
 # ios-extra — active handoff
 
-## Active implementation — 0083 CX power experiment (not yet built/booted)
+## Latest phone result — 0083 CX power experiment, 2026-10-18 19:47 UTC
+
+- Temporary boot of `shim/out/shim-boot-0083-cx.img` (SHA256 `836062ec…abc451`,
+  sweetgpu=3) after the user put the phone in fastboot; success in 0.560s.
+  Logs outside Git: logs/phone-0083-{fastboot.txt,cx.pcap,cx.txt}.
+- **CX GDSC powered on and rolled back cleanly.** Reports 0-3 (original + 3
+  cached replays) all show: GDSCR before `0x00222001`; MX and CX LOW_SVS votes
+  both returned 0 (hlvl index 2 each); after clearing SW_COLLAPSE GDSCR became
+  **`0xf8222000`** on the first poll (PWR_ON plus the other status bits set)
+  and still `0xf8222000` after a 1 ms hold; after SW_COLLAPSE it returned to
+  `0x00222001` on the first poll; both releases returned 0.
+  First measured successful ARC-vote + CX GDSC power-up on this phone.
+- USB ECM up, ping ok, no kernel panic string (only the DumpPanic exec).
+  The capture was short (~40 s): only one SpringBoard line; UI not confirmed
+  from the log. Phone left running 0083 (temporary boot).
+- **Next:** GMU clock bring-up (CX is now known good): GCC GPLL0 divided parent,
+  RCG 0x1120, gate 0x52004 bit16, CX GMU branch 0x1098 bit0, with a held CX vote.
+
+## Active implementation — 0083 CX power experiment (built; phone-tested above)
 
 - `xnu/patches/0083-sweet-gpu-cx-experiment.patch`: new ARC vote path in
   sweet_rpmh.c and `sweetgpu=3` in sweet_gpu.c (MX/CX LOW_SVS votes, CX GDSC
