@@ -1,6 +1,28 @@
 # ios-extra — active handoff
 
-## Active implementation — 0087 SMMU read-only inventory (not yet built/booted)
+## Latest phone result — 0087 GPU SMMU inventory, 2026-10-18 21:15 UTC
+
+- `shim/out/shim-boot-0087-smmu.img` (SHA256 `142dca90…1f50df8`, CI 39165446245,
+  sweetgpu=7), fastboot success 0.598s, user put the phone in fastboot. Logs
+  outside Git: logs/phone-0087-{fastboot.txt,smmu.pcap,smmu.txt}.
+- **No bus fault; the kgsl SMMU (0x05040000) is Linux-visible and readable.** Raw
+  values (decode below follows the ARM SMMUv2 manual from memory, not verified):
+  sCR0 0x00200626, sCR1/sCR2/sACR 0, IDR0 0x48016605, IDR1 0x20008005, IDR2
+  0x00007511, IDR7 0, sGFSR/sGFSYNR0 0; SMR0-4 all 0x00000000 and S2CR0-4 all
+  0x000200ff; CBAR0-3 0; CB0 SCTLR/TTBR0/TCR/FSR all 0; +0x6000 = 0x00000178.
+- Reading: NUMSMRG=5, NUMCB=5, S2CR TYPE=2 (fault) on every group with no valid SMR,
+  all context banks unconfigured: the SMMU is enabled (CLIENTPD=0) and faults every
+  stream until we program it. IDR0 suggests stream matching, coherent table walk
+  (CTTW) and ATOS support; IDR2 suggests 4/16/64 KiB granules, 48-bit UBS.
+  sGFSR clean: nothing has faulted since boot.
+- GMU, GMU firmware step and clock rollback identical to 0086. Home screen for this
+  boot not yet confirmed.
+- **Next:** program stream 5 (GMU) to a context bank with a tiny 4 KiB-granule page
+  table and verify with the SMMU's own ATOS translate (no GMU run needed); mainline
+  uses one GMU address space, IOVA 0x60000000 dummy page, HFI/log buffers at
+  0x60001000+.
+
+## Active implementation — 0087 SMMU read-only inventory (built, phone-tested above)
 
 - `xnu/patches/0087-sweet-gpu-smmu-inventory.patch`: `sweetgpu=7` (= mode 6 + SMMU
   reads at 0x05040000). Docs in `docs/GPU_CX_EXPERIMENT.md`. 0086 was confirmed to
