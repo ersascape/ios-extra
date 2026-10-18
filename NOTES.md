@@ -17,7 +17,7 @@
 ## Initial state
 
 - Kernel patches 0001–0079, shim and tools imported. No experimental driver
-  implementation yet. The specific first driver has not been selected.
+  implementation yet. The user selected full GPU driver work as the target.
 - No ignored build trees, Apple files, device backups, root images or recovery
   images copied. Existing artifacts remain in the reference workspace and
   `/run/media/dipa/android/ios-sweet-work/`.
@@ -48,5 +48,16 @@
 - Tooling follow-up: `tools/xnu-cc.py` hardcodes the upstream runner path;
   adapt it before replaying logs from this repository. Stage separate local
   build artifacts before kernel edits. CI itself does not use that helper.
-- Next: select the first driver target with the user, then develop and
-  validate it in this checkout. No publication or upstream integration yet.
+- GPU research/plan recorded in `docs/GPU_PLAN.md`. Saved live DT identifies
+  Adreno 618 `0x06010800`, GPU base `0x05000000`, GPU SMMU `0x05040000`,
+  GMU `0x0506a000`, GPUCC `0x05090000`. These are declarations, not tested
+  post-ABL register accessibility. Linux/Mesa references are linked in the plan.
+- Shared-cache load commands show AppleMetalGLRenderer depends on Metal;
+  AGXMetalA11 depends on Metal/IOGPU/IOSurface. The actual usable iOS driver
+  integration boundary remains unproven; do not assume GLES bypasses Metal.
+- User reminder: other agents work on ios-sweet. Keep edits, generated trees
+  and builds isolated here; coordinate future shared-phone tests. No agents
+  were spawned and no phone commands were run in this research session.
+- Next: audit GPU initialization dependencies and iOS renderer selection,
+  then prepare opt-in GPU probe patch 0080 in an isolated build tree. No
+  publication, kernel build, GPU hardware test or upstream integration yet.
