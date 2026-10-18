@@ -1,0 +1,140 @@
+diff --git a/bsd/dev/sweet_gpu.c b/bsd/dev/sweet_gpu.c
+index 8f7e5b5..d5836bb 100644
+--- a/bsd/dev/sweet_gpu.c
++++ b/bsd/dev/sweet_gpu.c
+@@ -21,6 +21,9 @@
+  * sweetgpu=5 also enables the two GCC bus branches Linux holds for the GMU
+  * (memnoc, ddrss-axi), maps the GMU register block and reads a short list of
+  * CX-side registers inside that window; reads are cached for the report.
++ * sweetgpu=6 additionally copies the GMU firmware (linux-firmware a630_gmu.bin,
++ * staged by 0086-stage-gpu-firmware.sh) into the GMU ITCM/DTCM and reads it back,
++ * only while the CM3 is verified to be held in reset. The CM3 is never released.
+  * Register provenance and limitations: ios-extra/docs/GPU_BRINGUP.md.
+  */
+ #if defined(ARM64_BOARD_CONFIG_SWEET)
+@@ -28,6 +31,7 @@
+ #include <sys/systm.h>
+ #include <pexpert/pexpert.h>
+ #include <kern/clock.h>
++#include "sweet_gpu_fw.h"
+ 
+ extern vm_offset_t ml_io_map(vm_offset_t, vm_size_t);
+ void sweet_gpu_probe(void);
+@@ -72,6 +76,8 @@ int sweet_rpmh_arc_set(const char *res, unsigned corner, unsigned *level);
+ #define GPU_GMU_PA              0x0506a000
+ #define GPU_GMU_SIZE            0x00031000
+ #define GPU_GMU_READS           6u
++#define GPU_GMU_TCM             0x3000u   /* ITCM_START 0x1B400; DTCM follows at +0x4000 */
++#define GPU_GMU_FW_MAX          0x8000u
+ #define GPU_GDSC_HOLD_US        1000u
+ 
+ #define GPU_DB_LOCATOR_PA       0x0c3f000cu
+@@ -119,6 +125,10 @@ struct gpu_power_experiment {
+ 	/* sweetgpu=5: GMU register reads (done = how many completed). */
+ 	unsigned int gmu_mapped, gmu_done;
+ 	uint32_t gmu_value[GPU_GMU_READS];
++	/* sweetgpu=6: firmware copy into TCM. */
++	unsigned int fw_requested, fw_written, fw_checked, fw_bad;
++	uint32_t fw_size, fw_hash, fw_first_bad;
++	const char *fw_error;
+ };
+ 
+ struct sweet_gpu_clock {
+@@ -281,8 +291,54 @@ static const struct { const char *name; uint32_t off; } gpu_gmu_regs[GPU_GMU_REA
+ 	{ "AO_HOST_IRQ_STATUS", 0x24c14 },
+ };
+ 
++static uint32_t
++gpu_fw_word(unsigned int i)
++{
++	return (uint32_t)sweet_gpu_gmu_fw[4 * i] | (uint32_t)sweet_gpu_gmu_fw[4 * i + 1] << 8 |
++	    (uint32_t)sweet_gpu_gmu_fw[4 * i + 2] << 16 | (uint32_t)sweet_gpu_gmu_fw[4 * i + 3] << 24;
++}
++
++/* Legacy (headerless) image: the whole file goes to ITCM_START, ITCM then DTCM. */
+ static void
+-gpu_gmu_read(struct gpu_power_experiment *x)
++gpu_gmu_fw_load(vm_offset_t gmu, struct gpu_power_experiment *x)
++{
++	const unsigned int words = sizeof(sweet_gpu_gmu_fw) / 4;
++	uint32_t hash = 2166136261u;
++
++	x->fw_requested = 1;
++	x->fw_size = sizeof(sweet_gpu_gmu_fw);
++	for (unsigned int i = 0; i < sizeof(sweet_gpu_gmu_fw); i++) {
++		hash = (hash ^ sweet_gpu_gmu_fw[i]) * 16777619u;
++	}
++	x->fw_hash = hash;
++	if ((sizeof(sweet_gpu_gmu_fw) & 3u) || sizeof(sweet_gpu_gmu_fw) > GPU_GMU_FW_MAX) {
++		x->fw_error = "firmware size invalid; nothing written";
++		return;
++	}
++	if (x->gmu_done < 1 || x->gmu_value[0] != 1u) {
++		x->fw_error = "CM3 not confirmed in reset; nothing written";
++		return;
++	}
++	for (unsigned int i = 0; i < words; i++) {
++		gpu_write32(gmu, GPU_GMU_TCM + 4 * i, gpu_fw_word(i));
++		x->fw_written = i + 1;
++	}
++	for (unsigned int i = 0; i < words; i++) {
++		x->fw_checked = i + 1;
++		if (gpu_read32(gmu, GPU_GMU_TCM + 4 * i) != gpu_fw_word(i)) {
++			if (!x->fw_bad) {
++				x->fw_first_bad = 4 * i;
++			}
++			x->fw_bad++;
++		}
++	}
++	if (x->fw_bad) {
++		x->fw_error = "TCM readback mismatch";
++	}
++}
++
++static void
++gpu_gmu_read(struct gpu_power_experiment *x, int mode)
+ {
+ 	vm_offset_t gmu = ml_io_map(GPU_GMU_PA, GPU_GMU_SIZE);
+ 
+@@ -296,6 +352,9 @@ gpu_gmu_read(struct gpu_power_experiment *x)
+ 		x->gmu_value[i] = gpu_read32(gmu, gpu_gmu_regs[i].off);
+ 		x->gmu_done = i + 1;
+ 	}
++	if (mode >= 6) {
++		gpu_gmu_fw_load(gmu, x);
++	}
+ }
+ 
+ /*
+@@ -392,7 +451,7 @@ gpu_clock_stage(vm_offset_t gcc, vm_offset_t cc, int mode, struct gpu_power_expe
+ 		x->cbcr_on[i] = gpu_read32(i < 3 ? cc : gcc, off[i]);
+ 	}
+ 	if (mode >= 5) {
+-		gpu_gmu_read(x);
++		gpu_gmu_read(x, mode);
+ 	}
+ undo:
+ 	for (int i = (int)n - 1; i >= 0; i--) {
+@@ -504,6 +563,11 @@ gpu_power_log(const struct gpu_power_experiment *x)
+ 				    gpu_gmu_regs[i].off);
+ 			}
+ 		}
++		if (x->fw_requested) {
++			printf("SWEET GPU: GMU fw size=%u fnv1a=0x%08x written=%u words checked=%u words bad=%u first-bad=+0x%x\n",
++			    x->fw_size, x->fw_hash, x->fw_written, x->fw_checked, x->fw_bad, x->fw_first_bad);
++			printf("SWEET GPU: GMU fw result: %s\n", x->fw_error ? x->fw_error : "TCM readback matches; CM3 left in reset");
++		}
+ 	}
+ 	printf("SWEET GPU: GMU clk stage=%u restored=%u result: %s\n", x->clk_stage,
+ 	    x->clk_restored, x->clk_error ? x->clk_error : "complete, rolled back");
+@@ -702,8 +766,8 @@ sweet_gpu_probe(void)
+ 	if (!PE_parse_boot_argn("sweetgpu", &mode, sizeof(mode)) || mode == 0) {
+ 		return;
+ 	}
+-	if (mode < 1 || mode > 5) {
+-		printf("SWEET GPU: unsupported sweetgpu=%d (0=off, 1=clocks, 2=+ARC, 3=+CX, 4=+GMU clocks, 5=+GMU reads)\n", mode);
++	if (mode < 1 || mode > 6) {
++		printf("SWEET GPU: unsupported sweetgpu=%d (0=off, 1=clocks, 2=+ARC, 3=+CX, 4=+GMU clocks, 5=+GMU reads, 6=+GMU firmware to TCM)\n", mode);
+ 		return;
+ 	}
+ 	if (mode >= 2) {

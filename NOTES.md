@@ -1,5 +1,19 @@
 # ios-extra — active handoff
 
+## Active implementation — 0086 GMU firmware to TCM (not yet built/booted)
+
+- Firmware: linux-firmware `a630_gmu.bin` (32 KiB legacy image; mainline uses it
+  for A618). Staged by `xnu/patches/0086-stage-gpu-firmware.sh` (pinned commit +
+  sha256), generated header not in git. Local copies in external `gpu-fw/`
+  (also mainline a6xx_gmu.c/a6xx_hfi.c v6.12 for the next stages).
+- `xnu/patches/0086-sweet-gpu-gmu-firmware-tcm.patch`: `sweetgpu=6` copies it to
+  GMU ITCM/DTCM (byte +0x3000) and verifies by readback, only if CM3_SYSRESET==1.
+  Host tests pass (32 CX/GMU cases, ASan/UBSan); arm64 compile ok.
+- **Remaining GMU boot work (mainline order):** GENERAL_7 TCM retention,
+  a6xx_rpmh_start (RSCC + PDC sequences at 0xb290000/0xb490000), HFI table +
+  log memory visible to the GMU SMMU stream, CM3_BOOT_CONFIG/CFG(0x4052), release
+  reset, wait FW_INIT_RESULT, GFX rail OOB, HFI start.
+
 ## Latest phone result — 0085 first GMU register reads, 2026-10-18 20:31 UTC
 
 - `shim/out/shim-boot-0085-gmureg.img` (SHA256 `f2e43620…a1b14b`, CI 39162789741,

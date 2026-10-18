@@ -97,3 +97,22 @@ Mode 5 = mode 4 plus, inside the same CX + GMU-clock window:
 
 Everything is undone as in 0084. Risk: a read that faults the bus ends the
 boot; the announce lines and the persistent log are the evidence in that case.
+
+# 0086 — GMU firmware into TCM (`sweetgpu=6`)
+
+Firmware source: linux-firmware `qcom/a630_gmu.bin` (32768 bytes, SHA256
+`da8d9b1b1f5c1a0b311f32567093b4828f3c80031dd8435f91ac13c664e173a6`, commit
+`a2dcb924f0897368b0b4f305cbf9808cdda90ce0`), the image mainline Linux loads on
+A618 (SM7150). It is not committed: `xnu/patches/0086-stage-gpu-firmware.sh`
+downloads it at build time, checks the hash and generates
+`bsd/dev/sweet_gpu_fw.h`. The phone's own `a618_gmu.bin` (Xiaomi downstream, in
+the unbacked-up `super` partition) is not used; its protocol differs (register
+HFI). The reference for everything after this is now **mainline**
+`a6xx_gmu.c`/`a6xx_hfi.c` (v6.12 copies external, `gpu-fw/`), not downstream kgsl.
+
+The image is headerless ("legacy" in mainline): the whole file is written to
+`ITCM_START` (`0x1B400` -> GMU byte offset `0x3000`, ITCM 16 KiB then DTCM 16 KiB
+contiguous). Mode 6 does that inside the mode-5 window, then reads every word
+back. It writes only if `CM3_SYSRESET == 1` was just read; the CM3 is never
+released. Report: `SWEET GPU: GMU fw ...` (size, FNV-1a, words written/checked/bad).
+TCM contents are lost when CX collapses afterwards; nothing else is written.

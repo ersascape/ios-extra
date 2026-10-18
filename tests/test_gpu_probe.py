@@ -41,6 +41,11 @@ class GPUProbeTests(unittest.TestCase):
                 path = work / name
                 path.parent.mkdir(parents=True, exist_ok=True)
                 path.write_text(text)
+            # Deterministic stand-in for the staged (not committed) firmware header.
+            fw = bytes((i * 7 + 3) & 255 for i in range(0x8000))
+            (work / 'sweet_gpu_fw.h').write_text(
+                'static const unsigned char sweet_gpu_gmu_fw[] = {%s};\n' %
+                ','.join(str(b) for b in fw))
             (work / 'test.c').write_text(HARNESS)
             build = subprocess.run([shutil.which('cc') or 'cc', '-std=c11', '-Wall',
                                     '-Wextra', '-Werror', *os.environ.get('IOS_EXTRA_CFLAGS', '').split(), '-I', str(work),
@@ -49,7 +54,7 @@ class GPUProbeTests(unittest.TestCase):
             self.assertEqual(build.returncode, 0, build.stderr)
             result = subprocess.run([str(work / 'test')], capture_output=True, text=True)
             self.assertEqual(result.returncode, 0, result.stderr)
-            self.assertIn('PASS: 14 clock/cache cases, 30 ARC cases + 512 mutations, 27 CX experiment cases', result.stdout)
+            self.assertIn('PASS: 14 clock/cache cases, 30 ARC cases + 512 mutations, 32 CX experiment cases', result.stdout)
 
 
 HARNESS = r'''
@@ -215,7 +220,7 @@ int main(void)
     reset(); present = 0; sweet_gpu_probe();
     assert(map_calls == 0 && output[0] == 0);
     reset(); mode = 0; sweet_gpu_probe(); assert(map_calls == 0);
-    reset(); mode = 6; sweet_gpu_probe(); assert(map_calls == 0);
+    reset(); mode = 7; sweet_gpu_probe(); assert(map_calls == 0);
     reset(); mode = -1; sweet_gpu_probe(); assert(map_calls == 0);
     reset(); fail_gcc = 1; sweet_gpu_probe();
     assert(map_calls == 1 && strstr(output, "GCC mapping failed"));
@@ -450,6 +455,48 @@ int main(void)
     arc_run(); assert(gmu_maps == 0 && gpu_boot_inventory.power.clk_error);
     arc_reset(); mode = 5; cc[GPU_CX_GDSCR / 4] = 0x80000000u; arc_run();
     assert(gmu_maps == 0 && vote_count == 0);
+    /* sweetgpu=6: firmware into TCM only while CM3 reset is confirmed. */
+    {
+        uint32_t fnv = 2166136261u;
+        for (unsigned i = 0; i < sizeof(sweet_gpu_gmu_fw); i++)
+            fnv = (fnv ^ sweet_gpu_gmu_fw[i]) * 16777619u;
+        arc_reset(); mode = 6; cc[GPU_CX_GDSCR / 4] = GPU_CX_IDLE_GDSCR;
+        gmu_mem[0x14000 / 4] = 1;
+        uint32_t before[GPU_GMU_SIZE / 4];
+        memcpy(before, gmu_mem, sizeof(before));
+        arc_run(); x = &gpu_boot_inventory.power;
+        assert(!x->clk_error && x->fw_requested && !x->fw_error && x->clk_restored);
+        assert(x->fw_size == 0x8000 && x->fw_hash == fnv && x->fw_written == 0x2000 &&
+               x->fw_checked == 0x2000 && x->fw_bad == 0);
+        for (unsigned i = 0; i < GPU_GMU_SIZE / 4; i++) {
+            if (i >= GPU_GMU_TCM / 4 && i < (GPU_GMU_TCM + 0x8000) / 4) {
+                const unsigned char *b = &sweet_gpu_gmu_fw[4 * (i - GPU_GMU_TCM / 4)];
+                assert(gmu_mem[i] == (uint32_t)(b[0] | b[1] << 8 | b[2] << 16 | (uint32_t)b[3] << 24));
+            } else {
+                assert(gmu_mem[i] == before[i]); /* nothing outside ITCM/DTCM written */
+            }
+        }
+        assert(strstr(output, "GMU fw result: TCM readback matches; CM3 left in reset"));
+        output[0] = 0; sweet_gpu_replay(); /* cached, no new MMIO */
+        assert(strstr(output, "GMU fw size=32768") && gmu_maps == 1);
+        /* CM3 not in reset (or reset state unknown): nothing is written. */
+        for (unsigned bad = 0; bad < 3; bad++) {
+            arc_reset(); mode = 6; cc[GPU_CX_GDSCR / 4] = GPU_CX_IDLE_GDSCR;
+            gmu_mem[0x14000 / 4] = bad == 0 ? 0 : bad == 1 ? 3 : ~0u;
+            memcpy(before, gmu_mem, sizeof(before));
+            arc_run(); x = &gpu_boot_inventory.power;
+            assert(x->fw_requested && x->fw_error && x->fw_written == 0);
+            assert(!memcmp(before, gmu_mem, sizeof(before)));
+        }
+        /* Mode 5 never writes the GMU block. */
+        arc_reset(); mode = 5; cc[GPU_CX_GDSCR / 4] = GPU_CX_IDLE_GDSCR; gmu_mem[0x14000 / 4] = 1;
+        memcpy(before, gmu_mem, sizeof(before));
+        arc_run(); assert(!gpu_boot_inventory.power.fw_requested && !memcmp(before, gmu_mem, sizeof(before)));
+        /* Clock stage failure: GMU never mapped, so nothing written. */
+        arc_reset(); mode = 6; cc[GPU_CX_GDSCR / 4] = GPU_CX_IDLE_GDSCR; gmu_mem[0x14000 / 4] = 1;
+        clk_stuck = 2; memcpy(before, gmu_mem, sizeof(before));
+        arc_run(); assert(!gpu_boot_inventory.power.fw_requested && !memcmp(before, gmu_mem, sizeof(before)));
+    }
     /* Mode 3 never runs the clock stage. */
     arc_reset(); mode = 3; cc[GPU_CX_GDSCR / 4] = GPU_CX_IDLE_GDSCR; arc_run();
     assert(!gpu_boot_inventory.power.clk_requested);
@@ -457,7 +504,7 @@ int main(void)
     /* Mode 2 never reaches the experiment. */
     arc_reset(); cc[GPU_CX_GDSCR / 4] = GPU_CX_IDLE_GDSCR; arc_run();
     assert(!gpu_boot_inventory.power.requested && vote_count == 0 && delay_calls == 0);
-    puts("PASS: 14 clock/cache cases, 30 ARC cases + 512 mutations, 27 CX experiment cases");
+    puts("PASS: 14 clock/cache cases, 30 ARC cases + 512 mutations, 32 CX experiment cases");
     return 0;
 }
 '''
