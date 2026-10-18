@@ -1,5 +1,23 @@
 # ios-extra — active handoff
 
+## Latest phone result — 0084 revised GMU clock stage, 2026-10-18 20:11 UTC
+
+- `shim/out/shim-boot-0084-gmuclk.img` (SHA256 `b7bd5903…d652e6`, CI 39161422925,
+  sweetgpu=4), fastboot success 0.559s; user had the phone in fastboot.
+  Logs outside Git: logs/phone-0084b-{fastboot.txt,gmuclk.pcap,gmuclk.txt}.
+- **GMU clock came up at 200 MHz config and rolled back cleanly** (all 4 reports
+  identical): gate 0x52004 0x01241d7b -> 0x01251d7b (bit16 set); RCG cmd
+  0x80000000 / cfg 0x00000000 -> **0x00000602** (source 6, HID 2) with UPDATE
+  cleared; cx-gmu CBCR 0x80004220 -> **0x00004ff1** (running, wake/sleep 0xF)
+  then 0x80004ff0 after disable; ahb/cxo stayed 0x00000001 (untouched); CX
+  collapse and votes released as in 0083. Stage 6, restored=1.
+  Caveat: CLK_OFF clear shows the branch sees a running clock; the actual 200 MHz
+  rate is not measured. The RCG is left at 0x602 (unused); gate restored.
+- USB up, ping ok; only "panic" string is the DumpPanic exec. Home screen not yet
+  confirmed by the user for this boot.
+- **Next:** 0085 read-only GMU register access under CX+clock (map GMU base
+  0x0506a000), starting with a known-safe register, then GMU memory/SMMU.
+
 ## 0084 first phone boot — precondition refused, nothing written (2026-10-18 19:59 UTC)
 
 - `shim-boot-0084-gmuclk.img` (SHA e8dca213…c57d8, CI 39160714701, commit
