@@ -82,6 +82,50 @@ Run tests with `python3 -m unittest discover -s tests -v`.
 Host tests check control flow and simulated mappings, not hardware state or
 ARM bus ordering. Full kernel linkage and a phone boot are separate checks.
 
+## Full kernel build and packaged images
+
+The user approved publication and the repository was made public.
+[CI run 39152959124](https://github.com/dipa-studio/ios-extra/actions/runs/39152959124)
+**passed**, including full kernel linkage and artifact upload, in 6m15s.
+Built source commit: `ee248d8a46463567d415b0ce4fd83b127c062da3`.
+
+Downloaded kernel: `/run/media/dipa/android/ios-extra-work/out-0080/kernel.development.sweet`.
+SHA-256: `bd5d3df40badc1bb83571b4a9155fb88fecbc169002133d15ff90a7184c1aad6`.
+The artifact checksum verifies. `_sweet_gpu_probe` is present at
+`0xfffffe00074ee358`; the GPU source, UFS caller and BSD source list in the
+CI build tree match the locally checked files byte for byte.
+
+Two Android boot.img v2 images were built from that kernel, the generated
+high-memory phone ADT and the staged stock DTB. Both use `cpus=6`,
+`sweetusb=2`, `sweetfb_noconsole=1` and `sweetfb_hz=30`, with the established
+UFS-root boot arguments. Both images are 17,203,200 bytes:
+
+| Image under `shim/out/` | Probe mode | SHA-256 |
+| --- | --- | --- |
+| `shim-boot-0080-default.img` | `sweetgpu=0` | `03a4e1e874db33ef3a97714a36ad17050b6de4abc98836e19b4a19e111f0d419` |
+| `shim-boot-0080-probe.img` | `sweetgpu=1` | `7deeb1c9badd6cda5f3e5dcf4959f909680b1b1b1ecf4ee40d05e1651265b5d9` |
+
+Each image was unpacked and its ramdisk byte-compared with the intended
+payload. Embedded boot arguments were also checked. `shim/out` points into
+the separate external workspace; generated artifacts and that symlink are
+ignored by Git. `shim/out/manifest-0080.json` records full arguments and hashes.
+Packaging script: `research/package-0080.py`; packaging log:
+`/run/media/dipa/android/ios-extra-work/logs/boot-package-0080.txt`.
+
+The same linked kernel was also run for 30 seconds on QEMU virt with the
+single-CPU QEMU ADT and a copied HFS test ramdisk. Result:
+`no_panic_observed`, zero undecodable glyphs. The captured screen shows
+kernel/IOKit initialization, CPU registration and the display/HID services.
+This is an early-boot snapshot, not proof of completed userspace boot or
+Qualcomm GPU functionality. Evidence is in
+`/run/media/dipa/android/ios-extra-work/qemu-0080/boot-local/`.
+
+QEMU's output directory must be on a filesystem supporting Unix sockets.
+The first launch on the external drive failed to bind its QMP socket before
+guest execution. The successful run used a dedicated `/tmp/ios-extra-q0080-*`
+directory and copied the results back to the external workspace. No code
+change was needed for that host-filesystem issue.
+
 ## Hardware test, when device access is available
 
 Build a new kernel and use the normal shim packaging with `sweetusb=2

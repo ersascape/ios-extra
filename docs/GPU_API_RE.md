@@ -16,6 +16,9 @@ The following virtual addresses are unslid addresses in this cache:
 | `MTLDeviceArrayInitialize` block | `0x181a34050` | Initializes array/debug wrappers, then calls `MTLRegisterDevices` |
 | `MTLRegisterDevices` | `0x181b144c8` | Enumerates `IOAcceleratorES` services, resolves a plugin class for each and initializes a device |
 | `getMetalPluginClassForService` | `0x181a3c7c8` | Resolves the bundle and class using IOKit properties, then checks the class hierarchy |
+| `_MTLDevice initWithAcceleratorPort:` | `0x181aab968` | Calls `doesNotRecognizeSelector:` and returns nil; subclasses must implement it |
+| `_MTLDevice init` | `0x181a3634c` | Initializes common queues, library-builder and loader state |
+| `MTLIOAccelDevice initWithAcceleratorPort:` | `0x181abd76c` | Builds on base initialization, creates an IOAccel device and reads its configuration/shared-memory requirements |
 
 `MTLRegisterDevices` calls `IOServiceMatching("IOAcceleratorES")` and
 `IOServiceGetMatchingServices`, iterates the returned services and passes each
@@ -46,6 +49,15 @@ A custom userspace Metal device plugin selected through a compatible kernel
 service is a concrete candidate integration boundary. This permits designing
 our own command transport between an Adreno plugin and SweetGPU, rather than
 assuming the existing AGX plugin can execute on Adreno.
+
+The base `initWithAcceleratorPort:` is an abstract entry point: calling its
+implementation directly rejects the selector. The ordinary `_MTLDevice init`
+does perform common setup. A custom plugin would need to implement its own
+accelerator-port initialization and resource/command transport. The existing
+`MTLIOAccelDevice` implementation additionally uses `IOAccelDeviceCreateWithAPIProperty`,
+configuration/shared-memory queries and tracing. Reusing that class would
+bring those IOAccel contracts into scope; deriving directly from `_MTLDevice`
+is a candidate for a smaller custom transport, subject to further testing.
 
 This does not yet prove a custom plugin loads, that `_MTLDevice` initialization
 succeeds with a minimal service, or that CoreAnimation accepts it. The next

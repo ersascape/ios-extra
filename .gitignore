@@ -4,8 +4,9 @@ dtb/
 recovery/
 # third-party/Apple sources fetched for reading
 research/
-shim/out/
-xnu/out/
-xnu/out-*/
+# Generated outputs may be directories or symlinks to the external workspace.
+/shim/out
+/xnu/out
+/xnu/out-*
 __pycache__/
 logs/

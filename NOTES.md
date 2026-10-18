@@ -9,7 +9,7 @@
 - **Public with user approval:** the user explicitly said "yes public" on
   2026-10-18. Visibility was changed and verified (`isPrivate=false`).
 - Full XNU CI run **39152959124**, source commit
-  **ee248d8a46463567d415b0ce4fd83b127c062da3**, dispatched and building.
+  **ee248d8a46463567d415b0ce4fd83b127c062da3**, **PASSED** (build job 6m15s).
   URL: https://github.com/dipa-studio/ios-extra/actions/runs/39152959124.
 - Original reference checkout: `/home/dipa/ios-sweet`; do not modify it as
   part of playground work.
@@ -21,8 +21,8 @@
 
 ## Initial state
 
-- Kernel patches 0001–0079, shim and tools imported. No experimental driver
-  implementation yet. The user selected full GPU driver work as the target.
+- Kernel patches 0001–0079, shim and tools imported; first experimental GPU
+  probe is now patch **0080**. Full GPU driver work is the selected target.
 - No ignored build trees, Apple files, device backups, root images or recovery
   images copied. Existing artifacts remain in the reference workspace and
   `/run/media/dipa/android/ios-sweet-work/`.
@@ -39,8 +39,8 @@
 - `.github/workflows/xnu.yml` retains the inherited build and staging process.
   Its build job runs only when repository visibility is public. The user
   approved publication; public builds are now enabled.
-- GPU probe 0080 is now implemented and locally cross-compiled; full kernel
-  linkage still requires a macOS CI run. No GPU phone test has been performed.
+- GPU probe 0080 is implemented, locally cross-compiled and fully CI-linked.
+  No GPU phone test has been performed.
 - Verified initial push workflow run **39150033548**, head `8b1e4f2`:
   completed with conclusion **skipped**. No macOS build ran while private.
 - Verified the imported baseline Git tree exactly matches upstream `347e190`
@@ -81,7 +81,7 @@
 - Probe implementation commit **cdb9295** pushed. Its private-repository CI
   run **39151552639** completed **skipped** as intended. Full kernel linkage
   was not verified at that point. The user subsequently approved publication
-  and full kernel build 39152959124 is now running.
+  and full kernel build 39152959124 subsequently passed.
 - Copied the reference compile log into
   `ios-extra-work/logs/upstream-run28.log`; future local checks can use that
   isolated copy. Final syntax-check log: `ios-extra-work/logs/probe-0080-syntax.txt`.
@@ -93,7 +93,36 @@
   boundary, not a tested replacement driver. Details in `docs/GPU_API_RE.md`.
 - Unit tests pass with ResourceWarning treated as an error after fixing the
   inherited compile-log reader's file lifetime. No phone/device commands run.
-- Next: finish full kernel CI linkage, then coordinate a separate phone test.
+- **Full CI artifact verified:** kernel SHA256
+  `bd5d3df40badc1bb83571b4a9155fb88fecbc169002133d15ff90a7184c1aad6`.
+  `_sweet_gpu_probe` at `0xfffffe00074ee358`. CI copies of all three changed
+  files match the isolated local source. Kernel/buildtree artifacts under
+  `/run/media/dipa/android/ios-extra-work/{out-0080,ci-0080}/`; full CI log
+  in `ios-extra-work/logs/ci-0080.log`.
+- **Boot images built and payload-verified:**
+  `shim/out/shim-boot-0080-default.img` (`sweetgpu=0`) and
+  `shim/out/shim-boot-0080-probe.img` (`sweetgpu=1`), each 17,203,200 bytes.
+  High RAM ADT, cpus=6, USB ECM enabled, 30 Hz CPU display. Exact arguments
+  and hashes in `shim/out/manifest-0080.json` and `docs/GPU_BRINGUP.md`.
+- `shim/out` is an ignored symlink to `ios-extra-work/shim-out`.
+  Copied stock DTB and D22 product tree into this checkout's ignored asset
+  directories; the other repo was not edited.
+- **QEMU 30-second smoke check:** same CI kernel, single-core QEMU ADT and
+  copied HFS test ramdisk. Result `no_panic_observed`, unknown_glyphs=0,
+  snapshot_only=true; captured kernel/IOKit initialization and CPU/display/HID
+  services. Does not establish userspace boot or GPU hardware functionality.
+  Results: `ios-extra-work/qemu-0080/boot-local/`; launch log:
+  `ios-extra-work/logs/qemu-0080-local.txt`.
+- External filesystem cannot bind QMP Unix sockets: first QEMU launch failed
+  before executing the guest. Use `/tmp/ios-extra-q0080-*` as QEMU's output
+  directory and copy evidence back. Local output path is recorded in
+  `ios-extra-work/qemu-0080/local-output-path.txt`.
+- Additional Metal RE: `_MTLDevice initWithAcceleratorPort:` is abstract
+  (`doesNotRecognizeSelector:`). Ordinary `_MTLDevice init` provides common
+  setup; `MTLIOAccelDevice` adds IOAccel device/configuration/shared-memory
+  contracts. Evidence and candidate custom-transport implications recorded
+  in `docs/GPU_API_RE.md`.
+- Next: coordinate a separate phone test.
   iOS renderer selection,
   power-up, firmware, SMMU and submission remain future milestones.
-  No completed full kernel build, GPU hardware test or upstream integration yet.
+  No GPU hardware test or upstream integration yet.
