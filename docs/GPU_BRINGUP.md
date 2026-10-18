@@ -56,7 +56,7 @@ build-tree artifact into this workspace; its live source tree was not used
 as the experimental source. No edits were made in the other checkout.
 
 ```sh
-python3 tools/xnu-cc.py /home/dipa/ios-sweet/research/run28.log \
+python3 tools/xnu-cc.py /run/media/dipa/android/ios-extra-work/logs/upstream-run28.log \
     /run/media/dipa/android/ios-extra-work/buildtree \
     bsd/dev/sweet_gpu.c bsd/dev/sweet_ufs.c
 ```

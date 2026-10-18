@@ -73,6 +73,21 @@
   Objects in `ios-extra-work/objects/`. Imports checked; ARM barrier present.
   Host MMIO tests cover 11 cases; patch reverse-check passes.
 - Full register provenance, commands and limitations: `docs/GPU_BRINGUP.md`.
+- Probe implementation commit **cdb9295** pushed. Its private-repository CI
+  run **39151552639** completed **skipped** as intended. Full kernel linkage
+  is not verified. Asked the user asynchronously whether to make ios-extra
+  public and run macOS CI; do not interpret an unanswered question as consent.
+- Copied the reference compile log into
+  `ios-extra-work/logs/upstream-run28.log`; future local checks can use that
+  isolated copy. Final syntax-check log: `ios-extra-work/logs/probe-0080-syntax.txt`.
+- **Metal RE:** traced `MTLRegisterDevices` at `0x181b144c8` and
+  `getMetalPluginClassForService` at `0x181a3c7c8`. Metal enumerates
+  `IOAcceleratorES`, reads `MetalPluginName`/`MetalPluginClassName`, loads an
+  Extensions bundle, checks `_MTLDevice` subclassing and invokes
+  `initWithAcceleratorPort:`. This is a candidate custom device-plugin
+  boundary, not a tested replacement driver. Details in `docs/GPU_API_RE.md`.
+- Unit tests pass with ResourceWarning treated as an error after fixing the
+  inherited compile-log reader's file lifetime. No phone/device commands run.
 - Next: full kernel CI linkage once the repository's publication/build path
   is resolved, then coordinate a separate phone test. iOS renderer selection,
   power-up, firmware, SMMU and submission remain future milestones.

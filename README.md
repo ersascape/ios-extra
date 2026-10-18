@@ -28,6 +28,7 @@ Changing repository visibility is a separate step; creating this playground does
 - See [the architecture review](docs/ARCHITECTURE.md) for boot, driver interfaces, dependencies and remaining gaps.
 - GPU work starts with [the Adreno 618 plan](docs/GPU_PLAN.md): hardware execution, userspace rendering and iOS integration milestones.
 - [Probe 0080](docs/GPU_BRINGUP.md) documents the first implementation, register audit and build/test results.
+- [Metal loading research](docs/GPU_API_RE.md) records the traced service-to-device-plugin interface in this iOS image.
 - Preserve each experiment as a focused commit or branch. New kernel patches start at `0080`; check for upstream numbering changes before porting back.
 - Record build IDs, tested boot images, logs and observed results. Keep source review, a successful build and a successful phone test distinct.
 - Port selected changes upstream only after they work here and the user asks to integrate them.

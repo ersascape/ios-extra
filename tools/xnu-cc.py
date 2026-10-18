@@ -46,20 +46,21 @@ def ci_root(log):
 
 def commands(log):
     seen = {}
-    for line in open(log, errors='replace'):
-        if '/clang' not in line or ' -c ' not in line:
-            continue
-        line = re.sub(r'^build\s+Build\s+\S+\s+', '', line.rstrip('\n'))
-        m = re.search(r'(\S+/clang(\+\+)?) (.*)', line)
-        if not m:
-            continue
-        try:
-            args = shlex.split(m.group(3), posix=True)
-        except ValueError:	# shell fragments with unbalanced quotes: not a plain compile
-            continue
-        srcs = [a for a in args if re.search(r'\.(c|cpp|s|S)$', a) and a.startswith(CI_DXB)]
-        if len(srcs) == 1 and '/xnu/' in srcs[0]:
-            seen[srcs[0]] = ('clang++' if m.group(2) else 'clang', args)
+    with open(log, errors='replace') as stream:
+        for line in stream:
+            if '/clang' not in line or ' -c ' not in line:
+                continue
+            line = re.sub(r'^build\s+Build\s+\S+\s+', '', line.rstrip('\n'))
+            m = re.search(r'(\S+/clang(\+\+)?) (.*)', line)
+            if not m:
+                continue
+            try:
+                args = shlex.split(m.group(3), posix=True)
+            except ValueError:	# shell fragments with unbalanced quotes: not a plain compile
+                continue
+            srcs = [a for a in args if re.search(r'\.(c|cpp|s|S)$', a) and a.startswith(CI_DXB)]
+            if len(srcs) == 1 and '/xnu/' in srcs[0]:
+                seen[srcs[0]] = ('clang++' if m.group(2) else 'clang', args)
     return seen
 
 
