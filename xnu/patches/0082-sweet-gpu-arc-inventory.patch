@@ -1,0 +1,239 @@
+diff --git a/bsd/dev/sweet_gpu.c b/bsd/dev/sweet_gpu.c
+index c7892ff..cf82db5 100644
+--- a/bsd/dev/sweet_gpu.c
++++ b/bsd/dev/sweet_gpu.c
+@@ -7,6 +7,9 @@
+  * power-on indication does not hold a GMU-controlled domain awake.
+  * The initial values are cached and replayed by the USB logger after link
+  * configuration. Replays do not re-read or map hardware.
++ * sweetgpu=2 also snapshots firmware command DB ARC metadata/level tables.
++ * It maps only the known locator and its validated reserved-RAM database;
++ * no RPMh RSC/TCS access or rail votes are needed for that inspection.
+  * Register provenance and limitations: ios-extra/docs/GPU_BRINGUP.md.
+  */
+ #if defined(ARM64_BOARD_CONFIG_SWEET)
+@@ -29,6 +32,33 @@ void sweet_gpu_replay(void);
+ #define GPU_BRANCH_OFF          (1u << 31)
+ #define GPU_DOMAIN_ON           (1u << 31)
+ 
++#define GPU_DB_LOCATOR_PA       0x0c3f000cu
++#define GPU_DB_HEADER           144u
++#define GPU_DB_ENTRY            24u
++#define GPU_DB_MAX              0x100000u
++#define GPU_DB_MAGIC            0x0c0330dbu
++#define GPU_DB_ARC              3u
++#define GPU_ARC_LEVELS          16u
++#define GPU_ARC_RESOURCES       3u
++
++static const char * const gpu_arc_names[GPU_ARC_RESOURCES] = {
++	"gfx.lvl", "cx.lvl", "mx.lvl",
++};
++
++struct gpu_arc_resource {
++	uint32_t address, priority[2];
++	uint16_t version, bytes, levels[GPU_ARC_LEVELS];
++	unsigned int matches, count;
++	const char *error;
++};
++
++struct gpu_arc_inventory {
++	unsigned int requested;
++	uint32_t pa, size, version, magic, checksum, flags;
++	const char *error;
++	struct gpu_arc_resource resource[GPU_ARC_RESOURCES];
++};
++
+ struct sweet_gpu_clock {
+ 	const char *name;
+ 	uint32_t off;
+@@ -69,6 +99,7 @@ struct gpu_inventory {
+ 	uint32_t cc[GPU_CC_CLOCK_COUNT];
+ 	uint32_t cx, gx;
+ 	enum gpu_inventory_state state;
++	struct gpu_arc_inventory arc;
+ };
+ 
+ /* Published once by the UFS startup path, read by the USB log thread. */
+@@ -84,6 +115,158 @@ gpu_read32(vm_offset_t base, uint32_t off)
+ 	return value;
+ }
+ 
++static int
++gpu_db_range(uint32_t size, uint32_t off, uint32_t length)
++{
++	return off <= size && length <= size - off;
++}
++
++/* Callers validate the two-byte range. Use aligned 32-bit Device loads,
++ * including when a uint16_t crosses a word boundary in auxiliary data. */
++static uint16_t
++gpu_db_read16(vm_offset_t db, uint32_t off)
++{
++	uint32_t word = gpu_read32(db, off & ~3u);
++	unsigned int shift = (off & 3u) * 8u;
++	uint16_t value = (uint16_t)(word >> shift);
++	if (shift == 24u) {
++		value |= (uint16_t)((gpu_read32(db, (off & ~3u) + 4u) & 0xffu) << 8);
++	}
++	return value;
++}
++
++static void
++gpu_arc_collect(struct gpu_arc_inventory *arc)
++{
++	vm_offset_t locator, db;
++	uint32_t keys[GPU_ARC_RESOURCES][2] = {{0}};
++
++	arc->requested = 1;
++	arc->error = "locator mapping failed";
++	locator = ml_io_map(GPU_DB_LOCATOR_PA, 8);
++	if (!locator) {
++		return;
++	}
++	arc->pa = gpu_read32(locator, 0);
++	arc->size = gpu_read32(locator, 4);
++	arc->error = "invalid locator";
++	/* Match the existing board client's reserved-RAM locator policy. */
++	if (arc->pa < 0x80000000u || (arc->pa & 3u) || (arc->size & 3u) ||
++	    arc->size < GPU_DB_HEADER || arc->size > GPU_DB_MAX ||
++	    (uint64_t)arc->pa + arc->size > 0x100000000ULL) {
++		return;
++	}
++	arc->error = "database mapping failed";
++	db = ml_io_map(arc->pa, arc->size);
++	if (!db) {
++		return;
++	}
++	arc->version = gpu_read32(db, 0);
++	arc->magic = gpu_read32(db, 4);
++	arc->checksum = gpu_read32(db, 136);
++	arc->flags = gpu_read32(db, 140);
++	arc->error = "unsupported database header";
++	if (arc->version != 1 || arc->magic != GPU_DB_MAGIC || (arc->flags & 1u)) {
++		return;
++	}
++	for (unsigned int r = 0; r < GPU_ARC_RESOURCES; r++) {
++		for (unsigned int k = 0; k < 8 && gpu_arc_names[r][k]; k++) {
++			keys[r][k / 4] |= (uint32_t)(uint8_t)gpu_arc_names[r][k] << (8u * (k % 4));
++		}
++	}
++	/* Offsets in slave headers are relative to the data area at byte 144.
++	 * All table ranges are checked before any entry or auxiliary load. */
++	for (unsigned int i = 0; i < 8; i++) {
++		uint32_t h = 8u + 16u * i;
++		unsigned int slave = gpu_db_read16(db, h);
++		uint32_t entries, aux;
++		unsigned int count;
++		if (!slave) {
++			break;
++		}
++		entries = GPU_DB_HEADER + gpu_db_read16(db, h + 2);
++		aux = GPU_DB_HEADER + gpu_db_read16(db, h + 4);
++		count = gpu_db_read16(db, h + 6);
++		arc->error = "malformed slave table";
++		if (slave < 3 || slave > 5 || (entries & 3u) ||
++		    !gpu_db_range(arc->size, entries, count * GPU_DB_ENTRY) ||
++		    !gpu_db_range(arc->size, aux, 0)) {
++			return;
++		}
++		for (unsigned int j = 0; j < count; j++) {
++			uint32_t e = entries + GPU_DB_ENTRY * j;
++			uint32_t key0 = gpu_read32(db, e), key1 = gpu_read32(db, e + 4);
++			for (unsigned int r = 0; r < GPU_ARC_RESOURCES; r++) {
++				struct gpu_arc_resource *resource = &arc->resource[r];
++				uint32_t data;
++				if (key0 != keys[r][0] || key1 != keys[r][1]) {
++					continue;
++				}
++				if (++resource->matches != 1) {
++					resource->error = "duplicate resource";
++					continue;
++				}
++				resource->address = gpu_read32(db, e + 16);
++				resource->priority[0] = gpu_read32(db, e + 8);
++				resource->priority[1] = gpu_read32(db, e + 12);
++				resource->version = gpu_db_read16(db, h + 8);
++				resource->bytes = gpu_db_read16(db, e + 20);
++				data = aux + gpu_db_read16(db, e + 22);
++				resource->error = "not an aligned ARC address";
++				if (slave != GPU_DB_ARC ||
++				    ((resource->address >> 16) & 7u) != GPU_DB_ARC ||
++				    (resource->address & 3u)) {
++					continue;
++				}
++				resource->error = "invalid level table range/length";
++				if (!resource->bytes || (resource->bytes & 1u) ||
++				    resource->bytes > GPU_ARC_LEVELS * 2u ||
++				    !gpu_db_range(arc->size, data, resource->bytes)) {
++					continue;
++				}
++				resource->count = resource->bytes / 2u;
++				for (unsigned int k = 0; k < resource->count; k++) {
++					resource->levels[k] = gpu_db_read16(db, data + 2u * k);
++				}
++				/* Preserve every raw entry, including trailing zero padding.
++				 * Ordering/corner policy belongs to a future voting client. */
++				resource->error = NULL;
++			}
++		}
++	}
++	arc->error = NULL;
++}
++
++static void
++gpu_arc_log(const struct gpu_arc_inventory *arc)
++{
++	if (!arc->requested) {
++		return;
++	}
++	printf("SWEET GPU: ARC cmd-db pa=0x%08x size=0x%x version=0x%x magic=0x%x checksum=0x%x flags=0x%x\n",
++	    arc->pa, arc->size, arc->version, arc->magic, arc->checksum, arc->flags);
++	if (arc->error) {
++		printf("SWEET GPU: ARC skipped: %s\n", arc->error);
++		return;
++	}
++	for (unsigned int r = 0; r < GPU_ARC_RESOURCES; r++) {
++		const struct gpu_arc_resource *resource = &arc->resource[r];
++		if (!resource->matches || resource->error) {
++			printf("SWEET GPU: ARC %s unavailable: %s (matches=%u)\n", gpu_arc_names[r],
++			    resource->matches ? resource->error : "resource missing", resource->matches);
++			continue;
++		}
++		printf("SWEET GPU: ARC %s addr=0x%08x aux-version=0x%x priority=0x%x:0x%x raw-levels=%u\n",
++		    gpu_arc_names[r], resource->address, resource->version,
++		    resource->priority[0], resource->priority[1], resource->count);
++		for (unsigned int k = 0; k < resource->count; k++) {
++			printf("SWEET GPU: ARC %s hlvl=%u vlvl=%u\n",
++			    gpu_arc_names[r], k, (unsigned int)resource->levels[k]);
++		}
++	}
++	printf("SWEET GPU: ARC raw metadata only; no votes or hardware writes\n");
++}
++
+ static void
+ gpu_clock_log(const char *block, const struct sweet_gpu_clock *clock, uint32_t value)
+ {
+@@ -128,6 +311,7 @@ gpu_inventory_log(const struct gpu_inventory *inventory, unsigned int replay)
+ 	}
+ 	printf("SWEET GPU: GPU/GMU/SMMU skipped (no power hold); no hardware writes\n");
+ done:
++	gpu_arc_log(&inventory->arc);
+ 	printf("SWEET GPU: END boot inventory report %u\n", replay);
+ }
+ 
+@@ -142,10 +326,13 @@ sweet_gpu_probe(void)
+ 	if (!PE_parse_boot_argn("sweetgpu", &mode, sizeof(mode)) || mode == 0) {
+ 		return;
+ 	}
+-	if (mode != 1) {
+-		printf("SWEET GPU: unsupported sweetgpu=%d (0=off, 1=clock inventory)\n", mode);
++	if (mode != 1 && mode != 2) {
++		printf("SWEET GPU: unsupported sweetgpu=%d (0=off, 1=clocks, 2=clocks+ARC)\n", mode);
+ 		return;
+ 	}
++	if (mode == 2) {
++		gpu_arc_collect(&inventory.arc);
++	}
+ 	gcc = ml_io_map(GPU_GCC_PA, GPU_GCC_SIZE);
+ 	if (gcc == 0) {
+ 		goto publish;

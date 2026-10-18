@@ -1,5 +1,26 @@
 # ios-extra — active handoff
 
+## Active implementation — read-only ARC inventory 0082
+
+- User said "mehet" after the complete inventory and external-driver audit.
+  Added **0082-sweet-gpu-arc-inventory.patch**, modifying only sweet_gpu.c.
+  New opt-in **sweetgpu=2** reads clocks plus gfx.lvl/cx.lvl/mx.lvl metadata
+  and up to 16 raw uint16 levels per resource from the known firmware locator.
+  Modes 0/1 keep their existing mapping behavior. No RPMh RSC/TCS maps,
+  voltage helper calls, hardware writes or GPU/GMU/SMMU core mappings.
+- Separate bounded parser validates locator/header, entry/auxiliary ranges,
+  ARC slave/address type and payload size. Duplicate or malformed resources
+  fail explicitly. Raw padding/version/priority/checksum values preserved;
+  no checksum verification, corner selection or voltage interpretation.
+  Snapshot uses the existing release/acquire publication and cached USB
+  reports, including failures. Existing display RPMh helper is unchanged.
+- All 3 unit tests pass: 14 clock/cache cases, **30 ARC cases + 512 seeded
+  mutations**. Same harness passes ASan/UBSan. Real arm64 object compilation
+  passes (0/1 failed), using logs/ci-0081.log and the isolated tree.
+  Isolated XNU git baseline through 0081 is **d818e18**; current changes 0082.
+- Details: `docs/GPU_ARC_INVENTORY.md`. Full CI and packaging follow;
+  the phone remains on validated 0081. No 0082 phone experiment yet.
+
 ## Active work — complete inventory and Metal compiler reference
 
 - Patch **0081-sweet-gpu-inventory-replay.patch** is built and phone-tested.
