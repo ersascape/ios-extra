@@ -92,8 +92,8 @@ accelerator ABI before one is implemented.
 
 Before compiling, stage a separate build tree here or in dedicated external
 scratch space; never edit `ios-sweet/research/bt28`. Adapt the single-file
-compile helper for this repository's CI paths. Keep the repository private
-and the existing Actions guard until publication is requested.
+compile helper for this repository's CI paths. The user approved publication
+on 2026-10-18; public macOS CI builds are now available.
 
 For execution bring-up, start with one queue/context and explicit cache
 maintenance. Audit GPU virtual-address limits separately from physical RAM

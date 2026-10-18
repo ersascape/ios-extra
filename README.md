@@ -1,6 +1,6 @@
 # ios-extra
 
-Driver playground for [ios-sweet](https://github.com/dipa-studio/ios-sweet), the XNU / iOS port for the Redmi Note 10 Pro (`sweet`, SM7150).
+Driver playground for [ios-sweet](https://github.com/dipa-studio/ios-sweet), the XNU / iOS port for the Redmi Note 10 Pro (`sweet`, SM7150). Made public with the user's approval on 2026-10-18.
 
 Start experiments here, build and test them, then port working changes into `ios-sweet`. This repository has its own Git history and remote.
 
@@ -12,7 +12,7 @@ Local workspace: `/home/dipa/ios-extra`. The existing `/home/dipa/ios-sweet` che
 
 ## Builds
 
-The inherited XNU workflow is configured to skip the build job while this repository is private. After the repository is made public, kernel patch pushes to `main` can build automatically. A manual build can also be started then:
+The repository is public, so kernel patch pushes to `main` can build automatically. A manual build can also be started:
 
 ```sh
 gh workflow run xnu.yml -R dipa-studio/ios-extra
@@ -20,7 +20,7 @@ gh run list -R dipa-studio/ios-extra --workflow xnu.yml
 gh run download RUN_ID -R dipa-studio/ios-extra -n xnu-kernel -D xnu/out
 ```
 
-Changing repository visibility is a separate step; creating this playground does not publish it.
+The workflow retains a guard that skips macOS builds if the repository is made private again.
 
 ## Working here
 

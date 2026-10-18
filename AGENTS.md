@@ -14,8 +14,9 @@
   repository's builds and logs. Local single-file cross-compiles can avoid
   unnecessary CI runs. Do not edit the upstream research tree to check an
   experiment: stage a separate build tree here or in external scratch space.
-- Keep the repository private until the user requests publication. The XNU
-  workflow skips builds while private; public visibility enables its build job.
+- The user approved public visibility on 2026-10-18. The repository is now
+  public and its XNU workflow can run. Keep local/device/Apple artifacts out
+  of commits; use this repository's CI rather than the other agents' repo.
 - Hardware constraints inherited from ios-sweet still apply: temporary
   `fastboot boot` images; iOS root in existing `userdata`; no GPT changes.
   Preserve bootloaders, recovery, modem, persist and partition backups.

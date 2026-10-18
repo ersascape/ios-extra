@@ -6,6 +6,11 @@
   driver playground. Working experiments can later be ported to `ios-sweet`.
 - Local checkout: `/home/dipa/ios-extra`.
 - GitHub: https://github.com/dipa-studio/ios-extra.
+- **Public with user approval:** the user explicitly said "yes public" on
+  2026-10-18. Visibility was changed and verified (`isPrivate=false`).
+- Full XNU CI run **39152959124**, source commit
+  **ee248d8a46463567d415b0ce4fd83b127c062da3**, dispatched and building.
+  URL: https://github.com/dipa-studio/ios-extra/actions/runs/39152959124.
 - Original reference checkout: `/home/dipa/ios-sweet`; do not modify it as
   part of playground work.
 - Imported tracked baseline: upstream `347e19018e3e4c0117635e9e444f73659b2ece53`
@@ -32,8 +37,8 @@
 ## Builds and integration
 
 - `.github/workflows/xnu.yml` retains the inherited build and staging process.
-  Its build job runs only when repository visibility is public. Private
-  pushes may produce a skipped workflow; no macOS build should run.
+  Its build job runs only when repository visibility is public. The user
+  approved publication; public builds are now enabled.
 - GPU probe 0080 is now implemented and locally cross-compiled; full kernel
   linkage still requires a macOS CI run. No GPU phone test has been performed.
 - Verified initial push workflow run **39150033548**, head `8b1e4f2`:
@@ -75,8 +80,8 @@
 - Full register provenance, commands and limitations: `docs/GPU_BRINGUP.md`.
 - Probe implementation commit **cdb9295** pushed. Its private-repository CI
   run **39151552639** completed **skipped** as intended. Full kernel linkage
-  is not verified. Asked the user asynchronously whether to make ios-extra
-  public and run macOS CI; do not interpret an unanswered question as consent.
+  was not verified at that point. The user subsequently approved publication
+  and full kernel build 39152959124 is now running.
 - Copied the reference compile log into
   `ios-extra-work/logs/upstream-run28.log`; future local checks can use that
   isolated copy. Final syntax-check log: `ios-extra-work/logs/probe-0080-syntax.txt`.
@@ -88,7 +93,7 @@
   boundary, not a tested replacement driver. Details in `docs/GPU_API_RE.md`.
 - Unit tests pass with ResourceWarning treated as an error after fixing the
   inherited compile-log reader's file lifetime. No phone/device commands run.
-- Next: full kernel CI linkage once the repository's publication/build path
-  is resolved, then coordinate a separate phone test. iOS renderer selection,
+- Next: finish full kernel CI linkage, then coordinate a separate phone test.
+  iOS renderer selection,
   power-up, firmware, SMMU and submission remain future milestones.
-  No publication, full kernel build, GPU hardware test or upstream integration yet.
+  No completed full kernel build, GPU hardware test or upstream integration yet.
