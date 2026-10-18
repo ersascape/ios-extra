@@ -29,6 +29,9 @@ class GPUProbeTests(unittest.TestCase):
                 text = '__asm__ volatile("%s" ::: "memory");' % name
                 self.assertEqual(source.count(text), 2)  # 32- and 64-bit accessors
                 source = source.replace(text, '__asm__ volatile("" ::: "memory");')
+            store32 = '*(volatile uint32_t *)(base + off) = value;'
+            self.assertEqual(source.count(store32), 1)
+            source = source.replace(store32, 'test_store32(base, off, value);')
             (work / 'sweet_gpu.c').write_text(source)
             headers = {
                 'sys/param.h': '#include <stdint.h>\ntypedef uintptr_t vm_offset_t;\n'
@@ -65,7 +68,7 @@ class GPUProbeTests(unittest.TestCase):
             self.assertEqual(build.returncode, 0, build.stderr)
             result = subprocess.run([str(work / 'test')], capture_output=True, text=True)
             self.assertEqual(result.returncode, 0, result.stderr)
-            self.assertIn('PASS: 14 clock/cache cases, 30 ARC cases + 512 mutations, 47 CX experiment cases', result.stdout)
+            self.assertIn('PASS: 14 clock/cache cases, 30 ARC cases + 512 mutations, 49 CX experiment cases', result.stdout)
 
 
 HARNESS = r'''
@@ -75,6 +78,8 @@ HARNESS = r'''
 #include <stdio.h>
 #include <string.h>
 
+#include <sys/param.h>
+static void test_store32(vm_offset_t base, uint32_t off, uint32_t value);
 static int probe_printf(const char *, ...);
 #define printf probe_printf
 #define ARM64_BOARD_CONFIG_SWEET 1
@@ -93,6 +98,14 @@ static int fail_alloc, alloc_calls, clean_calls, ats_stuck, tlb_stuck;
 static uint64_t last_ats;
 pmap_t kernel_pmap; vm_map_t kernel_map;
 static uint32_t smmu_mem[GPU_SMMU_SIZE / 4];
+static int smmu_sticky; /* hardware that refuses to take the ABL default back in S2CR3/CBAR3 */
+static void test_store32(vm_offset_t base, uint32_t off, uint32_t value)
+{
+    if (smmu_sticky && base == (vm_offset_t)smmu_mem &&
+        ((off == GPU_SMMU_S2CR + 12 && value == GPU_SMMU_S2CR_FAULT) ||
+         (off == GPU_SMMU_CBAR + 12 && value == 0))) return;
+    *(volatile uint32_t *)(base + off) = value;
+}
 static int smmu_maps, fail_smmu_map;
 /* Simulated GPUCC CX GDSC and RPMh ARC client for the sweetgpu=3 experiment. */
 static int gdsc_hw_ok, delay_calls, vote_fail_on, rcg_stuck;
@@ -263,7 +276,7 @@ static void arc_reset(void)
     smmu_mem[0x20 / 4] = 5;    /* IDR0: NUMSMRG = 5 */
     smmu_mem[0x24 / 4] = 3;    /* IDR1: NUMCB = 3 */
     fake_pa_base = 0x90000000ull; fail_alloc = alloc_calls = clean_calls = 0;
-    ats_stuck = tlb_stuck = 0;
+    ats_stuck = tlb_stuck = smmu_sticky = 0;
     last_ats = smmu_rd64(GPU_SMMU_CB0 + 3 * 0x1000 + GPU_SMMU_CB_ATS1PR); /* not a pending request */
     memset(dma_block, 0, sizeof(dma_block));
     for (unsigned i = 0; i < GPU_GMU_SIZE / 4; i++) gmu_mem[i] = 0xa5000000u | i;
@@ -640,6 +653,16 @@ int main(void)
                smmu_mem[(cb + GPU_SMMU_CB_TCR) / 4] == 0 && smmu_mem[(cb + GPU_SMMU_CB_MAIR0) / 4] == 0);
         assert(strstr(output, "SMMU ctx result: all translations as expected, restored"));
         output[0] = 0; sweet_gpu_replay(); assert(alloc_calls == 1 && strstr(output, "SMMU ctx ATOS va=0x60000000"));
+        assert(x->ctx_nlog >= 18 && x->ctx_log_off[0] == GPU_SMMU_CBA2R + 12);
+        for (unsigned i = 0; i < x->ctx_nlog; i++) assert(x->ctx_log_wrote[i] == x->ctx_log_got[i]);
+        /* Hardware that keeps S2CR3/CBAR3: alternatives tried, mismatches reported. */
+        arc_reset(); mode = 8; cc[GPU_CX_GDSCR / 4] = GPU_CX_IDLE_GDSCR; gmu_mem[0x14000 / 4] = 1;
+        SMMU_DEFAULTS(); smmu_sticky = 1;
+        arc_run(); x = &gpu_boot_inventory.power;
+        assert(!x->ctx_error && x->ctx_passed == 4 && !x->ctx_restored);
+        assert(x->ctx_final[0] == 0 && x->ctx_final[1] == 0x00020000u && x->ctx_final[2] == 0 &&
+               x->ctx_final[3] == (2u << 16));
+        assert(strstr(output, "MISMATCH") && strstr(output, "did not restore to the ABL default"));
         /* Pre-state not the ABL default (or unsuitable geometry): nothing is written or allocated. */
         for (unsigned bad = 0; bad < 8; bad++) {
             arc_reset(); mode = 8; cc[GPU_CX_GDSCR / 4] = GPU_CX_IDLE_GDSCR; gmu_mem[0x14000 / 4] = 1;
@@ -685,7 +708,7 @@ int main(void)
     /* Mode 2 never reaches the experiment. */
     arc_reset(); cc[GPU_CX_GDSCR / 4] = GPU_CX_IDLE_GDSCR; arc_run();
     assert(!gpu_boot_inventory.power.requested && vote_count == 0 && delay_calls == 0);
-    puts("PASS: 14 clock/cache cases, 30 ARC cases + 512 mutations, 47 CX experiment cases");
+    puts("PASS: 14 clock/cache cases, 30 ARC cases + 512 mutations, 49 CX experiment cases");
     return 0;
 }
 '''

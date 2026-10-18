@@ -1,5 +1,13 @@
 # ios-extra — active handoff
 
+## Active implementation — 0089 SMMU write transcript (not yet built/booted)
+
+- `xnu/patches/0089-sweet-gpu-smmu-write-transcript.patch`: same `sweetgpu=8`, now
+  records each SMMU write with immediate readback and tries inert alternatives for
+  S2CR3/CBAR3 if the ABL default is refused. Docs: `docs/GPU_CX_EXPERIMENT.md`.
+  Host tests (49 cases) pass incl. ASan/UBSan; arm64 compile ok; isolated baseline
+  8be623b (0088).
+
 ## Latest phone result — 0088 GMU SMMU context + ATOS, 2026-10-18 21:34 UTC
 
 - `shim/out/shim-boot-0088-smmuctx.img` (SHA256 `943ed6d7…e7acd6`, CI 39167833774,

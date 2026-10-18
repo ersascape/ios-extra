@@ -158,3 +158,14 @@ Mode 8 = mode 7 plus, in the same window, a self-contained SMMU programming test
 
 Host tests use an AArch64 walker model standing in for ATOS; only the phone
 shows whether the real SMMU accepts these encodings. Report: `SWEET GPU: SMMU ctx ...`.
+
+# 0089 — SMMU write transcript (`sweetgpu=8`, diagnostic)
+
+0088 on the phone: ATOS gave all four expected results, but `S2CR3` stayed `0x3`
+and `CBAR3` stayed `0x10000` after the restore writes (`SMR3` and `SCTLR` did
+return to 0). 0089 changes only the diagnostics: every SMMU write now reads back
+immediately and is reported (`SMMU ctx wr +off wrote=.. got=.. [MISMATCH]`); if the
+ABL default is refused, `S2CR3` retries with `0x00020000` (type fault, CB 0) and
+`CBAR3` with `0x20000` (stage 1, stage 2 fault); the final-state line and result
+text now say when registers did not restore. State left behind is harmless
+either way: `SMR3` invalid (group inactive) and `SCTLR`=0 (context disabled).
