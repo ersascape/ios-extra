@@ -1,0 +1,193 @@
+diff --git a/bsd/dev/sweet_gpu.c b/bsd/dev/sweet_gpu.c
+index fcb05a4..c7892ff 100644
+--- a/bsd/dev/sweet_gpu.c
++++ b/bsd/dev/sweet_gpu.c
+@@ -5,6 +5,8 @@
+  * running, GPUCC. No firmware, clocks, regulators or GPU state are changed.
+  * GPU/GMU/SMMU registers are deliberately not mapped: an instantaneous
+  * power-on indication does not hold a GMU-controlled domain awake.
++ * The initial values are cached and replayed by the USB logger after link
++ * configuration. Replays do not re-read or map hardware.
+  * Register provenance and limitations: ios-extra/docs/GPU_BRINGUP.md.
+  */
+ #if defined(ARM64_BOARD_CONFIG_SWEET)
+@@ -14,6 +16,7 @@
+ 
+ extern vm_offset_t ml_io_map(vm_offset_t, vm_size_t);
+ void sweet_gpu_probe(void);
++void sweet_gpu_replay(void);
+ 
+ #define GPU_GCC_PA              0x00100000
+ #define GPU_GCC_SIZE            0x00090000
+@@ -51,6 +54,28 @@ static const struct sweet_gpu_clock gpu_cc_clocks[] = {
+ 	{ "gx-gmu",    0x1064 },
+ };
+ 
++#define GPU_GCC_CLOCK_COUNT (sizeof(gpu_gcc_clocks) / sizeof(gpu_gcc_clocks[0]))
++#define GPU_CC_CLOCK_COUNT  (sizeof(gpu_cc_clocks) / sizeof(gpu_cc_clocks[0]))
++
++enum gpu_inventory_state {
++	GPU_NO_GCC,
++	GPU_CONFIG_OFF,
++	GPU_NO_CC,
++	GPU_COMPLETE,
++};
++
++struct gpu_inventory {
++	uint32_t gcc[GPU_GCC_CLOCK_COUNT];
++	uint32_t cc[GPU_CC_CLOCK_COUNT];
++	uint32_t cx, gx;
++	enum gpu_inventory_state state;
++};
++
++/* Published once by the UFS startup path, read by the USB log thread. */
++static struct gpu_inventory gpu_boot_inventory;
++static unsigned int gpu_inventory_ready;
++static unsigned int gpu_replay_count; /* only the USB log thread increments */
++
+ static uint32_t
+ gpu_read32(vm_offset_t base, uint32_t off)
+ {
+@@ -76,10 +101,44 @@ gpu_domain_log(const char *name, uint32_t off, uint32_t value)
+ 	    (value & GPU_DOMAIN_ON) ? "1" : "0");
+ }
+ 
++static void
++gpu_inventory_log(const struct gpu_inventory *inventory, unsigned int replay)
++{
++	printf("SWEET GPU: BEGIN boot inventory report %u (cached=%u)\n", replay, replay != 0);
++	printf("SWEET GPU: Adreno 618 clock inventory (DT chip 0x06010800; hardware ID not read)\n");
++	if (inventory->state == GPU_NO_GCC) {
++		printf("SWEET GPU: GCC mapping failed\n");
++		goto done;
++	}
++	for (unsigned int i = 0; i < GPU_GCC_CLOCK_COUNT; i++) {
++		gpu_clock_log("GCC", &gpu_gcc_clocks[i], inventory->gcc[i]);
++	}
++	if (inventory->state == GPU_CONFIG_OFF) {
++		printf("SWEET GPU: config-AHB not enabled/running; GPUCC skipped\n");
++		goto done;
++	}
++	if (inventory->state == GPU_NO_CC) {
++		printf("SWEET GPU: GPUCC mapping failed\n");
++		goto done;
++	}
++	gpu_domain_log("CX", GPU_CX_GDSCR, inventory->cx);
++	gpu_domain_log("GX", GPU_GX_GDSCR, inventory->gx);
++	for (unsigned int i = 0; i < GPU_CC_CLOCK_COUNT; i++) {
++		gpu_clock_log("GPUCC", &gpu_cc_clocks[i], inventory->cc[i]);
++	}
++	printf("SWEET GPU: GPU/GMU/SMMU skipped (no power hold); no hardware writes\n");
++done:
++	printf("SWEET GPU: END boot inventory report %u\n", replay);
++}
++
+ void
+ sweet_gpu_probe(void)
+ {
++	struct gpu_inventory inventory = { .state = GPU_NO_GCC };
++	vm_offset_t gcc, cc;
++	uint32_t cfg;
+ 	int mode = 0;
++
+ 	if (!PE_parse_boot_argn("sweetgpu", &mode, sizeof(mode)) || mode == 0) {
+ 		return;
+ 	}
+@@ -87,34 +146,41 @@ sweet_gpu_probe(void)
+ 		printf("SWEET GPU: unsupported sweetgpu=%d (0=off, 1=clock inventory)\n", mode);
+ 		return;
+ 	}
+-	printf("SWEET GPU: Adreno 618 clock inventory (DT chip 0x06010800; hardware ID not read)\n");
+-	vm_offset_t gcc = ml_io_map(GPU_GCC_PA, GPU_GCC_SIZE);
++	gcc = ml_io_map(GPU_GCC_PA, GPU_GCC_SIZE);
+ 	if (gcc == 0) {
+-		printf("SWEET GPU: GCC mapping failed\n");
+-		return;
++		goto publish;
+ 	}
+-	uint32_t cfg = 0;
+-	for (unsigned int i = 0; i < sizeof(gpu_gcc_clocks) / sizeof(gpu_gcc_clocks[0]); i++) {
+-		uint32_t value = gpu_read32(gcc, gpu_gcc_clocks[i].off);
+-		gpu_clock_log("GCC", &gpu_gcc_clocks[i], value);
+-		if (gpu_gcc_clocks[i].off == GPU_CFG_AHB_CBCR) {
+-			cfg = value;
+-		}
++	for (unsigned int i = 0; i < GPU_GCC_CLOCK_COUNT; i++) {
++		inventory.gcc[i] = gpu_read32(gcc, gpu_gcc_clocks[i].off);
+ 	}
++	cfg = inventory.gcc[0]; /* first entry is config-AHB */
++	inventory.state = GPU_CONFIG_OFF;
+ 	if (cfg == ~0u || !(cfg & GPU_BRANCH_ENABLE) || (cfg & GPU_BRANCH_OFF)) {
+-		printf("SWEET GPU: config-AHB not enabled/running; GPUCC skipped\n");
+-		return;
++		goto publish;
+ 	}
+-	vm_offset_t cc = ml_io_map(GPU_CC_PA, GPU_CC_SIZE);
++	inventory.state = GPU_NO_CC;
++	cc = ml_io_map(GPU_CC_PA, GPU_CC_SIZE);
+ 	if (cc == 0) {
+-		printf("SWEET GPU: GPUCC mapping failed\n");
+-		return;
++		goto publish;
+ 	}
+-	gpu_domain_log("CX", GPU_CX_GDSCR, gpu_read32(cc, GPU_CX_GDSCR));
+-	gpu_domain_log("GX", GPU_GX_GDSCR, gpu_read32(cc, GPU_GX_GDSCR));
+-	for (unsigned int i = 0; i < sizeof(gpu_cc_clocks) / sizeof(gpu_cc_clocks[0]); i++) {
+-		gpu_clock_log("GPUCC", &gpu_cc_clocks[i], gpu_read32(cc, gpu_cc_clocks[i].off));
++	inventory.cx = gpu_read32(cc, GPU_CX_GDSCR);
++	inventory.gx = gpu_read32(cc, GPU_GX_GDSCR);
++	for (unsigned int i = 0; i < GPU_CC_CLOCK_COUNT; i++) {
++		inventory.cc[i] = gpu_read32(cc, gpu_cc_clocks[i].off);
++	}
++	inventory.state = GPU_COMPLETE;
++publish:
++	gpu_boot_inventory = inventory;
++	gpu_inventory_log(&gpu_boot_inventory, 0);
++	__atomic_store_n(&gpu_inventory_ready, 1, __ATOMIC_RELEASE);
++}
++
++/* Called only by the USB log thread, after its configured grace periods. */
++void
++sweet_gpu_replay(void)
++{
++	if (__atomic_load_n(&gpu_inventory_ready, __ATOMIC_ACQUIRE)) {
++		gpu_inventory_log(&gpu_boot_inventory, ++gpu_replay_count);
+ 	}
+-	printf("SWEET GPU: GPU/GMU/SMMU skipped (no power hold); no hardware writes\n");
+ }
+ #endif /* ARM64_BOARD_CONFIG_SWEET */
+diff --git a/bsd/dev/sweet_usb.c b/bsd/dev/sweet_usb.c
+index 9c42e45..b725ea7 100644
+--- a/bsd/dev/sweet_usb.c
++++ b/bsd/dev/sweet_usb.c
+@@ -773,6 +773,7 @@ ud_thread(void *arg __unused, wait_result_t wr __unused)
+  */
+ extern uint32_t sweet_log_copy(uint64_t *pos, char *out, uint32_t max);
+ extern uint64_t sweet_log_position(void);
++extern void sweet_gpu_replay(void);
+ 
+ static void
+ ud_log_thread(void *arg __unused, wait_result_t wr __unused)
+@@ -781,6 +782,7 @@ ud_log_thread(void *arg __unused, wait_result_t wr __unused)
+ 	socket_t so = NULL;
+ 	struct sockaddr_in to;
+ 	uint64_t pos = sweet_log_position();
++	uint32_t gpu_report_ticks = 0;
+ 
+ 	pos = pos > 65536 ? pos - 65536 : 0;
+ 	bzero(&to, sizeof(to));
+@@ -793,6 +795,14 @@ ud_log_thread(void *arg __unused, wait_result_t wr __unused)
+ 		if (!ud.configured) {
+ 			continue;
+ 		}
++		/* Repeat the cached boot inventory after ~5/15/30 s configured.
++		 * This prints only saved values: no new MMIO reads or mappings. */
++		if (gpu_report_ticks < 300) {
++			gpu_report_ticks++;
++			if (gpu_report_ticks == 50 || gpu_report_ticks == 150 || gpu_report_ticks == 300) {
++				sweet_gpu_replay();
++			}
++		}
+ 		if (so == NULL && sock_socket(PF_INET, SOCK_DGRAM, IPPROTO_UDP, NULL, NULL, &so) != 0) {
+ 			so = NULL;
+ 			continue;

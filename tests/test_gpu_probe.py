@@ -17,9 +17,10 @@ class GPUProbeTests(unittest.TestCase):
     def test_mmio_boundaries(self):
         with tempfile.TemporaryDirectory(prefix='ios-extra-gpu-test-') as directory:
             work = Path(directory)
-            subprocess.run(['git', 'apply', '--include=bsd/dev/sweet_gpu.c',
-                            str(ROOT / 'xnu/patches/0080-sweet-gpu-probe.patch')],
-                           cwd=work, check=True)
+            for patch in sorted((ROOT / 'xnu/patches').glob('*.patch')):
+                if b'+++ b/bsd/dev/sweet_gpu.c\n' in patch.read_bytes():
+                    subprocess.run(['git', 'apply', '--include=bsd/dev/sweet_gpu.c',
+                                    str(patch)], cwd=work, check=True)
             source = (work / 'bsd/dev/sweet_gpu.c').read_text()
             barrier = '__asm__ volatile("dmb oshld" ::: "memory");'
             self.assertEqual(source.count(barrier), 1)
@@ -41,7 +42,7 @@ class GPUProbeTests(unittest.TestCase):
                             str(work / 'test.c'), '-o', str(work / 'test')], check=True)
             result = subprocess.run([str(work / 'test')], capture_output=True,
                                     text=True, check=True)
-            self.assertIn('PASS: 11 MMIO boundary cases', result.stdout)
+            self.assertIn('PASS: 14 MMIO/cache boundary cases', result.stdout)
 
 
 HARNESS = r'''
@@ -97,6 +98,8 @@ static void reset(void)
     output[0] = 0;
     present = mode = 1;
     map_calls = fail_gcc = fail_cc = 0;
+    memset(&gpu_boot_inventory, 0, sizeof(gpu_boot_inventory));
+    gpu_inventory_ready = gpu_replay_count = 0;
     gcc[GPU_CFG_AHB_CBCR / 4] = GPU_BRANCH_ENABLE;
 }
 
@@ -124,7 +127,23 @@ int main(void)
     reset(); cc[GPU_CX_GDSCR / 4] = cc[GPU_GX_GDSCR / 4] = ~0u;
     sweet_gpu_probe(); assert(map_calls == 2 && strstr(output, "PWR_ON=unknown"));
     assert(cc[GPU_CX_GDSCR / 4] == ~0u && cc[GPU_GX_GDSCR / 4] == ~0u);
-    puts("PASS: 11 MMIO boundary cases");
+    reset(); present = 0; sweet_gpu_probe(); sweet_gpu_replay();
+    assert(map_calls == 0 && output[0] == 0);
+    reset(); cc[GPU_CX_GDSCR / 4] = 0x80000004u; sweet_gpu_probe();
+    assert(map_calls == 2);
+    memset(gcc, 0xff, sizeof(gcc)); memset(cc, 0xff, sizeof(cc));
+    fail_gcc = fail_cc = 1;
+    output[0] = 0; sweet_gpu_replay();
+    assert(map_calls == 2 && strstr(output, "report 1 (cached=1)"));
+    assert(strstr(output, "0x80000004") && strstr(output, "0x00000001"));
+    assert(!strstr(output, "0xffffffff") && strstr(output, "END boot inventory report 1"));
+    output[0] = 0; sweet_gpu_replay();
+    assert(map_calls == 2 && strstr(output, "report 2 (cached=1)"));
+    reset(); fail_gcc = 1; sweet_gpu_probe(); output[0] = 0;
+    fail_gcc = 0; sweet_gpu_replay();
+    assert(map_calls == 1 && strstr(output, "GCC mapping failed"));
+    assert(strstr(output, "END boot inventory report 1"));
+    puts("PASS: 14 MMIO/cache boundary cases");
     return 0;
 }
 '''

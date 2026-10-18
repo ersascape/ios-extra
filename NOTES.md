@@ -1,5 +1,22 @@
 # ios-extra — active handoff
 
+## Active work — GPU inventory replay 0081
+
+- User said to continue after the successful 0080 home-screen test. Preparing
+  patch **0081-sweet-gpu-inventory-replay.patch** to recover the missing first
+  part of the boot inventory. The phone remains on the running 0080 image.
+- Caches the one initial, guarded read-only snapshot and prints it again
+  from the existing USB log thread after ~5/15/30 seconds configured-loop
+  time. Each report has numbered BEGIN/END markers; replays are explicitly
+  marked cached. No new hardware reads, mappings, writes or power votes.
+- Immutable snapshot is published release/acquire. No new thread or heap
+  allocation. Failure outcomes are cached too. Disabled probing stays quiet.
+- Local validation: all 3 unit tests pass (14 MMIO/cache cases in the probe
+  harness); real arm64 object generation of GPU and USB C files passes
+  (0/2 failed). New tests apply the full GPU patch chain before execution.
+- Details: `docs/GPU_REPORT_REPLAY.md`. Full CI and image packaging next;
+  no reboot or hardware experiment performed for 0081 yet.
+
 ## Latest phone result — 2026-10-18
 
 - **Probe 0080 temporary boot PASSED; user confirmed the home screen.**
