@@ -1,6 +1,29 @@
 # ios-extra — active handoff
 
-## Active implementation — 0088 GMU SMMU context + ATOS check (not yet built/booted)
+## Latest phone result — 0088 GMU SMMU context + ATOS, 2026-10-18 21:34 UTC
+
+- `shim/out/shim-boot-0088-smmuctx.img` (SHA256 `943ed6d7…e7acd6`, CI 39167833774,
+  sweetgpu=8); fastboot success 0.563s; **user confirmed home screen**. Logs outside
+  Git: logs/phone-0088-{fastboot.txt,smmuctx.pcap,smmuctx.txt}.
+- **The hardware SMMU accepted the page tables.** Table block PA 0x104660000
+  (TTBR0 = that), L3[0] = 0x40000104663f43. ATOS (CB3 ATS1PR): 0x60000000 -> PAR
+  0x4000000104663b80 and 0x60000fff -> 0x104663b80 (PA 0x104663000 = block+0x3000,
+  F=0); 0x60001000 -> PAR 0x304663a03 and 0x20000000 -> 0x104663a03 (F=1, fault).
+  4/4 as expected. Caveat: the first PAR has a non-zero high word the second lacks
+  for the same page (attr bits stale/unreliable?); FSR after the test = 0x400
+  (bit 10, meaning not decoded); sGFSR 0.
+- **Restore did NOT fully take:** final SMR3=0x0, SCTLR=0x0 as intended, but
+  **S2CR3=0x00000003 (my programmed value, ABL default was 0x000200ff) and
+  CBAR3=0x00010000 (programmed; default 0)**; restored=0 was reported, although the
+  result line text said "restored" (message bug). State is harmless: SMR3 invalid
+  (group inactive) and SCTLR=0. Unknown whether those two writes were rejected by the
+  hardware (e.g. CBAR TYPE 0 = stage-2 context while IDR0.S2TS=0; S2CR CBNDX 0xff
+  invalid for 5 CBs) or something else; and whether SMR3's valid write ever stuck.
+- Home-screen-confirmed, so nothing is broken. **Next (0089):** transcript every SMMU
+  write with immediate readback and try alternative "disabled" encodings, to learn
+  which values the hardware accepts, before building GMU mappings on top.
+
+## Active implementation — 0088 GMU SMMU context + ATOS check (built, phone-tested above)
 
 - `xnu/patches/0088-sweet-gpu-smmu-gmu-context.patch`: `sweetgpu=8` programs stream 5
   into CB3 with a 4 KiB-granule table (IOVA 0x60000000 -> one page), verifies via
