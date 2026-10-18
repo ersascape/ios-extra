@@ -1,5 +1,25 @@
 # ios-extra — active handoff
 
+## Latest phone result — 0082 ARC inventory, 2026-10-18 19:23 UTC
+
+- Temporary boot of `shim/out/shim-boot-0082-arc.img` (SHA256
+  `7fca248b6c8af736aee7982388cb55fedf9d4d825f279ea602007be9fe9cccba`),
+  sweetgpu=2. Exactly one fastboot device; success in 0.562s. No flashing.
+- USB ECM came up automatically (tools/phone-ecm-host.py); ping 3/3, avg 1.3ms.
+  Reports 1, 2, 3 complete; ARC cached tables identical (analyzer passed).
+- Raw command-DB levels (uint16, padding included; no checksum/voltage meaning
+  claimed). All three resources: aux version 0x1000.
+  - gfx.lvl addr 0x00030050, priority 0x40000/0: 0,16,64,128,192,256,0...
+  - cx.lvl  addr 0x00030000, priority 0x1440010/0: 0,16,64,128,192,256,0...
+  - mx.lvl  addr 0x00030010, priority 0x1440010/0: 0,16,192,320,384,0...
+- Only "panic" string in the stream is the DumpPanic process exec; 19
+  SpringBoard lines. UI state not separately confirmed by the user.
+- Own tcpdump stopped. Logs outside Git: logs/phone-0082-{fastboot.txt,arc.pcap,
+  arc.txt,inventory.json}. Phone is running 0082 (temporary boot).
+- **Next:** design a bounded opt-in CX/GMU power experiment (ARC vote by table
+  index through the shared apps-DRV path, MX parent first). See HANDOFF.md
+  hardware notes. Confirm with the user before any hardware write.
+
 **User is switching AI to conserve usage. Read [HANDOFF.md](HANDOFF.md) for
 the complete continuation context, exact next phone-test commands and all
 workspace/source references. 0082 is ready; awaiting fastboot confirmation.
