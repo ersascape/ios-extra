@@ -1,5 +1,10 @@
 # ios-extra — active handoff
 
+**User is switching AI to conserve usage. Read [HANDOFF.md](HANDOFF.md) for
+the complete continuation context, exact next phone-test commands and all
+workspace/source references. 0082 is ready; awaiting fastboot confirmation.
+No additional phone action was taken during handoff.**
+
 ## Active implementation — read-only ARC inventory 0082
 
 - User said "mehet" after the complete inventory and external-driver audit.
