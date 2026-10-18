@@ -34,7 +34,8 @@
 - `.github/workflows/xnu.yml` retains the inherited build and staging process.
   Its build job runs only when repository visibility is public. Private
   pushes may produce a skipped workflow; no macOS build should run.
-- No kernel CI build has been requested in this session.
+- GPU probe 0080 is now implemented and locally cross-compiled; full kernel
+  linkage still requires a macOS CI run. No GPU phone test has been performed.
 - Verified initial push workflow run **39150033548**, head `8b1e4f2`:
   completed with conclusion **skipped**. No macOS build ran while private.
 - Verified the imported baseline Git tree exactly matches upstream `347e190`
@@ -45,9 +46,8 @@
   platform/CPU, framebuffer/IOSurface, touch/HID, RPMh/battery, UFS, USB,
   compatibility services and build tooling. The original checkout remains
   at `347e190` with a clean working tree as of setup verification.
-- Tooling follow-up: `tools/xnu-cc.py` hardcodes the upstream runner path;
-  adapt it before replaying logs from this repository. Stage separate local
-  build artifacts before kernel edits. CI itself does not use that helper.
+- `tools/xnu-cc.py` now infers the runner path from compile logs; explicit
+  `XNU_CI_DXB` override is supported. Regression tests cover both repositories.
 - GPU research/plan recorded in `docs/GPU_PLAN.md`. Saved live DT identifies
   Adreno 618 `0x06010800`, GPU base `0x05000000`, GPU SMMU `0x05040000`,
   GMU `0x0506a000`, GPUCC `0x05090000`. These are declarations, not tested
@@ -58,6 +58,22 @@
 - User reminder: other agents work on ios-sweet. Keep edits, generated trees
   and builds isolated here; coordinate future shared-phone tests. No agents
   were spawned and no phone commands were run in this research session.
-- Next: audit GPU initialization dependencies and iOS renderer selection,
-  then prepare opt-in GPU probe patch 0080 in an isolated build tree. No
-  publication, kernel build, GPU hardware test or upstream integration yet.
+- **Probe implementation:** `0080-sweet-gpu-probe.patch` adds a read-only
+  `sweetgpu=1` GCC/GPUCC inventory, default off. GPUCC mapping is conditional
+  on config-AHB enable/halt/invalid checks. GPU/GMU/SMMU remain unmapped because
+  no GMU power hold exists. No hardware writes or root-image changes.
+- **Isolated tree:** `/run/media/dipa/android/ios-extra-work/buildtree`.
+  XNU base `1b191cb58250d0705d8a51287127505aa4bc0789`, fresh pinned provider
+  staging, all 79 imported project patches applied plus applicable blacktop
+  patches; local baseline commit `788ab36d761b5564db9eaaee63003a7a7e6a5bae`.
+  Headers copied from the reference build artifact; source reconstructed
+  separately. Downloaded Xiaomi GPU sources pinned to `758bb7ef`.
+- **Local results:** syntax and real arm64 Mach-O object compilation of
+  `sweet_gpu.c` and its changed `sweet_ufs.c` caller both pass (0/2 failed).
+  Objects in `ios-extra-work/objects/`. Imports checked; ARM barrier present.
+  Host MMIO tests cover 11 cases; patch reverse-check passes.
+- Full register provenance, commands and limitations: `docs/GPU_BRINGUP.md`.
+- Next: full kernel CI linkage once the repository's publication/build path
+  is resolved, then coordinate a separate phone test. iOS renderer selection,
+  power-up, firmware, SMMU and submission remain future milestones.
+  No publication, full kernel build, GPU hardware test or upstream integration yet.

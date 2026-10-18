@@ -16,6 +16,7 @@ Env: XNU_CC_EXTRA   extra flags (e.g. "-DKPERF -DKPC" for config changes)
                     _CFLAGS_ADD in the xnu Makefiles: -U/-include after -D)
      XNU_CC_OBJDIR  emit real objects there instead of a syntax-only check
                     (then: llvm-nm for undefined symbols = link errors)
+     XNU_CI_DXB    override the runner's dxb path (normally inferred from LOG)
 """
 import concurrent.futures as cf, os, re, shlex, subprocess, sys
 from collections import Counter
@@ -26,6 +27,21 @@ CLANG = os.path.expanduser('~/swift/usr/bin/clang')
 DROP = {'-c', '-g', '-MD', '-MMD'}
 DROP_WITH_ARG = {'-MF', '-MT', '-o', '-arch'}
 COMPONENTS = ('osfmk', 'bsd', 'iokit', 'libkern', 'pexpert', 'security', 'san', 'libsa')
+
+
+def ci_root(log):
+    """Infer the checkout path so both upstream and playground logs replay."""
+    override = os.environ.get('XNU_CI_DXB')
+    if override:
+        return override.rstrip('/')
+    roots = set()
+    with open(log, errors='replace') as stream:
+        for line in stream:
+            if '/clang' in line and ' -c ' in line:
+                roots.update(re.findall(r'/Users/runner/work/[^/\s]+/[^/\s]+/dxb(?=/)', line))
+    if len(roots) > 1:
+        raise ValueError('multiple CI checkout paths; set XNU_CI_DXB explicitly')
+    return next(iter(roots), CI_DXB)
 
 
 def commands(log):
@@ -120,7 +136,9 @@ def run(item, bt, cdirs):
 
 
 def main():
+    global CI_DXB
     log, bt = sys.argv[1], os.path.abspath(sys.argv[2])
+    CI_DXB = ci_root(log)
     per_file = '--per-file' in sys.argv
     filters = [a for a in sys.argv[3:] if a != '--per-file']
     cmds = commands(log)

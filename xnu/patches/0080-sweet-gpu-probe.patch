@@ -1,0 +1,158 @@
+diff --git a/bsd/conf/files b/bsd/conf/files
+index 6630131..7052e81 100644
+--- a/bsd/conf/files
++++ b/bsd/conf/files
+@@ -111,6 +111,7 @@ bsd/dev/sweet_touch.c			standard
+ bsd/dev/sweet_rpmh.c			standard
+ bsd/dev/sweet_spmi.c			standard
+ bsd/dev/sweet_usb.c			standard
++bsd/dev/sweet_gpu.c			standard
+ bsd/dev/mem.c				standard
+ bsd/dev/munge.c 			optional config_requires_u32_munging
+ bsd/dev/unix_startup.c			standard
+diff --git a/bsd/dev/sweet_gpu.c b/bsd/dev/sweet_gpu.c
+new file mode 100644
+index 0000000..fcb05a4
+--- /dev/null
++++ b/bsd/dev/sweet_gpu.c
+@@ -0,0 +1,120 @@
++/*
++ * SWEET Adreno 618 bring-up: opt-in, read-only clock/power inventory.
++ *
++ * sweetgpu=1 reads GCC and, only with its config-AHB branch enabled and
++ * running, GPUCC. No firmware, clocks, regulators or GPU state are changed.
++ * GPU/GMU/SMMU registers are deliberately not mapped: an instantaneous
++ * power-on indication does not hold a GMU-controlled domain awake.
++ * Register provenance and limitations: ios-extra/docs/GPU_BRINGUP.md.
++ */
++#if defined(ARM64_BOARD_CONFIG_SWEET)
++#include <sys/param.h>
++#include <sys/systm.h>
++#include <pexpert/pexpert.h>
++
++extern vm_offset_t ml_io_map(vm_offset_t, vm_size_t);
++void sweet_gpu_probe(void);
++
++#define GPU_GCC_PA              0x00100000
++#define GPU_GCC_SIZE            0x00090000
++#define GPU_CC_PA               0x05090000
++#define GPU_CC_SIZE             0x00009000
++#define GPU_CFG_AHB_CBCR        0x71004
++#define GPU_CX_GDSCR            0x106c
++#define GPU_GX_GDSCR            0x100c
++#define GPU_BRANCH_ENABLE       (1u << 0)
++#define GPU_BRANCH_OFF          (1u << 31)
++#define GPU_DOMAIN_ON           (1u << 31)
++
++struct sweet_gpu_clock {
++	const char *name;
++	uint32_t off;
++};
++
++/* Xiaomi sweet-r-oss gcc-sdmmagpie.c and gpucc-sdmmagpie.c. */
++static const struct sweet_gpu_clock gpu_gcc_clocks[] = {
++	{ "cfg-ahb",   GPU_CFG_AHB_CBCR },
++	{ "memnoc",    0x7100c },
++	{ "snoc-dvm",  0x71018 },
++	{ "ddrss-axi", 0x4452c },
++};
++
++static const struct sweet_gpu_clock gpu_cc_clocks[] = {
++	{ "ahb",       0x1078 },
++	{ "cx-apb",    0x1088 },
++	{ "cx-gmu",    0x1098 },
++	{ "cxo",       0x109c },
++	{ "cx-gfx3d",  0x10a4 },
++	{ "cx-slave",  0x10a8 },
++	{ "gx-gfx3d",  0x1054 },
++	{ "gx-cxo",    0x1060 },
++	{ "gx-gmu",    0x1064 },
++};
++
++static uint32_t
++gpu_read32(vm_offset_t base, uint32_t off)
++{
++	uint32_t value = *(volatile uint32_t *)(base + off);
++	__asm__ volatile("dmb oshld" ::: "memory");
++	return value;
++}
++
++static void
++gpu_clock_log(const char *block, const struct sweet_gpu_clock *clock, uint32_t value)
++{
++	printf("SWEET GPU: %s %-9s +0x%x = 0x%08x (%s)\n", block,
++	    clock->name, clock->off, value, value == ~0u ? "invalid" :
++	    (value & GPU_BRANCH_OFF) ? "off" : "running");
++}
++
++static void
++gpu_domain_log(const char *name, uint32_t off, uint32_t value)
++{
++	/* GX's downstream regulator uses a separate status register: keep raw. */
++	printf("SWEET GPU: GPUCC %s GDSCR +0x%x = 0x%08x (PWR_ON=%s)\n",
++	    name, off, value, value == ~0u ? "unknown" :
++	    (value & GPU_DOMAIN_ON) ? "1" : "0");
++}
++
++void
++sweet_gpu_probe(void)
++{
++	int mode = 0;
++	if (!PE_parse_boot_argn("sweetgpu", &mode, sizeof(mode)) || mode == 0) {
++		return;
++	}
++	if (mode != 1) {
++		printf("SWEET GPU: unsupported sweetgpu=%d (0=off, 1=clock inventory)\n", mode);
++		return;
++	}
++	printf("SWEET GPU: Adreno 618 clock inventory (DT chip 0x06010800; hardware ID not read)\n");
++	vm_offset_t gcc = ml_io_map(GPU_GCC_PA, GPU_GCC_SIZE);
++	if (gcc == 0) {
++		printf("SWEET GPU: GCC mapping failed\n");
++		return;
++	}
++	uint32_t cfg = 0;
++	for (unsigned int i = 0; i < sizeof(gpu_gcc_clocks) / sizeof(gpu_gcc_clocks[0]); i++) {
++		uint32_t value = gpu_read32(gcc, gpu_gcc_clocks[i].off);
++		gpu_clock_log("GCC", &gpu_gcc_clocks[i], value);
++		if (gpu_gcc_clocks[i].off == GPU_CFG_AHB_CBCR) {
++			cfg = value;
++		}
++	}
++	if (cfg == ~0u || !(cfg & GPU_BRANCH_ENABLE) || (cfg & GPU_BRANCH_OFF)) {
++		printf("SWEET GPU: config-AHB not enabled/running; GPUCC skipped\n");
++		return;
++	}
++	vm_offset_t cc = ml_io_map(GPU_CC_PA, GPU_CC_SIZE);
++	if (cc == 0) {
++		printf("SWEET GPU: GPUCC mapping failed\n");
++		return;
++	}
++	gpu_domain_log("CX", GPU_CX_GDSCR, gpu_read32(cc, GPU_CX_GDSCR));
++	gpu_domain_log("GX", GPU_GX_GDSCR, gpu_read32(cc, GPU_GX_GDSCR));
++	for (unsigned int i = 0; i < sizeof(gpu_cc_clocks) / sizeof(gpu_cc_clocks[0]); i++) {
++		gpu_clock_log("GPUCC", &gpu_cc_clocks[i], gpu_read32(cc, gpu_cc_clocks[i].off));
++	}
++	printf("SWEET GPU: GPU/GMU/SMMU skipped (no power hold); no hardware writes\n");
++}
++#endif /* ARM64_BOARD_CONFIG_SWEET */
+diff --git a/bsd/dev/sweet_ufs.c b/bsd/dev/sweet_ufs.c
+index 6b926fe..0efc068 100644
+--- a/bsd/dev/sweet_ufs.c
++++ b/bsd/dev/sweet_ufs.c
+@@ -53,6 +53,7 @@ extern void sweet_sample_start(void);
+ extern void sweet_keys_init(void);
+ extern void sweet_touch_init(void);
+ extern void sweet_usb_probe(void);
++extern void sweet_gpu_probe(void);
+ 
+ #define REG_CAP         0x00
+ #define REG_IS          0x20
+@@ -660,6 +661,7 @@ sweet_ufs_init(void)
+ 	sweet_keys_init();
+ 	sweet_touch_init();
+ 	sweet_usb_probe();
++	sweet_gpu_probe();
+ 	return 0;
+ }
+ 
