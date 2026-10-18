@@ -13,7 +13,28 @@
   but the PDC/RSC sequencer programming is still missing.
 - User did not report the home screen for this boot yet.
 
-## Active implementation — 0091 mainline RSC/PDC init (not yet built/booted)
+## Latest phone result — 0091 mainline RSC/PDC init, 2026-10-18 22:10 UTC
+
+- `shim/out/shim-boot-0091-rpmhinit.img` (SHA256 `fde80dfb…b6a4`, CI 39170396365,
+  sweetgpu=10), fastboot success 0.560s. Logs outside Git: logs/phone-0091-*.
+  Home screen for 0090/0091 not yet reported by the user.
+- **All 48 writes issued; 39 read back as written, 9 did not (bad=9). The RSC stop
+  handshake completed** (`RSC_STATUS0_DRV0` = 0x01010006, bit 16 set within the
+  10 ms bound), i.e. the RSC sequencer ran with the microcode written. First bad
+  write: RSCC `HIDDEN_TCS_CMD0_ADDR` (+0x23034) wrote 0, reads back the pre-existing
+  0x82204514, so that register appears hardware-owned/ignores writes. The other 8
+  were not logged (only the first mismatch was kept) -> 0092 logs all of them.
+- No fault; the PDC regions accepted at least some writes. Whether the RSC/PDC state
+  persists across a reboot is unknown; 0092 reads the whole table first.
+
+## Active implementation — 0092 RSC/PDC init diagnostics (not yet built/booted)
+
+- `xnu/patches/0092-sweet-gpu-rpmh-init-diagnostics.patch`: same mode 10; logs every
+  bad write (first 16) and reads the whole 48-entry init table before writing (prints
+  entries that differ from the mainline values: shows persistence). Host tests (62
+  cases) pass incl. ASan/UBSan; arm64 compile ok. Isolated baseline 00095cd (0091).
+
+## Active implementation — 0091 mainline RSC/PDC init (built, phone-tested)
 
 - `xnu/patches/0091-sweet-gpu-rpmh-init.patch`: `sweetgpu=10` performs mainline
   `a6xx_gmu_rpmh_init` for A618 with readback of every write, then the RSC stop

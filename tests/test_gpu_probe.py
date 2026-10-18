@@ -99,13 +99,15 @@ static uint64_t last_ats;
 pmap_t kernel_pmap; vm_map_t kernel_map;
 static uint32_t smmu_mem[GPU_SMMU_SIZE / 4];
 static uint32_t pdc_mem[GPU_PDC_SIZE / 4], pdcseq_mem[GPU_PDC_SIZE / 4];
-static int pdc_ro, rsc_stuck; /* PDC refuses writes / RSC never reports powered off */
+static int pdc_ro, rsc_stuck;
+static uint32_t hw_ro_off; /* one GMU-block register that ignores writes */ /* PDC refuses writes / RSC never reports powered off */
 static int smmu_sticky; /* hardware that refuses to take the ABL default back in S2CR3/CBAR3 */
 static void test_store32(vm_offset_t base, uint32_t off, uint32_t value)
 {
     if (smmu_sticky && base == (vm_offset_t)smmu_mem &&
         ((off == GPU_SMMU_S2CR + 12 && value == GPU_SMMU_S2CR_FAULT) ||
          (off == GPU_SMMU_CBAR + 12 && value == 0))) return;
+    if (hw_ro_off && base == (vm_offset_t)gmu_mem && off == hw_ro_off) return;
     if (pdc_ro && (base == (vm_offset_t)pdc_mem || base == (vm_offset_t)pdcseq_mem)) return;
     *(volatile uint32_t *)(base + off) = value;
 }
@@ -786,6 +788,29 @@ int main(void)
         arc_run(); x = &gpu_boot_inventory.power;
         assert(x->init_bad > 20 && x->init_nwrites == GPU_RPMH_INIT_COUNT && x->init_first_bad_region == 2 &&
                x->init_error && strstr(output, "RPMH init first bad region="));
+        assert(x->init_nbad_log == 16 && x->init_bad_region[0] == 2 && x->init_bad_off[0] == 0 &&
+               x->init_bad_wrote[0] == 0xfebea1e1u && x->init_bad_got[0] == pdcseq_mem[0] &&
+               strstr(output, "RPMH init bad region=2 off=+0x0 wrote=0xfebea1e1"));
+        /* Pre-write table state is reported entry by entry and counts differences. */
+        assert(x->tbl_done == GPU_RPMH_INIT_COUNT && strstr(output, "RPMH table pre-write:") &&
+               strstr(output, "RPMH table pre-write region="));
+        /* A single register that cannot be written is the only bad entry. */
+        arc_reset(); mode = 10; cc[GPU_CX_GDSCR / 4] = GPU_CX_IDLE_GDSCR; RPMH_DEFAULTS();
+        gmu_mem[(0x23000 + 0x0d * 4) / 4] = 0x82204514u; hw_ro_off = 0x23000 + 0x0d * 4;
+        arc_run(); x = &gpu_boot_inventory.power;
+        assert(x->init_bad == 1 && x->init_nbad_log == 1 && x->init_bad_off[0] == 0x23034 &&
+               x->init_bad_got[0] == 0x82204514u && x->init_stop_done);
+        hw_ro_off = 0;
+        /* Table already programmed (persisted from an earlier boot): reported, not rewritten. */
+        arc_reset(); mode = 10; cc[GPU_CX_GDSCR / 4] = GPU_CX_IDLE_GDSCR; RPMH_DEFAULTS();
+        for (unsigned i = 0; i < GPU_RPMH_INIT_COUNT; i++) {
+            uint32_t *w = gpu_rpmh_init[i].region == 0 ? &gmu_mem[gpu_rpmh_init[i].off / 4] :
+                gpu_rpmh_init[i].region == 1 ? &pdc_mem[gpu_rpmh_init[i].off / 4] : &pdcseq_mem[gpu_rpmh_init[i].off / 4];
+            *w = gpu_rpmh_init[i].value;
+        }
+        gmu_mem[0x24c1c / 4] = 0;
+        arc_run(); x = &gpu_boot_inventory.power;
+        assert(x->init_error && x->init_nwrites == 0 && strstr(output, "0 of 48 entries differ"));
         /* RSC never reports powered off: bounded, request dropped. */
         arc_reset(); mode = 10; cc[GPU_CX_GDSCR / 4] = GPU_CX_IDLE_GDSCR; RPMH_DEFAULTS(); rsc_stuck = 1;
         arc_run(); x = &gpu_boot_inventory.power;
