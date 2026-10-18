@@ -7,4 +7,7 @@ Built on GitHub's macOS arm64 runners by `.github/workflows/xnu.yml`, using
 - `patches/*.patch` are copied into the build script's patch dir and applied to the xnu tree with `git apply`.
 - Output: `kernel.<config>.vmapple` (later: our own SWEET machine config) as a workflow artifact.
 
-Fetch the latest build: `gh run download -R dipa-studio/ios-sweet -n xnu-kernel -D xnu/out`
+Fetch a playground build: `gh run download RUN_ID -R dipa-studio/ios-extra -n xnu-kernel -D xnu/out`
+
+The build job skips while this repository is private. See `../README.md` for
+the playground workflow and `../docs/ARCHITECTURE.md` for the imported baseline.

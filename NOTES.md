@@ -35,7 +35,18 @@
   Its build job runs only when repository visibility is public. Private
   pushes may produce a skipped workflow; no macOS build should run.
 - No kernel CI build has been requested in this session.
+- Verified initial push workflow run **39150033548**, head `8b1e4f2`:
+  completed with conclusion **skipped**. No macOS build ran while private.
+- Verified the imported baseline Git tree exactly matches upstream `347e190`
+  (both tree IDs: `032c01bf3fe13ad075a2692611f73b3a200b402d`).
 - Keep driver changes focused. Use patch numbers from 0080 here; reconcile
   upstream numbering when porting. Do not automatically merge back upstream.
-- Next: finish source-level architecture review, select the first driver
-  target with the user, then develop and validate it in this checkout.
+- Source-level architecture review recorded in `docs/ARCHITECTURE.md`: boot,
+  platform/CPU, framebuffer/IOSurface, touch/HID, RPMh/battery, UFS, USB,
+  compatibility services and build tooling. The original checkout remains
+  at `347e190` with a clean working tree as of setup verification.
+- Tooling follow-up: `tools/xnu-cc.py` hardcodes the upstream runner path;
+  adapt it before replaying logs from this repository. Stage separate local
+  build artifacts before kernel edits. CI itself does not use that helper.
+- Next: select the first driver target with the user, then develop and
+  validate it in this checkout. No publication or upstream integration yet.
