@@ -1,6 +1,22 @@
 # ios-extra — active handoff
 
-## Active implementation — 0086 GMU firmware to TCM (not yet built/booted)
+## Latest phone result — 0086 GMU firmware in TCM, 2026-10-18 20:45 UTC
+
+- `shim/out/shim-boot-0086-gmufw.img` (SHA256 `a5804983…0db467`, CI 39164168730,
+  commit = HEAD at build, sweetgpu=6), fastboot success 0.564s. CI-generated
+  firmware header is byte-identical to the local one. Logs outside Git:
+  logs/phone-0086-{fastboot.txt,gmufw.pcap,gmufw.txt}.
+- **The 32 KiB GMU firmware (a630_gmu.bin) was written to GMU ITCM+DTCM and read back
+  with 0 mismatches of 8192 words**; CM3_SYSRESET was 1 before, CM3 never released,
+  clocks/CX/votes rolled back (stage 8). Kernel FNV-1a 0x51c28be8 matches the host
+  file. First time GMU memory was written; it also shows the GMU TCM is real
+  memory at GMU+0x3000..0xB000.
+- Home screen for this boot not yet confirmed by the user.
+- **Next (mainline order):** GENERAL_7 TCM retention, RSCC/PDC programming
+  (a6xx_rpmh_start), then GMU-visible HFI/log memory (SMMU stream 4/5) before
+  releasing CM3 reset.
+
+## Active implementation — 0086 GMU firmware to TCM (built, phone-tested)
 
 - Firmware: linux-firmware `a630_gmu.bin` (32 KiB legacy image; mainline uses it
   for A618). Staged by `xnu/patches/0086-stage-gpu-firmware.sh` (pinned commit +
