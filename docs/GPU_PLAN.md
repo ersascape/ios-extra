@@ -69,6 +69,9 @@ Mesa-backed GLES integration and a Metal driver integration from that evidence.
 Full Metal support also needs a viable shader-input/compiler path: IR3 alone
 does not provide an Apple shader-library/AIR frontend. Registering an AGX-like
 IOKit service cannot translate Apple GPU commands or shader machine code.
+The [external driver audit](GPU_EXTERNAL_DRIVERS.md) now identifies
+metal2vulkan as an existing AIR/metallib frontend candidate and a concrete
+NVIDIA Metal-plugin reference; actual iOS library coverage remains untested.
 
 ## Milestones and acceptance criteria
 
@@ -107,7 +110,8 @@ above 4 GiB. XNU's 16 KiB CPU page size does not establish the SMMU page-table
 granule. Add mapping and fault diagnostics before arbitrary rendering commands.
 
 The dependency map and renderer-entry-point trace are now documented, and
-the first opt-in probe has passed one phone boot. Next, obtain the complete
-0081 report and inspect ARC resource tables before implementing a held
-CX/GMU power state. Progress is measured by completed hardware and API tests;
+the opt-in probe has reached the home screen and 0081 captured complete
+cached reports. Host AIR-to-SPIR-V smoke tests also passed using the external
+compiler candidate. Next, inspect ARC resource tables before implementing
+a held CX/GMU power state. Progress is measured by completed hardware and API tests;
 no completion date is inferred from the earlier homescreen milestone.

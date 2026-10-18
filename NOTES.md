@@ -1,10 +1,11 @@
 # ios-extra — active handoff
 
-## Active work — GPU inventory replay 0081
+## Active work — complete inventory and Metal compiler reference
 
-- User said to continue after the successful 0080 home-screen test. Preparing
-  patch **0081-sweet-gpu-inventory-replay.patch** to recover the missing first
-  part of the boot inventory. The phone remains on the running 0080 image.
+- Patch **0081-sweet-gpu-inventory-replay.patch** is built and phone-tested.
+  The user confirmed its first boot reached the home screen. A second boot
+  captured all three complete cached GPU inventory reports. The phone is
+  left running 0081; no images flashed and no GPU power writes performed.
 - Caches the one initial, guarded read-only snapshot and prints it again
   from the existing USB log thread after ~5/15/30 seconds configured-loop
   time. Each report has numbered BEGIN/END markers; replays are explicitly
@@ -31,8 +32,7 @@
 - 30-second QEMU early-boot check passed: `no_panic_observed`, 0 unknown
   glyphs. Same QEMU ADT, HFS ramdisk and single-CPU arguments as 0080;
   evidence `qemu-0081/boot-local/`. Does not exercise phone USB/GPU/replay.
-- Asked the user to signal fastboot availability for the next temporary boot.
-  No reboot or hardware experiment performed for 0081 yet.
+- Phone results and exact boot/log evidence are recorded below.
 - Power/firmware audit added in `docs/GPU_POWER_SEQUENCE.md`, pinned to
   Xiaomi `758bb7ef`: the A618 entry requests **a618_gmu.bin**, unlike the
   mainline SM7150 catalog's a630_gmu.bin. Exact phone firmware unverified.
@@ -42,8 +42,67 @@
   ARC gfx.lvl/cx.lvl/mx.lvl need distinct metadata/table lookup and voting.
   Next independent implementation can expose read-only ARC metadata and
   bounded level tables before designing CX/GMU power writes.
+- User suggested Asahi and the open-source NVIDIA Metal driver. Inspected
+  NullMoth commit **637282334617d27bccf8aa2448497c0f19465dc8** and upstream
+  metal2vulkan **720ef1ce9ae2a2068999a8675717418b9416283e** in separate external
+  reference clones. Audit: `docs/GPU_EXTERNAL_DRIVERS.md`. NVIDIA's plugin
+  uses the same MetalPluginName/ClassName and initWithAcceleratorPort path
+  as our iOS RE. Its macOS MTLIOAccel contracts still need an iOS adaptation.
+  Root license is PolyForm Noncommercial; translator licensing is distinct.
+- Built upstream metal2vulkan 0.2 CLI (Rust 1.98.0, release, warnings-as-errors)
+  in 3m36s. Ran AIR-bitcode compute copy and vertex/fragment translation:
+  all **3 SPIR-V modules PASS** CLI verification and spirv-val Vulkan 1.2.
+  Synthetic upstream-owned fixtures, vk12-floor reference profile, no phone
+  shader execution. Workers bounded to 20s and 500 MiB address space; observed
+  0.017s/0.010s, cumulative child RSS high-water 40,724 KiB.
+  Rust toolchain isolated at `/home/dipa/.cache/ios-extra-rust/` (external
+  drive lacks required symlinks); no shell PATH files changed. Targets,
+  smoke artifacts and logs external under `metal2vulkan-target/`,
+  `metal2vulkan-smoke/`, `logs/metal2vulkan-build.txt` and saved Cargo.lock.
+  This identifies an existing AIR/metallib frontend; real iOS library
+  coverage, an Objective-C plugin ABI and Adreno execution remain untested.
 
-## Latest phone result — 2026-10-18
+## Latest phone result — complete 0081 inventory, 2026-10-18
+
+- Both boots use `shim/out/shim-boot-0081-probe.img`, SHA256
+  `ad262ff3670fd79b537108b7a2e539d36d49730abb067cd90e514d223cbcc297`.
+  Exactly one fastboot device checked each time; temporary boot only.
+- First boot **18:56:07 UTC**, fastboot success in 0.569s; user confirmed
+  home screen. Host interface watcher hit usb0 -> enp... rename during
+  nmcli and stopped; manual network setup restored ping but missed all
+  report windows. 164 packets, 43,128 decoded bytes, 0 capture drops.
+  Captured framebuffer swaps, no kernel panic; fitcored/PosterBoard crashes
+  present, cause unestablished.
+- Added **tools/phone-ecm-host.py** to retry discovery/configuration by ECM
+  MAC across rename failures. Manually checked on the live interface and
+  successfully exercised automatically during the second boot.
+- Second user-authorized boot **19:03:45 UTC**, fastboot success in 0.563s.
+  USB ECM host setup succeeded automatically; ping 3/3, no loss, avg 0.780ms.
+  Reports **1, 2, 3** have complete matching BEGIN/END markers, 4 GCC values,
+  2 GDSCR values and 9 GPUCC clock values each; all cached tables identical.
+  This is one original boot measurement replayed, not three samples.
+- **CX/GX GDSCR both 0x00222001**: PWR_ON clear, SW_COLLAPSE set. GCC cfg-ahb
+  0x00000001; memnoc 0x80000220; snoc-dvm 0x80000001; ddrss-axi 0x00000000.
+  All 9 GPUCC branches have halt/off bit31 set. DDRSS software enable is
+  clear too; no claim of an owned clock vote from its clear halt bit alone.
+  Full raw table: `docs/GPU_REPORT_REPLAY.md`.
+- Retry capture: **537 packets, 180,786 decoded bytes, 0 kernel capture
+  drops**. SpringBoard/backboardd exec and 16 framebuffer swaps observed;
+  no kernel panic marker or crash of those two processes in the capture.
+  driverkitd/PosterBoard process crashes observed, cause unestablished.
+  The separate explicit user GUI confirmation applies to the first 0081
+  boot; second-boot UI evidence here is from the captured stream.
+- Existing UDP logger preserved. Stopped only our own tcpdump after reports
+  and UI activity; no capture processes left from these two tests.
+  Logs outside Git in `ios-extra-work/logs/`: `phone-0081-fastboot.txt`,
+  `phone-0081-probe.pcap/.txt`, `phone-0081-retry-fastboot.txt`,
+  `phone-0081-retry-probe.pcap/.txt`, `phone-0081-retry-inventory.json`,
+  `phone-0081-retry-decode.txt`.
+- **Next hardware work:** expose validated read-only ARC command DB metadata
+  and level tables for gfx.lvl/cx.lvl/mx.lvl, then design a bounded CX/GMU
+  power hold using the source audit and these observed initial states.
+
+## Previous phone result — probe 0080, 2026-10-18
 
 - **Probe 0080 temporary boot PASSED; user confirmed the home screen.**
   Boot started at **18:27:49 UTC**, using
@@ -72,11 +131,12 @@
   `phone-0080-fastboot.txt`, `phone-0080-probe.pcap`,
   `phone-0080-probe.txt` (200,037 bytes). Decoder in this checkout's ignored
   `research/decode-probe-pcap.py`. Other agents' checkout was not edited.
-- **Next GPU step:** obtain the missing complete power/clock inventory
+- **Follow-up at this point:** obtain the missing complete power/clock inventory
   (persistent console extraction or a delayed/repeated read-only report)
   before implementing controlled CX/GMU/GX initialization, firmware loading,
   SMMU mappings and the first command-processor memory write. The phone is
-  left running this probe kernel at the home screen.
+  left running this probe kernel at the home screen then. The missing
+  inventory was subsequently recovered by 0081 as recorded above.
 
 ## Purpose and workspace
 

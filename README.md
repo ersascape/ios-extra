@@ -31,6 +31,7 @@ The workflow retains a guard that skips macOS builds if the repository is made p
 - [Inventory replay 0081](docs/GPU_REPORT_REPLAY.md) preserves the boot measurements and reprints them after USB configuration to recover missing early log lines.
 - [Power and firmware audit](docs/GPU_POWER_SEQUENCE.md) maps the A618 startup dependencies and the remaining ARC, GMU and SMMU contracts.
 - [Metal loading research](docs/GPU_API_RE.md) records the traced service-to-device-plugin interface in this iOS image.
+- [Asahi, NVIDIA and metal2vulkan audit](docs/GPU_EXTERNAL_DRIVERS.md) identifies reusable API/compiler pieces and the remaining iOS/Adreno integration work.
 - Preserve each experiment as a focused commit or branch. New kernel patches start at `0080`; check for upstream numbering changes before porting back.
 - Record build IDs, tested boot images, logs and observed results. Keep source review, a successful build and a successful phone test distinct.
 - Port selected changes upstream only after they work here and the user asks to integrate them.

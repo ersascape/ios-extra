@@ -75,6 +75,15 @@ Still to trace or implement:
   pipeline caching. A plugin entry point is not an Adreno compiler frontend.
 - CoreAnimation renderer selection and its required Metal feature set.
 
+## External implementation reference
+
+The user's NVIDIA/Asahi suggestion led to a concrete third-party Metal
+plugin using these same registry properties and initializer, plus an
+existing AIR/metallib-to-SPIR-V frontend. See the pinned source audit in
+[GPU_EXTERNAL_DRIVERS.md](GPU_EXTERNAL_DRIVERS.md). The current
+metal2vulkan runtime offers a Rust API on Vulkan; an iOS Objective-C plugin,
+device initialization and IOSurface contracts still need their own proof.
+
 The actual image also contains `AppleMetalGLRenderer` with a dependency on
 Metal. An OpenGLES backend should therefore be evaluated from the observed
 loading path; the presence of GLES APIs alone does not establish an independent

@@ -99,8 +99,9 @@ GPU commands. XNU's 16 KiB CPU pages do not determine SMMU granule support.
 
 ## Next implementation boundary
 
-First recover a complete report from 0081, including all GCC values and
-both raw GDSCR values. Then extend command DB inspection to expose the
+The complete 0081 report is now [captured](GPU_REPORT_REPLAY.md): CX and GX
+GDSCR both read `0x00222001` (PWR_ON clear, SW_COLLAPSE set), with all nine
+inventoried GPUCC branches off. Next extend command DB inspection to expose the
 ARC resource metadata and level tables without voting. Use those observed
 tables and the source audit to design a separate opt-in, bounded CX/GMU
 power experiment. Firmware loading and command submission follow their

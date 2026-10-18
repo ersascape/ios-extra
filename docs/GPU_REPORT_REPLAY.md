@@ -81,8 +81,64 @@ copied HFS ramdisk and single-CPU arguments as 0080. Evidence is under
 directory for Unix socket support. This does not exercise Qualcomm USB,
 the delayed replay hook or GPU hardware, and is not a completed iOS boot.
 
-The live phone remains on the validated 0080 kernel while awaiting device
-availability. 0081 requires a new temporary boot to exercise the replay
-hook; it makes no root-image changes. The intended test is to capture one
-full report with matching BEGIN/END markers and preserve the GCC plus both
-GDSCR raw values.
+## Phone measurements: 2026-10-18
+
+Both temporary boots used the exact probe image above; no image was flashed.
+
+The first boot started at 18:56:07 UTC and fastboot returned success in
+0.569s. The user confirmed the home screen. USB ping returned 3/3 packets.
+Our host setup encountered a `usb0` to `enp...` rename while running nmcli;
+after manual configuration, the captured stream contained no GPU report.
+There were 164 captured packets and no tcpdump kernel drops. The capture
+contained framebuffer swaps and no kernel panic marker; it also contained
+fitcored and PosterBoard process crashes. Their cause is unestablished.
+
+Added `tools/phone-ecm-host.py` to retry interface discovery and configuration
+by the fixed phone ECM MAC after rename failures. It was checked against the
+live interface, then used for a second user-authorized boot.
+
+The second boot started at **19:03:45 UTC**; fastboot completed in **0.563s**.
+The helper configured `enp0s20f0u3u1` automatically. Ping returned 3/3 packets,
+0% loss, average 0.780ms. Reports **1, 2 and 3** were captured with matching
+BEGIN/END markers. Every report contained four GCC values, both GDSCR values
+and nine GPUCC clock values; all three tables match exactly. They are
+**replays of one boot measurement**, not three independent samples.
+
+| Boot register | Raw value |
+| --- | --- |
+| GCC config AHB | `0x00000001` |
+| GCC MEMNOC | `0x80000220` |
+| GCC SNOC DVM | `0x80000001` |
+| GCC DDRSS AXI | `0x00000000` |
+| GPUCC CX GDSCR | `0x00222001` |
+| GPUCC GX GDSCR | `0x00222001` |
+| GPUCC AHB | `0x80000001` |
+| GPUCC CX APB | `0x80000000` |
+| GPUCC CX GMU | `0x80004220` |
+| GPUCC CXO | `0x80000001` |
+| GPUCC CX GFX3D | `0x80000000` |
+| GPUCC CX slave | `0x80000000` |
+| GPUCC GX GFX3D | `0x80004220` |
+| GPUCC GX CXO | `0x80000001` |
+| GPUCC GX GMU | `0x80000000` |
+
+Both GDSCRs have `PWR_ON` clear and `SW_COLLAPSE` set. All nine GPUCC
+branches report bit 31 set (off). The DDRSS value has halt bit 31 clear but
+software enable bit 0 clear too; this alone does not establish a held host
+clock vote. GPU/GMU/SMMU remained unmapped, and the probe performed no
+hardware writes. The complete inventory closes 0081's measurement target;
+it does not prove GPU execution or future core-register accessibility.
+
+The retry capture contains 537 packets and 180,786 decoded bytes, with
+zero tcpdump kernel drops. It shows SpringBoard/backboardd startup and
+16 framebuffer swaps, no kernel panic marker or crash of those processes.
+driverkitd and PosterBoard crashes are present, with unestablished cause.
+The explicit user home-screen confirmation applies to the first 0081 boot;
+the second boot's UI activity here is observed in the log. Only our own
+capture was stopped; the phone remains running and the existing UDP logger
+was preserved.
+
+Evidence remains outside Git under `ios-extra-work/logs/`:
+`phone-0081-fastboot.txt`, `phone-0081-probe.pcap/.txt`,
+`phone-0081-retry-fastboot.txt`, `phone-0081-retry-probe.pcap/.txt` and
+`phone-0081-retry-inventory.json`. Existing UDP receivers were preserved.
