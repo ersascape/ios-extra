@@ -4,6 +4,7 @@ Only the ARM memory-barrier instruction is replaced for host execution.
 The real source is also cross-compiled separately against XNU headers.
 """
 from pathlib import Path
+import os
 import shutil
 import subprocess
 import tempfile
@@ -24,12 +25,16 @@ class GPUProbeTests(unittest.TestCase):
             source = (work / 'bsd/dev/sweet_gpu.c').read_text()
             barrier = '__asm__ volatile("dmb oshld" ::: "memory");'
             self.assertEqual(source.count(barrier), 1)
-            (work / 'sweet_gpu.c').write_text(source.replace(
-                barrier, '__asm__ volatile("" ::: "memory");'))
+            for name in ('dmb oshld', 'dmb oshst', 'dsb osh'):
+                text = '__asm__ volatile("%s" ::: "memory");' % name
+                self.assertEqual(source.count(text), 1)
+                source = source.replace(text, '__asm__ volatile("" ::: "memory");')
+            (work / 'sweet_gpu.c').write_text(source)
             headers = {
                 'sys/param.h': '#include <stdint.h>\ntypedef uintptr_t vm_offset_t;\n'
                                'typedef uintptr_t vm_size_t;\n',
                 'sys/systm.h': '',
+                'kern/clock.h': 'void delay(int);\n',
                 'pexpert/pexpert.h': 'int PE_parse_boot_argn(const char *, void *, int);\n',
             }
             for name, text in headers.items():
@@ -37,12 +42,14 @@ class GPUProbeTests(unittest.TestCase):
                 path.parent.mkdir(parents=True, exist_ok=True)
                 path.write_text(text)
             (work / 'test.c').write_text(HARNESS)
-            subprocess.run([shutil.which('cc') or 'cc', '-std=c11', '-Wall',
-                            '-Wextra', '-Werror', '-I', str(work),
-                            str(work / 'test.c'), '-o', str(work / 'test')], check=True)
+            build = subprocess.run([shutil.which('cc') or 'cc', '-std=c11', '-Wall',
+                                    '-Wextra', '-Werror', *os.environ.get('IOS_EXTRA_CFLAGS', '').split(), '-I', str(work),
+                                    str(work / 'test.c'), '-o', str(work / 'test')],
+                                   capture_output=True, text=True)
+            self.assertEqual(build.returncode, 0, build.stderr)
             result = subprocess.run([str(work / 'test')], capture_output=True,
                                     text=True, check=True)
-            self.assertIn('PASS: 14 clock/cache cases, 30 ARC cases + 512 mutations', result.stdout)
+            self.assertIn('PASS: 14 clock/cache cases, 30 ARC cases + 512 mutations, 12 CX experiment cases', result.stdout)
 
 
 HARNESS = r'''
@@ -61,8 +68,30 @@ static int probe_printf(const char *, ...);
 static uint32_t gcc[0x90000 / 4], cc[0x9000 / 4];
 static int present, mode, map_calls, fail_gcc, fail_cc;
 static uint32_t locator[2], database[1024];
+/* Simulated GPUCC CX GDSC and RPMh ARC client for the sweetgpu=3 experiment. */
+static int gdsc_hw_ok, delay_calls, vote_fail_on;
+static unsigned vote_count, vote_seq[8];
+static char vote_name[8][8];
 static int fail_locator, fail_db;
 static char output[65536];
+
+void delay(int us)
+{
+    (void)us; delay_calls++;
+    uint32_t *g = &cc[GPU_CX_GDSCR / 4];
+    if (!gdsc_hw_ok) return;
+    if (*g & 1u) *g &= ~GPU_DOMAIN_ON; else *g |= GPU_DOMAIN_ON;
+}
+
+int sweet_rpmh_arc_set(const char *res, unsigned corner, unsigned *level)
+{
+    assert(vote_count < 8);
+    strncpy(vote_name[vote_count], res, 7);
+    vote_seq[vote_count++] = corner;
+    if (level) *level = corner ? 2 : 0;
+    if ((int)vote_count == vote_fail_on) return 5;
+    return 0;
+}
 
 static int probe_printf(const char *fmt, ...)
 {
@@ -109,6 +138,8 @@ static void reset(void)
     locator[0] = 0x85fe0000u; locator[1] = sizeof(database);
     memset(&gpu_boot_inventory, 0, sizeof(gpu_boot_inventory));
     gpu_inventory_ready = gpu_replay_count = 0;
+    gdsc_hw_ok = 1; delay_calls = vote_fail_on = 0; vote_count = 0;
+    memset(vote_name, 0, sizeof(vote_name));
     gcc[GPU_CFG_AHB_CBCR / 4] = GPU_BRANCH_ENABLE;
 }
 
@@ -157,7 +188,7 @@ int main(void)
     reset(); present = 0; sweet_gpu_probe();
     assert(map_calls == 0 && output[0] == 0);
     reset(); mode = 0; sweet_gpu_probe(); assert(map_calls == 0);
-    reset(); mode = 3; sweet_gpu_probe(); assert(map_calls == 0);
+    reset(); mode = 4; sweet_gpu_probe(); assert(map_calls == 0);
     reset(); mode = -1; sweet_gpu_probe(); assert(map_calls == 0);
     reset(); fail_gcc = 1; sweet_gpu_probe();
     assert(map_calls == 1 && strstr(output, "GCC mapping failed"));
@@ -263,7 +294,47 @@ int main(void)
         db16(off, (uint16_t)seed);
         arc_run();
     }
-    puts("PASS: 14 clock/cache cases, 30 ARC cases + 512 mutations");
+    /* sweetgpu=3: rolled-back CX experiment. */
+    arc_reset(); mode = 3; cc[GPU_CX_GDSCR / 4] = GPU_CX_IDLE_GDSCR;
+    arc_run(); struct gpu_power_experiment *x = &gpu_boot_inventory.power;
+    assert(x->requested && !x->error && x->enabled && x->disabled);
+    assert(vote_count == 4 && !strcmp(vote_name[0], "mx.lvl") && vote_seq[0] == 64);
+    assert(!strcmp(vote_name[1], "cx.lvl") && vote_seq[1] == 64);
+    assert(!strcmp(vote_name[2], "cx.lvl") && vote_seq[2] == 0);
+    assert(!strcmp(vote_name[3], "mx.lvl") && vote_seq[3] == 0);
+    assert(x->after_enable & GPU_DOMAIN_ON && x->after_hold & GPU_DOMAIN_ON);
+    assert(!(x->after_disable & GPU_DOMAIN_ON) && (cc[GPU_CX_GDSCR / 4] & 1u));
+    assert(cc[GPU_CX_GDSCR / 4] == (GPU_CX_IDLE_GDSCR & ~GPU_DOMAIN_ON));
+    assert(strstr(output, "CX experiment result: complete, rolled back"));
+    output[0] = 0; sweet_gpu_replay(); /* cached, no more votes */
+    assert(vote_count == 4 && strstr(output, "CX experiment enable=1"));
+    /* Unexpected initial GDSCR: no votes, no writes. */
+    arc_reset(); mode = 3; cc[GPU_CX_GDSCR / 4] = 0x80000000u; arc_run();
+    assert(vote_count == 0 && gpu_boot_inventory.power.error);
+    assert(cc[GPU_CX_GDSCR / 4] == 0x80000000u);
+    arc_reset(); mode = 3; cc[GPU_CX_GDSCR / 4] = GPU_CX_IDLE_GDSCR | GPU_GDSC_HW_CONTROL;
+    arc_run(); assert(vote_count == 0 && gpu_boot_inventory.power.error);
+    /* ARC inventory failure: not attempted, even with a valid GDSCR. */
+    arc_reset(); mode = 3; cc[GPU_CX_GDSCR / 4] = GPU_CX_IDLE_GDSCR; db32(4, 0);
+    arc_run(); assert(vote_count == 0 && gpu_boot_inventory.power.error);
+    assert(cc[GPU_CX_GDSCR / 4] == GPU_CX_IDLE_GDSCR);
+    /* MX vote fails: nothing else touched. */
+    arc_reset(); mode = 3; cc[GPU_CX_GDSCR / 4] = GPU_CX_IDLE_GDSCR; vote_fail_on = 1;
+    arc_run(); assert(vote_count == 1 && gpu_boot_inventory.power.error);
+    assert(cc[GPU_CX_GDSCR / 4] == GPU_CX_IDLE_GDSCR);
+    /* CX vote fails: MX is released, GDSCR untouched. */
+    arc_reset(); mode = 3; cc[GPU_CX_GDSCR / 4] = GPU_CX_IDLE_GDSCR; vote_fail_on = 2;
+    arc_run(); assert(vote_count == 3 && !strcmp(vote_name[2], "mx.lvl") && vote_seq[2] == 0);
+    assert(cc[GPU_CX_GDSCR / 4] == GPU_CX_IDLE_GDSCR);
+    /* PWR_ON never asserts: still collapsed again and both votes released. */
+    arc_reset(); mode = 3; cc[GPU_CX_GDSCR / 4] = GPU_CX_IDLE_GDSCR; gdsc_hw_ok = 0;
+    arc_run(); x = &gpu_boot_inventory.power;
+    assert(!x->enabled && x->error && vote_count == 4 && vote_seq[3] == 0);
+    assert(cc[GPU_CX_GDSCR / 4] & 1u);
+    /* Mode 2 never reaches the experiment. */
+    arc_reset(); cc[GPU_CX_GDSCR / 4] = GPU_CX_IDLE_GDSCR; arc_run();
+    assert(!gpu_boot_inventory.power.requested && vote_count == 0 && delay_calls == 0);
+    puts("PASS: 14 clock/cache cases, 30 ARC cases + 512 mutations, 12 CX experiment cases");
     return 0;
 }
 '''

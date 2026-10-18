@@ -1,0 +1,439 @@
+diff --git a/bsd/dev/sweet_gpu.c b/bsd/dev/sweet_gpu.c
+index cf82db5..e198fdc 100644
+--- a/bsd/dev/sweet_gpu.c
++++ b/bsd/dev/sweet_gpu.c
+@@ -10,16 +10,23 @@
+  * sweetgpu=2 also snapshots firmware command DB ARC metadata/level tables.
+  * It maps only the known locator and its validated reserved-RAM database;
+  * no RPMh RSC/TCS access or rail votes are needed for that inspection.
++ * sweetgpu=3 adds one bounded, fully rolled back CX power experiment: vote
++ * mx.lvl and cx.lvl to LOW_SVS through the apps-DRV RPMh client, clear the CX
++ * GDSC SW_COLLAPSE bit, wait for PWR_ON, then collapse it again and release
++ * both votes. No clocks, GMU, GX, SMMU or firmware are touched. The outcome
++ * is cached with the boot report so USB replays show it.
+  * Register provenance and limitations: ios-extra/docs/GPU_BRINGUP.md.
+  */
+ #if defined(ARM64_BOARD_CONFIG_SWEET)
+ #include <sys/param.h>
+ #include <sys/systm.h>
+ #include <pexpert/pexpert.h>
++#include <kern/clock.h>
+ 
+ extern vm_offset_t ml_io_map(vm_offset_t, vm_size_t);
+ void sweet_gpu_probe(void);
+ void sweet_gpu_replay(void);
++int sweet_rpmh_arc_set(const char *res, unsigned corner, unsigned *level);
+ 
+ #define GPU_GCC_PA              0x00100000
+ #define GPU_GCC_SIZE            0x00090000
+@@ -31,6 +38,12 @@ void sweet_gpu_replay(void);
+ #define GPU_BRANCH_ENABLE       (1u << 0)
+ #define GPU_BRANCH_OFF          (1u << 31)
+ #define GPU_DOMAIN_ON           (1u << 31)
++#define GPU_GDSC_SW_COLLAPSE    (1u << 0)
++#define GPU_GDSC_HW_CONTROL     (1u << 1)
++#define GPU_CX_IDLE_GDSCR       0x00222001u /* value observed after ABL */
++#define GPU_LOW_SVS             64u
++#define GPU_GDSC_POLL_US        1000u
++#define GPU_GDSC_HOLD_US        1000u
+ 
+ #define GPU_DB_LOCATOR_PA       0x0c3f000cu
+ #define GPU_DB_HEADER           144u
+@@ -59,6 +72,17 @@ struct gpu_arc_inventory {
+ 	struct gpu_arc_resource resource[GPU_ARC_RESOURCES];
+ };
+ 
++/* Cached outcome of the sweetgpu=3 CX experiment (0 = step not reached). */
++struct gpu_power_experiment {
++	unsigned int requested;
++	const char *error;
++	int mx_vote, cx_vote, mx_release, cx_release;
++	unsigned int mx_level, cx_level;
++	uint32_t before, after_enable, after_hold, after_disable;
++	unsigned int enable_polls, disable_polls;
++	int enabled, disabled;
++};
++
+ struct sweet_gpu_clock {
+ 	const char *name;
+ 	uint32_t off;
+@@ -100,6 +124,7 @@ struct gpu_inventory {
+ 	uint32_t cx, gx;
+ 	enum gpu_inventory_state state;
+ 	struct gpu_arc_inventory arc;
++	struct gpu_power_experiment power;
+ };
+ 
+ /* Published once by the UFS startup path, read by the USB log thread. */
+@@ -135,6 +160,96 @@ gpu_db_read16(vm_offset_t db, uint32_t off)
+ 	return value;
+ }
+ 
++static void
++gpu_write32(vm_offset_t base, uint32_t off, uint32_t value)
++{
++	__asm__ volatile("dmb oshst" ::: "memory");
++	*(volatile uint32_t *)(base + off) = value;
++	__asm__ volatile("dsb osh" ::: "memory");
++}
++
++/* Polls GDSCR PWR_ON until it equals want; returns polls used or 0 on timeout. */
++static unsigned int
++gpu_gdsc_wait(vm_offset_t cc, int want, uint32_t *value)
++{
++	for (unsigned int i = 1; i <= GPU_GDSC_POLL_US; i++) {
++		*value = gpu_read32(cc, GPU_CX_GDSCR);
++		if (*value != ~0u && !!(*value & GPU_DOMAIN_ON) == want) {
++			return i;
++		}
++		delay(1);
++	}
++	*value = gpu_read32(cc, GPU_CX_GDSCR);
++	return 0;
++}
++
++/*
++ * Mirrors the downstream gdsc_enable/disable order for the CX domain, which
++ * has no clocks, resets or clamps of its own in the DT: parent rail first
++ * (MX, then CX at LOW_SVS), then SW_COLLAPSE, then PWR_ON. Every exit path
++ * collapses the domain again and releases the votes in reverse order.
++ */
++static void
++gpu_power_experiment(vm_offset_t cc, struct gpu_power_experiment *x)
++{
++	uint32_t v;
++
++	x->requested = 1;
++	x->before = gpu_read32(cc, GPU_CX_GDSCR);
++	if (x->before != GPU_CX_IDLE_GDSCR) {
++		x->error = "CX GDSCR is not the expected collapsed state; nothing touched";
++		return;
++	}
++	x->mx_vote = sweet_rpmh_arc_set("mx.lvl", GPU_LOW_SVS, &x->mx_level);
++	if (x->mx_vote) {
++		x->error = "mx.lvl vote failed; nothing else touched";
++		return;
++	}
++	x->cx_vote = sweet_rpmh_arc_set("cx.lvl", GPU_LOW_SVS, &x->cx_level);
++	if (x->cx_vote) {
++		x->error = "cx.lvl vote failed";
++		goto release_mx;
++	}
++	v = gpu_read32(cc, GPU_CX_GDSCR);
++	gpu_write32(cc, GPU_CX_GDSCR, v & ~GPU_GDSC_SW_COLLAPSE);
++	delay(1); /* 8 XO cycles before polling, as downstream */
++	x->enable_polls = gpu_gdsc_wait(cc, 1, &x->after_enable);
++	x->enabled = x->enable_polls != 0;
++	if (x->enabled) {
++		delay(GPU_GDSC_HOLD_US);
++		x->after_hold = gpu_read32(cc, GPU_CX_GDSCR);
++	} else {
++		x->error = "CX PWR_ON did not assert";
++	}
++	v = gpu_read32(cc, GPU_CX_GDSCR);
++	gpu_write32(cc, GPU_CX_GDSCR, v | GPU_GDSC_SW_COLLAPSE);
++	delay(1);
++	x->disable_polls = gpu_gdsc_wait(cc, 0, &x->after_disable);
++	x->disabled = x->disable_polls != 0;
++	if (!x->disabled && !x->error) {
++		x->error = "CX PWR_ON did not clear after collapse";
++	}
++	x->cx_release = sweet_rpmh_arc_set("cx.lvl", 0, NULL);
++release_mx:
++	x->mx_release = sweet_rpmh_arc_set("mx.lvl", 0, NULL);
++}
++
++static void
++gpu_power_log(const struct gpu_power_experiment *x)
++{
++	if (!x->requested) {
++		return;
++	}
++	printf("SWEET GPU: CX experiment before=0x%08x\n", x->before);
++	printf("SWEET GPU: CX experiment votes mx=%d(hlvl %u) cx=%d(hlvl %u) release cx=%d mx=%d\n",
++	    x->mx_vote, x->mx_level, x->cx_vote, x->cx_level, x->cx_release, x->mx_release);
++	printf("SWEET GPU: CX experiment enable=%d polls=%u GDSCR=0x%08x hold=0x%08x\n",
++	    x->enabled, x->enable_polls, x->after_enable, x->after_hold);
++	printf("SWEET GPU: CX experiment collapse=%d polls=%u GDSCR=0x%08x\n",
++	    x->disabled, x->disable_polls, x->after_disable);
++	printf("SWEET GPU: CX experiment result: %s\n", x->error ? x->error : "complete, rolled back");
++}
++
+ static void
+ gpu_arc_collect(struct gpu_arc_inventory *arc)
+ {
+@@ -309,9 +424,11 @@ gpu_inventory_log(const struct gpu_inventory *inventory, unsigned int replay)
+ 	for (unsigned int i = 0; i < GPU_CC_CLOCK_COUNT; i++) {
+ 		gpu_clock_log("GPUCC", &gpu_cc_clocks[i], inventory->cc[i]);
+ 	}
+-	printf("SWEET GPU: GPU/GMU/SMMU skipped (no power hold); no hardware writes\n");
++	printf("SWEET GPU: GPU/GMU/SMMU skipped (no power hold)%s\n",
++	    inventory->power.requested ? "" : "; no hardware writes");
+ done:
+ 	gpu_arc_log(&inventory->arc);
++	gpu_power_log(&inventory->power);
+ 	printf("SWEET GPU: END boot inventory report %u\n", replay);
+ }
+ 
+@@ -326,11 +443,11 @@ sweet_gpu_probe(void)
+ 	if (!PE_parse_boot_argn("sweetgpu", &mode, sizeof(mode)) || mode == 0) {
+ 		return;
+ 	}
+-	if (mode != 1 && mode != 2) {
+-		printf("SWEET GPU: unsupported sweetgpu=%d (0=off, 1=clocks, 2=clocks+ARC)\n", mode);
++	if (mode < 1 || mode > 3) {
++		printf("SWEET GPU: unsupported sweetgpu=%d (0=off, 1=clocks, 2=+ARC, 3=+CX experiment)\n", mode);
+ 		return;
+ 	}
+-	if (mode == 2) {
++	if (mode >= 2) {
+ 		gpu_arc_collect(&inventory.arc);
+ 	}
+ 	gcc = ml_io_map(GPU_GCC_PA, GPU_GCC_SIZE);
+@@ -356,6 +473,15 @@ sweet_gpu_probe(void)
+ 		inventory.cc[i] = gpu_read32(cc, gpu_cc_clocks[i].off);
+ 	}
+ 	inventory.state = GPU_COMPLETE;
++	/* Only after the read-only inventory above, and only if the ARC tables parsed. */
++	if (mode == 3) {
++		if (inventory.arc.error) {
++			inventory.power.requested = 1;
++			inventory.power.error = "ARC inventory failed; experiment not attempted";
++		} else {
++			gpu_power_experiment(cc, &inventory.power);
++		}
++	}
+ publish:
+ 	gpu_boot_inventory = inventory;
+ 	gpu_inventory_log(&gpu_boot_inventory, 0);
+diff --git a/bsd/dev/sweet_rpmh.c b/bsd/dev/sweet_rpmh.c
+index 4da50d8..dd9efee 100644
+--- a/bsd/dev/sweet_rpmh.c
++++ b/bsd/dev/sweet_rpmh.c
+@@ -12,6 +12,7 @@
+ 
+ extern vm_offset_t ml_io_map(vm_offset_t, vm_size_t);
+ int sweet_rpmh_vreg_enable(const char *res, unsigned mv);
++int sweet_rpmh_arc_set(const char *res, unsigned corner, unsigned *level);
+ 
+ /* Live downstream DT has two positional reg entries, no reg-names. */
+ #define RH_RSC_PA       0x18220000u
+@@ -43,7 +44,9 @@ int sweet_rpmh_vreg_enable(const char *res, unsigned mv);
+ #define RH_DB_HEADER    144u
+ #define RH_DB_ENTRY     24u
+ #define RH_DB_MAX       0x100000u /* policy bound, not a DT size */
++#define RH_ARC          3u
+ #define RH_VRM          4u
++#define RH_ARC_MAX      16u      /* levels kept from an auxiliary table */
+ #define RH_TIMEOUT_US   100000u
+ 
+ static vm_offset_t rh_rsc, rh_tcs, rh_dict, rh_db;
+@@ -88,7 +91,11 @@ static uint16_t
+ rh_db16(uint32_t off)
+ {
+ 	uint32_t v = rh_read(rh_db, off & ~3u);
+-	return (uint16_t)(v >> (8u * (off & 3u)));
++	uint16_t r = (uint16_t)(v >> (8u * (off & 3u)));
++	if ((off & 3u) == 3u) { /* uint16 crosses aligned words */
++		r |= (uint16_t)((rh_read(rh_db, (off & ~3u) + 4u) & 0xffu) << 8);
++	}
++	return r;
+ }
+ 
+ static bool
+@@ -158,8 +165,11 @@ rh_map(void)
+ 	return 0;
+ }
+ 
++/* want is RH_VRM or RH_ARC. For ARC, aux receives the validated auxiliary
++ * table (absolute DB offset) and its byte length; VRM callers pass NULL. */
+ static int
+-rh_lookup(const char *res, uint32_t *address)
++rh_lookup(const char *res, unsigned want, uint32_t *address, uint32_t *aux_off,
++    unsigned *aux_len)
+ {
+ 	uint32_t key[2] = {0, 0};
+ 	for (unsigned i = 0; i < 8 && res[i]; ++i) {
+@@ -186,12 +196,20 @@ rh_lookup(const char *res, uint32_t *address)
+ 				continue;
+ 			}
+ 			uint32_t addr = rh_read(rh_db, e + 16);
+-			if (slave != RH_VRM || (addr >> 16) != RH_VRM || (addr & 15u) ||
+-			    !rh_range(aux + rh_db16(e + 22), rh_db16(e + 20))) {
+-				printf("SWEET RPMH: invalid VRM entry for %s\n", res);
++			unsigned len = rh_db16(e + 20);
++			uint32_t data = aux + rh_db16(e + 22);
++			if (slave != want || (addr >> 16) != want || (addr & 15u) ||
++			    !rh_range(data, len) ||
++			    (want == RH_ARC && (!len || (len & 1u) || len > 2u * RH_ARC_MAX))) {
++				printf("SWEET RPMH: invalid %s entry for %s\n",
++				    want == RH_ARC ? "ARC" : "VRM", res);
+ 				return EINVAL;
+ 			}
+ 			*address = addr;
++			if (aux_off) {
++				*aux_off = data;
++				*aux_len = len;
++			}
+ 			++matches;
+ 			printf("SWEET RPMH: %s addr=%#x slave=%u aux-version=%#x priority=%#x:%#x\n",
+ 			    res, addr, slave, rh_db16(h + 8),
+@@ -218,8 +236,10 @@ rh_free(unsigned t)
+ 	    !(rh_read(rh_tcs, RH_IRQ_STATUS) & (1u << t));
+ }
+ 
++/* Sends n (1..3) commands into one free ACTIVE TCS: cmd[c] = address[c]
++ * with data[c]. conflict is the rail's 16-byte address block. */
+ static int
+-rh_send(uint32_t address, unsigned mv)
++rh_send(uint32_t conflict, unsigned n, const uint32_t *address, const uint32_t *data)
+ {
+ 	int chosen = -1;
+ 	for (unsigned t = 0; t < RH_ACTIVE_N; ++t) {
+@@ -233,8 +253,8 @@ rh_send(uint32_t address, unsigned mv)
+ 		}
+ 		for (unsigned c = 0; c < rh_ncpt; ++c) {
+ 			if ((enabled & (1u << c)) &&
+-			    (rh_read(rh_tcs, b + RH_ADDR + c * RH_CMD_STRIDE) & ~15u) == address) {
+-				printf("SWEET RPMH: conflicting inherited L11C request in TCS%u\n", t);
++			    (rh_read(rh_tcs, b + RH_ADDR + c * RH_CMD_STRIDE) & ~15u) == conflict) {
++				printf("SWEET RPMH: conflicting inherited request at %#x in TCS%u\n", conflict, t);
+ 				return EBUSY;
+ 			}
+ 		}
+@@ -266,19 +286,18 @@ rh_send(uint32_t address, unsigned mv)
+ 	}
+ 	/* From here an uncertain write/timeout quarantines our slot for this boot. */
+ 	rh_poisoned = true;
+-	/* HPM (raw 7) is supported by this PMIC5 LDO; enable comes last. */
+-	const uint32_t offsets[3] = {0, 8, 4};
+-	const uint32_t values[3] = {mv, 7, 1};
+-	printf("SWEET RPMH: TCS%u ACTIVE %u mV mode=7 enable=1 irq-enable=%#x\n", t, mv, irq_en);
+-	for (unsigned c = 0; c < 3; ++c) {
++	const uint32_t mask = (1u << n) - 1u;
++	printf("SWEET RPMH: TCS%u ACTIVE %u command(s) first addr=%#x data=%#x irq-enable=%#x\n",
++	    t, n, address[0], data[0], irq_en);
++	for (unsigned c = 0; c < n; ++c) {
+ 		uint32_t cmd = b + c * RH_CMD_STRIDE;
+ 		if (!rh_sync(cmd + RH_MSGID, RH_WRITE_ACK) ||
+-		    !rh_sync(cmd + RH_ADDR, address + offsets[c]) ||
+-		    !rh_sync(cmd + RH_DATA, values[c])) {
++		    !rh_sync(cmd + RH_ADDR, address[c]) ||
++		    !rh_sync(cmd + RH_DATA, data[c])) {
+ 			return EIO;
+ 		}
+ 	}
+-	if (!rh_sync(b + RH_WAIT, 7) || !rh_sync(b + RH_ENABLE, 7) ||
++	if (!rh_sync(b + RH_WAIT, mask) || !rh_sync(b + RH_ENABLE, mask) ||
+ 	    !rh_sync(b + RH_CONTROL, 0) || !rh_sync(b + RH_CONTROL, RH_AMC_EN)) {
+ 		return EIO;
+ 	}
+@@ -289,7 +308,7 @@ rh_send(uint32_t address, unsigned mv)
+ 		irq = rh_read(rh_tcs, RH_IRQ_STATUS);
+ 		idle = rh_read(rh_tcs, b + RH_STATUS);
+ 		bool complete = true;
+-		for (unsigned c = 0; c < 3; ++c) {
++		for (unsigned c = 0; c < n; ++c) {
+ 			status[c] = rh_read(rh_tcs, b + RH_CMD_STATUS + c * RH_CMD_STRIDE);
+ 			complete &= status[c] != 0xffffffffu &&
+ 			    (status[c] & (RH_ISSUED | RH_COMPLETE)) == (RH_ISSUED | RH_COMPLETE);
+@@ -320,7 +339,7 @@ rh_send(uint32_t address, unsigned mv)
+ 		return EIO;
+ 	}
+ 	rh_poisoned = false;
+-	printf("SWEET RPMH: L11C ACTIVE vote complete (rail voltage requires hardware verification)\n");
++	printf("SWEET RPMH: ACTIVE vote complete (rail state requires hardware verification)\n");
+ 	return 0;
+ }
+ 
+@@ -343,10 +362,13 @@ sweet_rpmh_vreg_enable(const char *res, unsigned mv)
+ 	}
+ 	error = rh_map();
+ 	if (!error) {
+-		error = rh_lookup(res, &address);
++		error = rh_lookup(res, RH_VRM, &address, NULL, NULL);
+ 	}
+ 	if (!error) {
+-		error = rh_send(address, mv);
++		/* HPM (raw 7) is supported by this PMIC5 LDO; enable comes last. */
++		const uint32_t addrs[3] = {address, address + 8, address + 4};
++		const uint32_t values[3] = {mv, 7, 1};
++		error = rh_send(address, 3, addrs, values);
+ 	}
+ out:
+ 	if (error) {
+@@ -355,4 +377,74 @@ out:
+ 	__atomic_store_n(&rh_lock, 0, __ATOMIC_RELEASE);
+ 	return error;
+ }
++/*
++ * Votes an ARC rail's hardware level by table INDEX (cmd-db auxiliary table
++ * holds raw corner values, e.g. 64 = LOW_SVS). corner 0 releases the vote
++ * (index 0, requires table[0] == 0); otherwise the first table entry >= corner
++ * is requested. Table must be non-decreasing up to its zero padding. ACTIVE
++ * set only: RPMh aggregates with other masters, so this cannot lower a rail.
++ */
++int
++sweet_rpmh_arc_set(const char *res, unsigned corner, unsigned *level)
++{
++	if (!res || (strcmp(res, "cx.lvl") && strcmp(res, "mx.lvl")) || corner > 128) {
++		printf("SWEET RPMH: expected cx.lvl/mx.lvl and corner 0..128\n");
++		return EINVAL;
++	}
++	if (__atomic_exchange_n(&rh_lock, 1, __ATOMIC_ACQUIRE)) {
++		return EBUSY;
++	}
++	int error = EIO;
++	uint32_t address = 0, aux = 0, vote = 0;
++	unsigned len = 0, count = 0, index = 0;
++	if (rh_poisoned) {
++		printf("SWEET RPMH: previous uncertain transaction; refusing further access\n");
++		goto out;
++	}
++	error = rh_map();
++	if (!error) {
++		error = rh_lookup(res, RH_ARC, &address, &aux, &len);
++	}
++	if (error) {
++		goto out;
++	}
++	count = len / 2;
++	error = EINVAL;
++	if (rh_db16(aux) != 0) {
++		printf("SWEET RPMH: %s table[0] is not 0\n", res);
++		goto out;
++	}
++	for (unsigned i = 1; i < count; ++i) {
++		uint16_t v = rh_db16(aux + 2 * i), prev = rh_db16(aux + 2 * (i - 1));
++		if (!v) { /* zero padding ends the table */
++			count = i;
++			break;
++		}
++		if (v <= prev) {
++			printf("SWEET RPMH: %s table is not increasing\n", res);
++			goto out;
++		}
++	}
++	if (corner) {
++		for (index = 1; index < count && rh_db16(aux + 2 * index) < corner; ++index) {
++		}
++		if (index >= count) {
++			printf("SWEET RPMH: %s has no level >= %u\n", res, corner);
++			goto out;
++		}
++	}
++	vote = index;
++	printf("SWEET RPMH: %s corner %u -> hlvl index %u (raw %u of %u levels)\n",
++	    res, corner, index, rh_db16(aux + 2 * index), count);
++	error = rh_send(address & ~15u, 1, &address, &vote);
++	if (!error && level) {
++		*level = index;
++	}
++out:
++	if (error) {
++		printf("SWEET RPMH: ARC set failed errno=%d\n", error);
++	}
++	__atomic_store_n(&rh_lock, 0, __ATOMIC_RELEASE);
++	return error;
++}
+ #endif /* ARM64_BOARD_CONFIG_SWEET */

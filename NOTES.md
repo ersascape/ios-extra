@@ -1,5 +1,15 @@
 # ios-extra — active handoff
 
+## Active implementation — 0083 CX power experiment (not yet built/booted)
+
+- `xnu/patches/0083-sweet-gpu-cx-experiment.patch`: new ARC vote path in
+  sweet_rpmh.c and `sweetgpu=3` in sweet_gpu.c (MX/CX LOW_SVS votes, CX GDSC
+  enable, PWR_ON check, full rollback). Details: `docs/GPU_CX_EXPERIMENT.md`.
+- Host tests pass (4 tests, also ASan/UBSan); arm64 objects compile (0/2 failed).
+  Isolated tree baseline for 0083 is local commit 843344a (0082).
+- **Next:** push, CI build, package `shim-boot-0083-cx.img`, ask user before the
+  first hardware-write boot.
+
 ## Latest phone result — 0082 ARC inventory, 2026-10-18 19:23 UTC
 
 - Temporary boot of `shim/out/shim-boot-0082-arc.img` (SHA256
