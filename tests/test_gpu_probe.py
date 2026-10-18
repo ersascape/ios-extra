@@ -24,10 +24,10 @@ class GPUProbeTests(unittest.TestCase):
                                     str(patch)], cwd=work, check=True)
             source = (work / 'bsd/dev/sweet_gpu.c').read_text()
             barrier = '__asm__ volatile("dmb oshld" ::: "memory");'
-            self.assertEqual(source.count(barrier), 1)
+            self.assertEqual(source.count(barrier), 2)
             for name in ('dmb oshld', 'dmb oshst', 'dsb osh'):
                 text = '__asm__ volatile("%s" ::: "memory");' % name
-                self.assertEqual(source.count(text), 1)
+                self.assertEqual(source.count(text), 2)  # 32- and 64-bit accessors
                 source = source.replace(text, '__asm__ volatile("" ::: "memory");')
             (work / 'sweet_gpu.c').write_text(source)
             headers = {
@@ -35,6 +35,17 @@ class GPUProbeTests(unittest.TestCase):
                                'typedef uintptr_t vm_size_t;\n',
                 'sys/systm.h': '',
                 'kern/clock.h': 'void delay(int);\n',
+                'arm/caches_internal.h': '#define TRUE 1\ntypedef unsigned long long addr64_t;\n'
+                                         'void clean_dcache64(addr64_t, unsigned, int);\n',
+                'vm/pmap.h': 'typedef unsigned long long addr64_t;\ntypedef unsigned int ppnum_t;\n'
+                             'typedef void *pmap_t;\nextern pmap_t kernel_pmap;\n'
+                             '#define ptoa_64(x) ((unsigned long long)(x) << 14)\n',
+                'vm/vm_kern.h': 'typedef int kern_return_t;\ntypedef void *vm_map_t;\n'
+                                'extern vm_map_t kernel_map;\n#define KERN_SUCCESS 0\n'
+                                '#define PAGE_MASK 0x3fffUL\n#define KMA_DATA 1\n#define KMA_ZERO 2\n'
+                                '#define KMA_PERMANENT 4\n#define VM_KERN_MEMORY_IOKIT 0\n'
+                                'kern_return_t kmem_alloc_contig(vm_map_t, vm_offset_t *, vm_size_t, '
+                                'vm_offset_t, unsigned, unsigned, unsigned, int);\n',
                 'pexpert/pexpert.h': 'int PE_parse_boot_argn(const char *, void *, int);\n',
             }
             for name, text in headers.items():
@@ -54,7 +65,7 @@ class GPUProbeTests(unittest.TestCase):
             self.assertEqual(build.returncode, 0, build.stderr)
             result = subprocess.run([str(work / 'test')], capture_output=True, text=True)
             self.assertEqual(result.returncode, 0, result.stderr)
-            self.assertIn('PASS: 14 clock/cache cases, 30 ARC cases + 512 mutations, 38 CX experiment cases', result.stdout)
+            self.assertIn('PASS: 14 clock/cache cases, 30 ARC cases + 512 mutations, 47 CX experiment cases', result.stdout)
 
 
 HARNESS = r'''
@@ -75,6 +86,12 @@ static int present, mode, map_calls, fail_gcc, fail_cc;
 static uint32_t locator[2], database[1024];
 static uint32_t gmu_mem[GPU_GMU_SIZE / 4];
 static int gmu_maps, fail_gmu_map;
+/* Fake DMA page, SMMU ATOS model and cache-clean counters (sweetgpu=8). */
+static unsigned char dma_block[0x4000] __attribute__((aligned(16384)));
+static unsigned long long fake_pa_base;
+static int fail_alloc, alloc_calls, clean_calls, ats_stuck, tlb_stuck;
+static uint64_t last_ats;
+pmap_t kernel_pmap; vm_map_t kernel_map;
 static uint32_t smmu_mem[GPU_SMMU_SIZE / 4];
 static int smmu_maps, fail_smmu_map;
 /* Simulated GPUCC CX GDSC and RPMh ARC client for the sweetgpu=3 experiment. */
@@ -85,8 +102,55 @@ static char vote_name[8][8];
 static int fail_locator, fail_db;
 static char output[65536];
 
+static uint64_t smmu_rd64(unsigned off) { return smmu_mem[off / 4] | (uint64_t)smmu_mem[off / 4 + 1] << 32; }
+static uint64_t dma_rd64(unsigned long long pa) {
+    return *(uint64_t *)(dma_block + (pa - fake_pa_base));
+}
+/* Minimal AArch64 4 KiB-granule walker standing in for the SMMU's ATOS unit. */
+static void smmu_sim(void)
+{
+    const unsigned cb = GPU_SMMU_CB0 + 3 * 0x1000;
+    uint64_t cur = smmu_rd64(cb + GPU_SMMU_CB_ATS1PR);
+    if (cur == last_ats) return;
+    last_ats = cur;
+    smmu_mem[(cb + GPU_SMMU_CB_ATSR) / 4] = ats_stuck ? 1 : 0;
+    uint64_t par = 1; /* fault */
+    uint32_t tcr = smmu_mem[(cb + GPU_SMMU_CB_TCR) / 4];
+    if ((smmu_mem[cb / 4] & 1u) && (tcr & 0x3f) == 32 && !(tcr & (3u << 14))) {
+        uint64_t va = cur & 0xffffffffu, t = smmu_rd64(cb + GPU_SMMU_CB_TTBR0) & 0xfffffffff000ull;
+        uint64_t e1 = dma_rd64(t + 8 * ((va >> 30) & 3));
+        if ((e1 & 3) == 3) {
+            uint64_t e2 = dma_rd64((e1 & 0xfffffffff000ull) + 8 * ((va >> 21) & 511));
+            if ((e2 & 3) == 3) {
+                uint64_t e3 = dma_rd64((e2 & 0xfffffffff000ull) + 8 * ((va >> 12) & 511));
+                if ((e3 & 3) == 3 && (e3 & (1u << 10))) par = e3 & 0x0000fffffffff000ull;
+            }
+        }
+    }
+    smmu_mem[(cb + GPU_SMMU_CB_PAR) / 4] = (uint32_t)par;
+    smmu_mem[(cb + GPU_SMMU_CB_PAR) / 4 + 1] = (uint32_t)(par >> 32);
+}
+
+void clean_dcache64(addr64_t addr, unsigned count, int phys) { (void)addr; (void)count; (void)phys; clean_calls++; }
+ppnum_t pmap_find_phys(pmap_t p, addr64_t va)
+{
+    (void)p; return (ppnum_t)((fake_pa_base + (va - (addr64_t)(uintptr_t)dma_block)) >> 14);
+}
+kern_return_t kmem_alloc_contig(vm_map_t m, vm_offset_t *a, vm_size_t size, vm_offset_t mask,
+    unsigned x1, unsigned x2, unsigned flags, int tag)
+{
+    (void)m; (void)x1; (void)x2; (void)tag; (void)mask;
+    alloc_calls++;
+    assert(size <= sizeof(dma_block) && (flags & 2));
+    if (fail_alloc) return 1;
+    memset(dma_block, 0, sizeof(dma_block));
+    *a = (vm_offset_t)dma_block;
+    return KERN_SUCCESS;
+}
+
 void delay(int us)
 {
+    smmu_sim();
     (void)us; delay_calls++;
     uint32_t *mn = &gcc[GPU_GCC_MEMNOC_GFX / 4];
     if (!(clk_stuck & 8u)) { if (*mn & 1u) *mn &= ~GPU_BRANCH_OFF; else *mn |= GPU_BRANCH_OFF; }
@@ -198,6 +262,10 @@ static void arc_reset(void)
     for (unsigned i = 0; i < GPU_SMMU_SIZE / 4; i++) smmu_mem[i] = 0x5e000000u | i;
     smmu_mem[0x20 / 4] = 5;    /* IDR0: NUMSMRG = 5 */
     smmu_mem[0x24 / 4] = 3;    /* IDR1: NUMCB = 3 */
+    fake_pa_base = 0x90000000ull; fail_alloc = alloc_calls = clean_calls = 0;
+    ats_stuck = tlb_stuck = 0;
+    last_ats = smmu_rd64(GPU_SMMU_CB0 + 3 * 0x1000 + GPU_SMMU_CB_ATS1PR); /* not a pending request */
+    memset(dma_block, 0, sizeof(dma_block));
     for (unsigned i = 0; i < GPU_GMU_SIZE / 4; i++) gmu_mem[i] = 0xa5000000u | i;
     cc[GPU_GMU_RCG_CMD / 4] = 0x80000000u; cc[GPU_GMU_RCG_CFG / 4] = 0x100u;
     db32(0, 1); db32(4, GPU_DB_MAGIC);
@@ -229,7 +297,7 @@ int main(void)
     reset(); present = 0; sweet_gpu_probe();
     assert(map_calls == 0 && output[0] == 0);
     reset(); mode = 0; sweet_gpu_probe(); assert(map_calls == 0);
-    reset(); mode = 8; sweet_gpu_probe(); assert(map_calls == 0);
+    reset(); mode = 9; sweet_gpu_probe(); assert(map_calls == 0);
     reset(); mode = -1; sweet_gpu_probe(); assert(map_calls == 0);
     reset(); fail_gcc = 1; sweet_gpu_probe();
     assert(map_calls == 1 && strstr(output, "GCC mapping failed"));
@@ -542,6 +610,74 @@ int main(void)
         arc_reset(); mode = 7; cc[GPU_CX_GDSCR / 4] = GPU_CX_IDLE_GDSCR; gmu_mem[0x14000 / 4] = 1;
         clk_stuck = 8; arc_run(); assert(smmu_maps == 0 && gpu_boot_inventory.power.clk_error);
     }
+    /* sweetgpu=8: GMU stream context bank + ATOS check, fully restored. */
+    {
+        const unsigned cb = GPU_SMMU_CB0 + 3 * 0x1000;
+#define SMMU_DEFAULTS() do { \
+        smmu_mem[0x20 / 4] = 5; smmu_mem[0x24 / 4] = 5; smmu_mem[0 / 4] = 0x00200626u; \
+        smmu_mem[(GPU_SMMU_SMR + 12) / 4] = 0; smmu_mem[(GPU_SMMU_S2CR + 12) / 4] = GPU_SMMU_S2CR_FAULT; \
+        smmu_mem[(GPU_SMMU_CBAR + 12) / 4] = 0; smmu_mem[(GPU_SMMU_CBA2R + 12) / 4] = 0; \
+        for (unsigned o = 0; o < 0x1000; o += 4) smmu_mem[(cb + o) / 4] = 0; \
+        last_ats = 0; } while (0)
+        uint32_t before[GPU_SMMU_SIZE / 4];
+        arc_reset(); mode = 8; cc[GPU_CX_GDSCR / 4] = GPU_CX_IDLE_GDSCR; gmu_mem[0x14000 / 4] = 1;
+        SMMU_DEFAULTS();
+        memcpy(before, smmu_mem, sizeof(before));
+        arc_run(); x = &gpu_boot_inventory.power;
+        assert(!x->ctx_error && x->ctx_requested && x->ctx_passed == 4 && x->ctx_restored);
+        assert(alloc_calls == 1 && clean_calls == 1 && x->ctx_pa == 0x90000000ull);
+        assert(x->ctx_ttbr == x->ctx_pa && x->ctx_pte3 == ((x->ctx_pa + 0x3000) | GPU_PTE_PAGE));
+        assert(dma_rd64(fake_pa_base) == 0 && dma_rd64(fake_pa_base + 8) == ((x->ctx_pa + 0x1000) | 3));
+        assert(dma_rd64(fake_pa_base + 0x1000 + 8 * 256) == ((x->ctx_pa + 0x2000) | 3));
+        assert(dma_rd64(fake_pa_base + 0x2000) == x->ctx_pte3);
+        assert((x->ctx_par[0] & 0x0000fffffffff000ull) == x->ctx_pa + 0x3000 && !(x->ctx_par[0] & 1));
+        assert((x->ctx_par[1] & 0x0000fffffffff000ull) == x->ctx_pa + 0x3000 && (x->ctx_par[2] & 1) && (x->ctx_par[3] & 1));
+        for (unsigned i = 0; i < GPU_SMMU_SIZE / 4; i++) {
+            if (i >= cb / 4 && i < (cb + 0x1000) / 4) continue; /* ATOS/TLB scratch in CB3 only */
+            assert(smmu_mem[i] == before[i]);
+        }
+        assert(smmu_mem[cb / 4] == 0 && smmu_rd64(cb + GPU_SMMU_CB_TTBR0) == 0 &&
+               smmu_mem[(cb + GPU_SMMU_CB_TCR) / 4] == 0 && smmu_mem[(cb + GPU_SMMU_CB_MAIR0) / 4] == 0);
+        assert(strstr(output, "SMMU ctx result: all translations as expected, restored"));
+        output[0] = 0; sweet_gpu_replay(); assert(alloc_calls == 1 && strstr(output, "SMMU ctx ATOS va=0x60000000"));
+        /* Pre-state not the ABL default (or unsuitable geometry): nothing is written or allocated. */
+        for (unsigned bad = 0; bad < 8; bad++) {
+            arc_reset(); mode = 8; cc[GPU_CX_GDSCR / 4] = GPU_CX_IDLE_GDSCR; gmu_mem[0x14000 / 4] = 1;
+            SMMU_DEFAULTS();
+            switch (bad) {
+            case 0: smmu_mem[(GPU_SMMU_SMR + 12) / 4] = 0x80000005u; break;
+            case 1: smmu_mem[(GPU_SMMU_S2CR + 12) / 4] = 1; break;
+            case 2: smmu_mem[(GPU_SMMU_CBAR + 12) / 4] = 1u << 16; break;
+            case 3: smmu_mem[(GPU_SMMU_CBA2R + 12) / 4] = 1; break;
+            case 4: smmu_mem[cb / 4] = 1; break;
+            case 5: smmu_mem[0] |= 1u; break;           /* CLIENTPD */
+            case 6: smmu_mem[0x24 / 4] = 3; break;      /* NUMCB too small */
+            case 7: smmu_mem[0x20 / 4] = 3; break;      /* NUMSMRG too small */
+            }
+            memcpy(before, smmu_mem, sizeof(before));
+            arc_run(); x = &gpu_boot_inventory.power;
+            assert(x->ctx_requested && x->ctx_error && alloc_calls == 0 && x->ctx_stage == 0);
+            assert(!memcmp(before, smmu_mem, sizeof(before)));
+        }
+        /* No memory: nothing written. */
+        arc_reset(); mode = 8; cc[GPU_CX_GDSCR / 4] = GPU_CX_IDLE_GDSCR; gmu_mem[0x14000 / 4] = 1;
+        SMMU_DEFAULTS(); fail_alloc = 1; memcpy(before, smmu_mem, sizeof(before));
+        arc_run(); assert(gpu_boot_inventory.power.ctx_error && !memcmp(before, smmu_mem, sizeof(before)));
+        /* Page outside the 36-bit output range: refused before any SMMU write. */
+        arc_reset(); mode = 8; cc[GPU_CX_GDSCR / 4] = GPU_CX_IDLE_GDSCR; gmu_mem[0x14000 / 4] = 1;
+        SMMU_DEFAULTS(); fake_pa_base = 1ull << 36; memcpy(before, smmu_mem, sizeof(before));
+        arc_run(); assert(gpu_boot_inventory.power.ctx_error && !memcmp(before, smmu_mem, sizeof(before)));
+        /* ATOS never finishes: reported, and the SMMU is still restored. */
+        arc_reset(); mode = 8; cc[GPU_CX_GDSCR / 4] = GPU_CX_IDLE_GDSCR; gmu_mem[0x14000 / 4] = 1;
+        SMMU_DEFAULTS(); ats_stuck = 1;
+        arc_run(); x = &gpu_boot_inventory.power;
+        assert(x->ctx_error && x->ctx_passed == 0 && x->ctx_restored && smmu_mem[(GPU_SMMU_SMR + 12) / 4] == 0);
+        /* Modes 7 and below never allocate or write the SMMU. */
+        arc_reset(); mode = 7; cc[GPU_CX_GDSCR / 4] = GPU_CX_IDLE_GDSCR; gmu_mem[0x14000 / 4] = 1;
+        SMMU_DEFAULTS(); memcpy(before, smmu_mem, sizeof(before));
+        arc_run(); assert(alloc_calls == 0 && !gpu_boot_inventory.power.ctx_requested &&
+                          !memcmp(before, smmu_mem, sizeof(before)));
+    }
     /* Mode 3 never runs the clock stage. */
     arc_reset(); mode = 3; cc[GPU_CX_GDSCR / 4] = GPU_CX_IDLE_GDSCR; arc_run();
     assert(!gpu_boot_inventory.power.clk_requested);
@@ -549,7 +685,7 @@ int main(void)
     /* Mode 2 never reaches the experiment. */
     arc_reset(); cc[GPU_CX_GDSCR / 4] = GPU_CX_IDLE_GDSCR; arc_run();
     assert(!gpu_boot_inventory.power.requested && vote_count == 0 && delay_calls == 0);
-    puts("PASS: 14 clock/cache cases, 30 ARC cases + 512 mutations, 38 CX experiment cases");
+    puts("PASS: 14 clock/cache cases, 30 ARC cases + 512 mutations, 47 CX experiment cases");
     return 0;
 }
 '''

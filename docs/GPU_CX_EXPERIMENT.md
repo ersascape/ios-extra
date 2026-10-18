@@ -132,3 +132,29 @@ the kgsl SMMU at `0x05040000` (`0x10000`, DT `qcom,kgsl-smmu-v2`):
 Each global read is announced first. No writes. Purpose: learn whether ABL/hyp left
 the SMMU in bypass, faulting or owned state before designing the GMU stream 4/5
 mappings (HFI queue table and log memory must be visible to the GMU).
+
+# 0088 — GMU stream context bank + ATOS check (`sweetgpu=8`)
+
+Mode 8 = mode 7 plus, in the same window, a self-contained SMMU programming test:
+
+- Preconditions (else nothing allocated or written): sCR0.CLIENTPD clear, at least
+  4 stream groups and 4 context banks, and for group/CB **3**: `SMR3`=0, `S2CR3`=
+  `0x000200ff` (ABL default), `CBAR3`, `CBA2R3`, `SCTLR`, `TTBR0`, `TCR` all 0.
+- One 16 KiB contiguous kernel page (`kmem_alloc_contig`, PA must be < 2^36):
+  4 KiB tables L1 @0, L2 @0x1000, L3 @0x2000, data page @0x3000, cleaned to the
+  point of coherency. 32-bit VA (T0SZ 32): L1[1] -> L2, L2[256] -> L3, L3[0] ->
+  data page: **IOVA 0x60000000 -> data page** (mainline's GMU dummy-page IOVA).
+  Page attributes: AF, inner-shareable, AP RW, nG, XN, MAIR attr0 = 0x44 (normal
+  non-cacheable), non-cacheable table walk.
+- Context bank 3: CBA2R VA64, CBAR type 1 (stage 1, stage 2 bypass), TCR/TCR2
+  (T0SZ 32, 4 KiB, PASIZE 36 bit, EPD1), TTBR0, MAIR0, TLB invalidate, SCTLR
+  `M|TRE|AFE|CFRE` (no fault interrupt); then `S2CR3` = translate/CB3 and `SMR3` =
+  valid | stream **5** (GMU kernel stream) last.
+- Check with the SMMU's own ATOS (CB `ATS1PR` +0x800, `ATSR` +0x8f0, `PAR`
+  +0x50): 0x60000000 and 0x60000fff must give the data page, 0x60001000 and
+  0x20000000 must fault. No master (GMU/GPU) ever uses the context.
+- Restore SMR3, S2CR3, SCTLR, TTBR0, TCR, TCR2, MAIR, CBAR3, CBA2R3 and flush the
+  TLB; report the final register values. The 16 KiB page is kept (PERMANENT).
+
+Host tests use an AArch64 walker model standing in for ATOS; only the phone
+shows whether the real SMMU accepts these encodings. Report: `SWEET GPU: SMMU ctx ...`.

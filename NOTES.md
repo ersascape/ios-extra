@@ -1,5 +1,13 @@
 # ios-extra — active handoff
 
+## Active implementation — 0088 GMU SMMU context + ATOS check (not yet built/booted)
+
+- `xnu/patches/0088-sweet-gpu-smmu-gmu-context.patch`: `sweetgpu=8` programs stream 5
+  into CB3 with a 4 KiB-granule table (IOVA 0x60000000 -> one page), verifies via
+  ATOS, restores. Details: `docs/GPU_CX_EXPERIMENT.md`. 0087 home screen was
+  confirmed by the user. Host tests (47 cases) pass incl. ASan/UBSan; arm64 compile ok.
+  Isolated baseline bae8544 (0087).
+
 ## Latest phone result — 0087 GPU SMMU inventory, 2026-10-18 21:15 UTC
 
 - `shim/out/shim-boot-0087-smmu.img` (SHA256 `142dca90…1f50df8`, CI 39165446245,

@@ -1,0 +1,301 @@
+diff --git a/bsd/dev/sweet_gpu.c b/bsd/dev/sweet_gpu.c
+index 6ae5fe8..5cc9019 100644
+--- a/bsd/dev/sweet_gpu.c
++++ b/bsd/dev/sweet_gpu.c
+@@ -27,6 +27,10 @@
+  * sweetgpu=7 additionally maps the GPU SMMU (0x05040000, needs the same two GCC
+  * bus branches) and reads its global/ID registers, the first stream mapping
+  * entries and context bank 0, read-only, inside the same window.
++ * sweetgpu=8 additionally programs ONE SMMU stream (id 5, the GMU kernel stream)
++ * into context bank 3 with a small 4 KiB-granule table mapping IOVA 0x60000000 to
++ * a kernel page, checks it with the SMMU's own address-translate (ATOS) and then
++ * restores every SMMU register it touched. No master ever uses the mapping.
+  * Register provenance and limitations: ios-extra/docs/GPU_BRINGUP.md.
+  */
+ #if defined(ARM64_BOARD_CONFIG_SWEET)
+@@ -34,9 +38,14 @@
+ #include <sys/systm.h>
+ #include <pexpert/pexpert.h>
+ #include <kern/clock.h>
++#include <arm/caches_internal.h>
++#include <vm/pmap.h>
++#include <vm/vm_kern.h>
+ #include "sweet_gpu_fw.h"
+ 
+ extern vm_offset_t ml_io_map(vm_offset_t, vm_size_t);
++/* osfmk/arm/pmap.h, not exported to the BSD layer (as in sweet_ufs.c) */
++extern ppnum_t pmap_find_phys(pmap_t pmap, addr64_t va);
+ void sweet_gpu_probe(void);
+ void sweet_gpu_replay(void);
+ int sweet_rpmh_arc_set(const char *res, unsigned corner, unsigned *level);
+@@ -91,6 +100,25 @@ int sweet_rpmh_arc_set(const char *res, unsigned corner, unsigned *level);
+ #define GPU_SMMU_CBAR           0x1000u
+ #define GPU_SMMU_CB0            0x8000u   /* gfx3d_user: DT gpu-offset 0x48000 = SMMU+0x8000 */
+ #define GPU_SMMU_MICRO          0x6000u   /* DT qcom,micro-mmu-control */
++#define GPU_SMMU_CBA2R          0x1800u
++#define GPU_SMMU_GMU_CB         3u
++#define GPU_SMMU_GMU_SID        5u
++#define GPU_SMMU_S2CR_FAULT     0x000200ffu   /* value left by ABL */
++#define GPU_SMMU_CB_SCTLR       0x00u
++#define GPU_SMMU_CB_TCR2        0x10u
++#define GPU_SMMU_CB_TTBR0       0x20u
++#define GPU_SMMU_CB_TCR         0x30u
++#define GPU_SMMU_CB_MAIR0       0x38u
++#define GPU_SMMU_CB_MAIR1       0x3cu
++#define GPU_SMMU_CB_PAR         0x50u
++#define GPU_SMMU_CB_TLBIALL     0x618u
++#define GPU_SMMU_CB_TLBSYNC     0x7f0u
++#define GPU_SMMU_CB_TLBSTATUS   0x7f4u
++#define GPU_SMMU_CB_ATS1PR      0x800u
++#define GPU_SMMU_CB_ATSR        0x8f0u
++#define GPU_SMMU_GMU_IOVA       0x60000000u
++#define GPU_SMMU_TBL_BYTES      0x4000u
++#define GPU_SMMU_VERIFY         4u
+ #define GPU_GDSC_HOLD_US        1000u
+ 
+ #define GPU_DB_LOCATOR_PA       0x0c3f000cu
+@@ -146,6 +174,12 @@ struct gpu_power_experiment {
+ 	unsigned int smmu_mapped, smmu_gr0_done, smmu_nsmr, smmu_ncb;
+ 	uint32_t smmu_gr0[GPU_SMMU_GR0], smmu_smr[GPU_SMMU_MAXSMR], smmu_s2cr[GPU_SMMU_MAXSMR];
+ 	uint32_t smmu_cbar[GPU_SMMU_MAXCB], smmu_cb[GPU_SMMU_MAXCB], smmu_micro;
++	/* sweetgpu=8: GMU stream context bank. */
++	unsigned int ctx_requested, ctx_stage, ctx_restored, ctx_passed;
++	const char *ctx_error;
++	uint64_t ctx_pa, ctx_ttbr, ctx_pte3, ctx_par[GPU_SMMU_VERIFY];
++	uint32_t ctx_va[GPU_SMMU_VERIFY], ctx_expect_fault[GPU_SMMU_VERIFY];
++	uint32_t ctx_fsr, ctx_gfsr, ctx_final[4];
+ };
+ 
+ struct sweet_gpu_clock {
+@@ -354,6 +388,22 @@ gpu_gmu_fw_load(vm_offset_t gmu, struct gpu_power_experiment *x)
+ 	}
+ }
+ 
++static uint64_t
++gpu_read64(vm_offset_t base, uint32_t off)
++{
++	uint64_t value = *(volatile uint64_t *)(base + off);
++	__asm__ volatile("dmb oshld" ::: "memory");
++	return value;
++}
++
++static void
++gpu_write64(vm_offset_t base, uint32_t off, uint64_t value)
++{
++	__asm__ volatile("dmb oshst" ::: "memory");
++	*(volatile uint64_t *)(base + off) = value;
++	__asm__ volatile("dsb osh" ::: "memory");
++}
++
+ static const struct { const char *name; uint32_t off; } gpu_smmu_gr0[GPU_SMMU_GR0] = {
+ 	{ "sCR0", 0x00 }, { "sCR1", 0x04 }, { "sCR2", 0x08 }, { "sACR", 0x10 },
+ 	{ "IDR0", 0x20 }, { "IDR1", 0x24 }, { "IDR2", 0x28 }, { "IDR7", 0x3c },
+@@ -362,14 +412,14 @@ static const struct { const char *name; uint32_t off; } gpu_smmu_gr0[GPU_SMMU_GR
+ /* Context bank 0 registers read: SCTLR, TTBR0 low, TCR, FSR. */
+ static const uint32_t gpu_smmu_cb0[GPU_SMMU_MAXCB] = { 0x00, 0x20, 0x30, 0x58 };
+ 
+-static void
++static vm_offset_t
+ gpu_smmu_read(struct gpu_power_experiment *x)
+ {
+ 	vm_offset_t smmu = ml_io_map(GPU_SMMU_PA, GPU_SMMU_SIZE);
+ 	unsigned int nsmr, ncb;
+ 
+ 	if (!smmu) {
+-		return;
++		return 0;
+ 	}
+ 	x->smmu_mapped = 1;
+ 	for (unsigned int i = 0; i < GPU_SMMU_GR0; i++) {
+@@ -395,6 +445,147 @@ gpu_smmu_read(struct gpu_power_experiment *x)
+ 		}
+ 	}
+ 	x->smmu_micro = gpu_read32(smmu, GPU_SMMU_MICRO);
++	return smmu;
++}
++
++/* AArch64 long-descriptor bits (4 KiB granule), stage 1. */
++#define GPU_PTE_TABLE   3ull
++#define GPU_PTE_PAGE    (3ull | (1ull << 10) | (3ull << 8) | (1ull << 6) | (1ull << 11) | (1ull << 54))
++
++static int
++gpu_smmu_tlb_flush(vm_offset_t smmu, uint32_t cb)
++{
++	gpu_write32(smmu, cb + GPU_SMMU_CB_TLBIALL, 0);
++	gpu_write32(smmu, cb + GPU_SMMU_CB_TLBSYNC, 0);
++	for (unsigned int i = 0; i < GPU_CLK_POLL_US; i++) {
++		if (!(gpu_read32(smmu, cb + GPU_SMMU_CB_TLBSTATUS) & 1u)) {
++			return 0;
++		}
++		delay(1);
++	}
++	return -1;
++}
++
++/* Hardware address translate (privileged read). Returns 0 with *par set when it finished. */
++static int
++gpu_smmu_atos(vm_offset_t smmu, uint32_t cb, uint32_t va, uint64_t *par)
++{
++	gpu_write64(smmu, cb + GPU_SMMU_CB_ATS1PR, va);
++	delay(1);
++	for (unsigned int i = 0; i < GPU_CLK_POLL_US; i++) {
++		if (!(gpu_read32(smmu, cb + GPU_SMMU_CB_ATSR) & 1u)) {
++			*par = gpu_read64(smmu, cb + GPU_SMMU_CB_PAR);
++			return 0;
++		}
++		delay(1);
++	}
++	return -1;
++}
++
++static void
++gpu_smmu_gmu_context(vm_offset_t smmu, struct gpu_power_experiment *x)
++{
++	const uint32_t cb = GPU_SMMU_CB0 + GPU_SMMU_GMU_CB * 0x1000u;
++	const uint32_t n = GPU_SMMU_GMU_CB;
++	static const uint32_t va[GPU_SMMU_VERIFY] = { 0x60000000u, 0x60000fffu, 0x60001000u, 0x20000000u };
++	static const uint32_t fault[GPU_SMMU_VERIFY] = { 0, 0, 1, 1 };
++	vm_offset_t kva = 0;
++	uint64_t pa, ttbr;
++	volatile uint64_t *tbl;
++	int wrote = 0, flush_failed = 0;
++
++	x->ctx_requested = 1;
++	if (x->smmu_nsmr <= n || x->smmu_ncb <= n || x->smmu_gr0[0] == ~0u || (x->smmu_gr0[0] & 1u)) {
++		x->ctx_error = "SMMU geometry/state unsuitable; nothing programmed";
++		return;
++	}
++	/* Everything we touch must still be exactly as ABL left it. */
++	if (gpu_read32(smmu, GPU_SMMU_SMR + 4 * n) != 0 ||
++	    gpu_read32(smmu, GPU_SMMU_S2CR + 4 * n) != GPU_SMMU_S2CR_FAULT ||
++	    gpu_read32(smmu, GPU_SMMU_CBAR + 4 * n) != 0 ||
++	    gpu_read32(smmu, GPU_SMMU_CBA2R + 4 * n) != 0 ||
++	    gpu_read32(smmu, cb + GPU_SMMU_CB_SCTLR) != 0 ||
++	    gpu_read64(smmu, cb + GPU_SMMU_CB_TTBR0) != 0 ||
++	    gpu_read32(smmu, cb + GPU_SMMU_CB_TCR) != 0) {
++		x->ctx_error = "target stream group / context bank is not in the ABL default state; nothing programmed";
++		return;
++	}
++	if (kmem_alloc_contig(kernel_map, &kva, GPU_SMMU_TBL_BYTES, PAGE_MASK, 0, 0,
++	    KMA_DATA | KMA_ZERO | KMA_PERMANENT, VM_KERN_MEMORY_IOKIT) != KERN_SUCCESS || !kva) {
++		x->ctx_error = "no contiguous page for the tables; nothing programmed";
++		return;
++	}
++	pa = ptoa_64(pmap_find_phys(kernel_pmap, (addr64_t)kva));
++	if (!pa || (pa & 0xfffu) || pa >= (1ull << 36)) {
++		x->ctx_error = "page-table memory outside the SMMU's 36-bit output range";
++		return;
++	}
++	x->ctx_pa = pa;
++	/* L1 @0 (4 entries used), L2 @0x1000, L3 @0x2000, data page @0x3000. */
++	tbl = (volatile uint64_t *)kva;
++	tbl[1] = (pa + 0x1000) | GPU_PTE_TABLE;                    /* L1[1]: 0x40000000.. */
++	((volatile uint64_t *)(kva + 0x1000))[256] = (pa + 0x2000) | GPU_PTE_TABLE; /* 0x60000000.. */
++	x->ctx_pte3 = (pa + 0x3000) | GPU_PTE_PAGE;                /* attr index 0 = normal NC */
++	((volatile uint64_t *)(kva + 0x2000))[0] = x->ctx_pte3;
++	clean_dcache64((addr64_t)pa, 0x3000, TRUE);
++	ttbr = pa;
++	x->ctx_ttbr = ttbr;
++	x->ctx_stage = 1;
++	wrote = 1;
++	/* Context bank first, stream match last (a stream matches only once it is complete). */
++	gpu_write32(smmu, GPU_SMMU_CBA2R + 4 * n, 1u);                       /* VA64 */
++	gpu_write32(smmu, GPU_SMMU_CBAR + 4 * n, 1u << 16);                  /* S1 translate, S2 bypass */
++	gpu_write32(smmu, cb + GPU_SMMU_CB_TCR2, 1u);                        /* PASIZE 36 bit */
++	gpu_write32(smmu, cb + GPU_SMMU_CB_TCR, 32u | (2u << 12) | (1u << 23)); /* T0SZ 32, SH0 outer, EPD1 */
++	gpu_write64(smmu, cb + GPU_SMMU_CB_TTBR0, ttbr);
++	gpu_write32(smmu, cb + GPU_SMMU_CB_MAIR0, 0x44u);                    /* attr0 normal non-cacheable */
++	gpu_write32(smmu, cb + GPU_SMMU_CB_MAIR1, 0);
++	if (gpu_smmu_tlb_flush(smmu, cb)) {
++		flush_failed = 1;
++	}
++	gpu_write32(smmu, cb + GPU_SMMU_CB_SCTLR, 0x27u);                    /* M | TRE | AFE | CFRE */
++	x->ctx_stage = 2;
++	gpu_write32(smmu, GPU_SMMU_S2CR + 4 * n, n);                         /* translate via CB n */
++	gpu_write32(smmu, GPU_SMMU_SMR + 4 * n, (1u << 31) | GPU_SMMU_GMU_SID);
++	x->ctx_stage = 3;
++	if (flush_failed) {
++		x->ctx_error = "TLB invalidate did not complete";
++	}
++	for (unsigned int i = 0; i < GPU_SMMU_VERIFY && !x->ctx_error; i++) {
++		x->ctx_va[i] = va[i];
++		x->ctx_expect_fault[i] = fault[i];
++		x->ctx_stage = 4 + i;
++		if (gpu_smmu_atos(smmu, cb, va[i], &x->ctx_par[i])) {
++			x->ctx_error = "ATOS did not complete";
++			break;
++		}
++		if (fault[i] ? (x->ctx_par[i] & 1u) :
++		    (!(x->ctx_par[i] & 1u) && (x->ctx_par[i] & 0x0000fffffffff000ull) == ((pa + 0x3000) & ~0xfffull))) {
++			x->ctx_passed++;
++		} else {
++			x->ctx_error = "ATOS result differs from the expected mapping";
++		}
++	}
++	x->ctx_fsr = gpu_read32(smmu, cb + 0x58);
++	x->ctx_gfsr = gpu_read32(smmu, 0x48);
++	/* Restore, stream match first. */
++	gpu_write32(smmu, GPU_SMMU_SMR + 4 * n, 0);
++	gpu_write32(smmu, GPU_SMMU_S2CR + 4 * n, GPU_SMMU_S2CR_FAULT);
++	gpu_write32(smmu, cb + GPU_SMMU_CB_SCTLR, 0);
++	gpu_write64(smmu, cb + GPU_SMMU_CB_TTBR0, 0);
++	gpu_write32(smmu, cb + GPU_SMMU_CB_TCR, 0);
++	gpu_write32(smmu, cb + GPU_SMMU_CB_TCR2, 0);
++	gpu_write32(smmu, cb + GPU_SMMU_CB_MAIR0, 0);
++	gpu_write32(smmu, cb + GPU_SMMU_CB_MAIR1, 0);
++	gpu_write32(smmu, GPU_SMMU_CBAR + 4 * n, 0);
++	gpu_write32(smmu, GPU_SMMU_CBA2R + 4 * n, 0);
++	(void)gpu_smmu_tlb_flush(smmu, cb);
++	x->ctx_final[0] = gpu_read32(smmu, GPU_SMMU_SMR + 4 * n);
++	x->ctx_final[1] = gpu_read32(smmu, GPU_SMMU_S2CR + 4 * n);
++	x->ctx_final[2] = gpu_read32(smmu, cb + GPU_SMMU_CB_SCTLR);
++	x->ctx_final[3] = gpu_read32(smmu, GPU_SMMU_CBAR + 4 * n);
++	x->ctx_restored = wrote && x->ctx_final[0] == 0 && x->ctx_final[1] == GPU_SMMU_S2CR_FAULT &&
++	    x->ctx_final[2] == 0 && x->ctx_final[3] == 0;
+ }
+ 
+ static void
+@@ -416,7 +607,10 @@ gpu_gmu_read(struct gpu_power_experiment *x, int mode)
+ 		gpu_gmu_fw_load(gmu, x);
+ 	}
+ 	if (mode >= 7) {
+-		gpu_smmu_read(x);
++		vm_offset_t smmu = gpu_smmu_read(x);
++		if (smmu && mode >= 8) {
++			gpu_smmu_gmu_context(smmu, x);
++		}
+ 	}
+ }
+ 
+@@ -649,6 +843,20 @@ gpu_power_log(const struct gpu_power_experiment *x)
+ 		}
+ 		printf("SWEET GPU: SMMU micro-mmu +0x6000 = 0x%08x (read-only inventory)\n", x->smmu_micro);
+ 	}
++	if (x->ctx_requested) {
++		printf("SWEET GPU: SMMU ctx tables pa=0x%llx TTBR0=0x%llx L3[0]=0x%llx stage=%u\n",
++		    x->ctx_pa, x->ctx_ttbr, x->ctx_pte3, x->ctx_stage);
++		for (unsigned int i = 0; i < GPU_SMMU_VERIFY; i++) {
++			if (x->ctx_va[i]) {
++				printf("SWEET GPU: SMMU ctx ATOS va=0x%08x PAR=0x%llx (expect %s)\n", x->ctx_va[i],
++				    x->ctx_par[i], x->ctx_expect_fault[i] ? "fault" : "mapped");
++			}
++		}
++		printf("SWEET GPU: SMMU ctx passed=%u FSR=0x%08x sGFSR=0x%08x restored=%u final SMR/S2CR/SCTLR/CBAR=0x%x/0x%x/0x%x/0x%x\n",
++		    x->ctx_passed, x->ctx_fsr, x->ctx_gfsr, x->ctx_restored,
++		    x->ctx_final[0], x->ctx_final[1], x->ctx_final[2], x->ctx_final[3]);
++		printf("SWEET GPU: SMMU ctx result: %s\n", x->ctx_error ? x->ctx_error : "all translations as expected, restored");
++	}
+ 	printf("SWEET GPU: GMU clk stage=%u restored=%u result: %s\n", x->clk_stage,
+ 	    x->clk_restored, x->clk_error ? x->clk_error : "complete, rolled back");
+ }
+@@ -846,8 +1054,8 @@ sweet_gpu_probe(void)
+ 	if (!PE_parse_boot_argn("sweetgpu", &mode, sizeof(mode)) || mode == 0) {
+ 		return;
+ 	}
+-	if (mode < 1 || mode > 7) {
+-		printf("SWEET GPU: unsupported sweetgpu=%d (0=off, 1=clocks, 2=+ARC, 3=+CX, 4=+GMU clocks, 5=+GMU reads, 6=+GMU firmware to TCM, 7=+SMMU read)\n", mode);
++	if (mode < 1 || mode > 8) {
++		printf("SWEET GPU: unsupported sweetgpu=%d (0=off, 1=clocks, 2=+ARC, 3=+CX, 4=+GMU clocks, 5=+GMU reads, 6=+GMU firmware to TCM, 7=+SMMU read, 8=+GMU SMMU context test)\n", mode);
+ 		return;
+ 	}
+ 	if (mode >= 2) {
