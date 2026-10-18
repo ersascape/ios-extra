@@ -14,8 +14,19 @@
 - Local validation: all 3 unit tests pass (14 MMIO/cache cases in the probe
   harness); real arm64 object generation of GPU and USB C files passes
   (0/2 failed). New tests apply the full GPU patch chain before execution.
-- Details: `docs/GPU_REPORT_REPLAY.md`. Full CI and image packaging next;
-  no reboot or hardware experiment performed for 0081 yet.
+- Implementation commit **3fc1124684f2bcf1ac9eebb03f9d18fc5ba9d2e4** is
+  pushed. Full CI **39154941656** is running; image packaging follows.
+  Details: `docs/GPU_REPORT_REPLAY.md`. No reboot or hardware experiment
+  performed for 0081 yet.
+- Power/firmware audit added in `docs/GPU_POWER_SEQUENCE.md`, pinned to
+  Xiaomi `758bb7ef`: the A618 entry requests **a618_gmu.bin**, unlike the
+  mainline SM7150 catalog's a630_gmu.bin. Exact phone firmware unverified.
+  GMU startup needs mapped HFI/log buffers before reset release. Source DT
+  enables the register-based HFI quirk and GMU streams 4/5. Existing RPMh
+  client validates VRM only and its public helper accepts only ldoc11;
+  ARC gfx.lvl/cx.lvl/mx.lvl need distinct metadata/table lookup and voting.
+  Next independent implementation can expose read-only ARC metadata and
+  bounded level tables before designing CX/GMU power writes.
 
 ## Latest phone result — 2026-10-18
 

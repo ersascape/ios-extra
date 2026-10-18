@@ -3,8 +3,9 @@
 Goal: accelerate iOS rendering on sweet, including the system compositor and,
 eventually, graphics APIs used by applications. Work lives in ios-extra; the
 other agents' ios-sweet checkout is read-only reference material. Coordinate
-shared-phone access before hardware experiments. No GPU probe or phone boot
-has been performed as part of this plan.
+shared-phone access before hardware experiments. Probe 0080 has now reached
+the phone's home screen; [the recorded results](GPU_BRINGUP.md) distinguish
+that read-only inventory test from GPU execution.
 
 ## What we can build on
 
@@ -28,6 +29,10 @@ The matching entry names `a630_sqe.fw`, `a630_gmu.bin` and `a615_zap.mbn`.
 Confirm the phone's actual firmware files and secure initialization sequence
 against the downstream driver before choosing artifacts or implementing it.
 Firmware stays out of Git.
+
+The pinned Xiaomi A618 entry instead requests **`a618_gmu.bin`**. See the
+[power and firmware dependency audit](GPU_POWER_SEQUENCE.md) for this
+discrepancy, the ARC rail contracts and the GMU/SMMU startup order.
 
 [Mesa Freedreno](https://docs.mesa3d.org/drivers/freedreno.html) supplies an
 existing Adreno GL/GLES implementation; Turnip supplies Vulkan support.
@@ -83,8 +88,9 @@ command execution; a triangle proves rendering; neither proves iOS integration.
 
 ## First implementation target
 
-After the source audit, add tentative patch
-`0080-sweet-gpu-probe.patch` with an opt-in `sweetgpu=1` mode. Audit which
+Patch `0080-sweet-gpu-probe.patch` now provides an opt-in `sweetgpu=1`
+mode, with [0081](GPU_REPORT_REPLAY.md) preserving complete reports for USB.
+Continue auditing which
 clock/power registers can be read before reaching GPU/GMU/SMMU registers. The
 probe should report why it skips a block and leave rendering on the existing
 CPU path. Publish it as SweetGPU diagnostics rather than advertising an Apple
@@ -100,7 +106,8 @@ maintenance. Audit GPU virtual-address limits separately from physical RAM
 above 4 GiB. XNU's 16 KiB CPU page size does not establish the SMMU page-table
 granule. Add mapping and fault diagnostics before arbitrary rendering commands.
 
-The next concrete deliverables are the initialization dependency map, the
-renderer-entry-point trace, and a reviewable opt-in probe patch. Progress is
-measured by completed hardware and API tests; no completion date is inferred
-from the earlier homescreen milestone.
+The dependency map and renderer-entry-point trace are now documented, and
+the first opt-in probe has passed one phone boot. Next, obtain the complete
+0081 report and inspect ARC resource tables before implementing a held
+CX/GMU power state. Progress is measured by completed hardware and API tests;
+no completion date is inferred from the earlier homescreen milestone.

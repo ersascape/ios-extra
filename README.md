@@ -29,6 +29,7 @@ The workflow retains a guard that skips macOS builds if the repository is made p
 - GPU work starts with [the Adreno 618 plan](docs/GPU_PLAN.md): hardware execution, userspace rendering and iOS integration milestones.
 - [Probe 0080](docs/GPU_BRINGUP.md) documents the first implementation, register audit and build/test results.
 - [Inventory replay 0081](docs/GPU_REPORT_REPLAY.md) preserves the boot measurements and reprints them after USB configuration to recover missing early log lines.
+- [Power and firmware audit](docs/GPU_POWER_SEQUENCE.md) maps the A618 startup dependencies and the remaining ARC, GMU and SMMU contracts.
 - [Metal loading research](docs/GPU_API_RE.md) records the traced service-to-device-plugin interface in this iOS image.
 - Preserve each experiment as a focused commit or branch. New kernel patches start at `0080`; check for upstream numbering changes before porting back.
 - Record build IDs, tested boot images, logs and observed results. Keep source review, a successful build and a successful phone test distinct.
