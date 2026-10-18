@@ -15,9 +15,24 @@
   harness); real arm64 object generation of GPU and USB C files passes
   (0/2 failed). New tests apply the full GPU patch chain before execution.
 - Implementation commit **3fc1124684f2bcf1ac9eebb03f9d18fc5ba9d2e4** is
-  pushed. Full CI **39154941656** is running; image packaging follows.
-  Details: `docs/GPU_REPORT_REPLAY.md`. No reboot or hardware experiment
-  performed for 0081 yet.
+  pushed. Full CI **39154941656 PASSED** in 7m25s. Kernel checksum verifies;
+  GPU/USB/UFS sources and source list match the local tree byte for byte.
+  Both GPU probe/replay symbols are linked. Kernel SHA256
+  `2f29b0bea5b143f61562417ca346a59896b2370f238a271bf9546de75aacf9c3`.
+- Both 0081 images packaged and unpack-verified, each 17,203,200 bytes:
+  `shim/out/shim-boot-0081-probe.img` SHA256
+  `ad262ff3670fd79b537108b7a2e539d36d49730abb067cd90e514d223cbcc297`;
+  `shim/out/shim-boot-0081-default.img` SHA256
+  `209b236842959fe3cfd0f71cb3715c9f2ef1c5920dfe69de0e8643c8c075053a`.
+  ADT identical to validated 0080; established UFS-root args, cpus=6,
+  sweetusb=2, probe mode 1/0. Manifest `shim/out/manifest-0081.json`.
+  External artifacts `out-0081/`, `ci-0081/`; logs `logs/ci-0081.log`,
+  `logs/boot-package-0081.txt`. Details: `docs/GPU_REPORT_REPLAY.md`.
+- 30-second QEMU early-boot check passed: `no_panic_observed`, 0 unknown
+  glyphs. Same QEMU ADT, HFS ramdisk and single-CPU arguments as 0080;
+  evidence `qemu-0081/boot-local/`. Does not exercise phone USB/GPU/replay.
+- Asked the user to signal fastboot availability for the next temporary boot.
+  No reboot or hardware experiment performed for 0081 yet.
 - Power/firmware audit added in `docs/GPU_POWER_SEQUENCE.md`, pinned to
   Xiaomi `758bb7ef`: the A618 entry requests **a618_gmu.bin**, unlike the
   mainline SM7150 catalog's a630_gmu.bin. Exact phone firmware unverified.
