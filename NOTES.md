@@ -1,6 +1,26 @@
 # ios-extra — active handoff
 
-## Active implementation — 0085 first GMU register reads (not yet built/booted)
+## Latest phone result — 0085 first GMU register reads, 2026-10-18 20:31 UTC
+
+- `shim/out/shim-boot-0085-gmureg.img` (SHA256 `f2e43620…a1b14b`, CI 39162789741,
+  sweetgpu=5), fastboot success 0.561s, phone was in fastboot at user's request.
+  Logs outside Git: logs/phone-0085-{fastboot.txt,gmureg.pcap,gmureg.txt}.
+- **No bus fault; the GMU register block answers.** All 6 reads completed, stage 8,
+  clocks/gate/CX/votes rolled back, identical in every replayed report:
+  CM3_SYSRESET +0x14000 = **0x00000001** (CM3 held in reset, as expected before
+  firmware), CM3_FW_BUSY 0x0, CM3_FW_INIT_RESULT 0x0, CM3_CFG **0x00000052**,
+  GENERAL_0 0x0, AO_HOST_IRQ_STATUS 0x0.
+- GCC bus branches: memnoc 0x80000220 -> 0x00000221 (running) -> 0x80000220;
+  ddrss-axi 0x80000000 -> 0x00000001 (running) -> 0x80000000.
+  GMU clocks as in 0084 (cx-gmu 0x00004ff1 on).
+- Meaning: CX domain + 200 MHz-config GMU clock + bus branches are sufficient for
+  host MMIO to the GMU CSR block. Nothing written to the GMU. Meaning of CM3_CFG
+  0x52 not decoded. Home screen not yet confirmed by the user for this boot.
+- **Next:** GMU needs SMMU-mapped memory and firmware: map GPU SMMU (0x05040000),
+  GMU stream 4/5 contexts, firmware blob location (a618_gmu.bin availability on the
+  phone is unverified), then load ITCM/DTCM and release CM3 reset.
+
+## Active implementation — 0085 first GMU register reads (built, phone-tested above)
 
 - `xnu/patches/0085-sweet-gpu-gmu-regs.patch` (on top of 0084): `sweetgpu=5` adds
   GCC memnoc/ddrss-axi branches and reads 6 GMU CX registers; docs in
