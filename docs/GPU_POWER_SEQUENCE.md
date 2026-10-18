@@ -82,6 +82,41 @@ GPU/GMU/SMMU mappings until a stable power hold has been implemented.
 
 ## Memory and handshake details
 
+### CX supply and GMU clock audit
+
+The pinned
+[`sdmmagpie-regulator.dtsi`](https://github.com/MiCode/Xiaomi_Kernel_OpenSource/blob/758bb7ef50af360e728662a1ed3b3a1b977a2f13/arch/arm64/boot/dts/qcom/sdmmagpie-regulator.dtsi)
+assigns `gfx.lvl` to PM6150 S2, `mx.lvl` to PM6150 S3, and `cx.lvl` to
+PM6150L S2/S3. CX's regulator declares an MX parent supply.
+[`sdmmagpie.dtsi`](https://github.com/MiCode/Xiaomi_Kernel_OpenSource/blob/758bb7ef50af360e728662a1ed3b3a1b977a2f13/arch/arm64/boot/dts/qcom/sdmmagpie.dtsi#L3263)
+then makes `VDD_CX_LEVEL` the CX GDSC parent and `VDD_GFX_LEVEL` the GX
+GDSC parent; GX also requests its core-root clock and AON reset handling.
+Thus a CX experiment must account for MX/CX dependencies and held votes,
+not just GDSCR writes.
+
+The regulator binding exposes consumer corner constants with **offset 1**:
+MIN_SVS is 48+1, LOW_SVS 64+1, SVS 128+1, and NOM 256+1. Command DB tables
+contain raw corner values. KGSL subtracts `RPMH_REGULATOR_LEVEL_OFFSET`
+from OPP voltage values before matching those tables; the hardware request
+uses a table **index**, not either corner-number convention or millivolts.
+The raw 0082 report preserves this distinction.
+
+[`gpucc-sdmmagpie.c`](https://github.com/MiCode/Xiaomi_Kernel_OpenSource/blob/758bb7ef50af360e728662a1ed3b3a1b977a2f13/drivers/clk/qcom/gpucc-sdmmagpie.c#L254)
+defines GMU RCG `0x1120`: the 200 MHz entry selects
+`gcc_gpu_gpll0_div_clk_src` with divisor 1.5; parent selector is 6 and HID
+encoding is 2. Its CX corner requirement is `VDD_MIN`. The GCC divided-parent
+gate is bit 16 of `0x52004`, shared with other branch bits, and the CX GMU
+branch is GPUCC `0x1098` bit 0. The GPUCC probe also programs recommended
+GMU wake/sleep fields. These are source requirements, not measured current
+parent/RCG state; no such registers were changed by 0082.
+
+GCC MEMNOC and DDRSS GPU AXI use voted branch behavior. A clear halt bit
+does not establish this driver's held enable vote. Future initialization
+must use bounded rate-update/branch waits, preserve shared register bits
+and serialize any ARC transactions with the existing apps-DRV client.
+
+### GMU memory and startup
+
 The
 [`sdmmagpie-gpu.dtsi`](https://github.com/MiCode/Xiaomi_Kernel_OpenSource/blob/758bb7ef50af360e728662a1ed3b3a1b977a2f13/arch/arm64/boot/dts/qcom/sdmmagpie-gpu.dtsi)
 declares GPU stream 0, GMU user stream 4 and GMU kernel stream 5. These match

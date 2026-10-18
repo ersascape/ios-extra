@@ -18,8 +18,27 @@
   mutations**. Same harness passes ASan/UBSan. Real arm64 object compilation
   passes (0/1 failed), using logs/ci-0081.log and the isolated tree.
   Isolated XNU git baseline through 0081 is **d818e18**; current changes 0082.
-- Details: `docs/GPU_ARC_INVENTORY.md`. Full CI and packaging follow;
-  the phone remains on validated 0081. No 0082 phone experiment yet.
+- Implementation **6f76e4f15e0f52c65b37d8cf98e647900d5825b0** pushed. Full CI
+  **39157726409 PASSED** in 5m02s. Kernel checksum verifies:
+  `510f85c8df5a3bff369ab14db41ecc4d91547b28b897ca4c041b58e60aa1afa2`.
+  CI GPU/RPMh/USB source and source-list files match local byte for byte;
+  both probe/replay symbols linked. Artifacts external out-0082/, ci-0082/.
+- Modes 0/1/2 packaged and unpack-verified, each 17,203,200 bytes, with ADT
+  identical to validated 0081 and established UFS-root/6-CPU/USB arguments.
+  **shim/out/shim-boot-0082-arc.img**, SHA256
+  `7fca248b6c8af736aee7982388cb55fedf9d4d825f279ea602007be9fe9cccba`.
+  Mode 0 SHA `0f2a1358d27816eebcf12c9257d12f48b8cd7396fe6c1ee9297e7e080d731087`;
+  mode 1 SHA `6c8ce3df3842856bc37b1ea538645eeb5676094d05b7b7bb1d18b1658a1c1cab`.
+  Manifest shim/out/manifest-0082.json, packaging log logs/boot-package-0082.txt.
+- Further pinned-source audit: CX regulator declares MX parent; CX GDSC
+  parent is VDD_CX_LEVEL. GMU 200 MHz selects GCC GPLL0 divided parent,
+  selector 6/HID 2 at RCG 0x1120; shared gate GCC 0x52004 bit16. Linux
+  consumer corner constants add offset1, but DB values are raw and requests
+  carry table indices. Recorded in docs/GPU_POWER_SEQUENCE.md. No new writes.
+- Details: `docs/GPU_ARC_INVENTORY.md`. Asked user for fastboot availability
+  after preparing the verified image; phone remains on validated 0081.
+  No 0082 phone experiment yet. Ignored decoder/analyzer prepared under
+  research/ for phone-0082-arc capture and per-report ARC table validation.
 
 ## Active work — complete inventory and Metal compiler reference
 

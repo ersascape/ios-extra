@@ -83,8 +83,33 @@ locator/database writes. ASan/UBSan also passes this same harness.
 
 All three repository unit tests pass. Real arm64 Mach-O compilation against
 the isolated XNU headers passes (0 of 1 files failed), using the 0081 CI log.
-Full linkage and the next phone boot are separate checks, pending at this
-implementation milestone.
+## Full build and boot images
+
+[CI run 39157726409](https://github.com/dipa-studio/ios-extra/actions/runs/39157726409)
+passed in **5m02s**, source commit
+`6f76e4f15e0f52c65b37d8cf98e647900d5825b0`. The kernel checksum verifies:
+`510f85c8df5a3bff369ab14db41ecc4d91547b28b897ca4c041b58e60aa1afa2`.
+Both GPU probe/replay symbols are linked. CI copies of GPU, RPMh and USB
+source plus the BSD source list match the isolated local tree byte for byte.
+
+Three boot images are packaged under `shim/out/`, each 17,203,200 bytes:
+
+| Image | Mode | SHA-256 |
+| --- | --- | --- |
+| `shim-boot-0082-default.img` | 0 | `0f2a1358d27816eebcf12c9257d12f48b8cd7396fe6c1ee9297e7e080d731087` |
+| `shim-boot-0082-probe.img` | 1 | `6c8ce3df3842856bc37b1ea538645eeb5676094d05b7b7bb1d18b1658a1c1cab` |
+| **`shim-boot-0082-arc.img`** | **2** | `7fca248b6c8af736aee7982388cb55fedf9d4d825f279ea602007be9fe9cccba` |
+
+Each image was unpacked and its ramdisk compared byte for byte with the
+intended payload; embedded boot arguments match. The high-memory ADT is
+identical to validated 0081. Images use the established UFS-root arguments,
+`cpus=6`, `sweetusb=2`, `sweetfb_noconsole=1`, `sweetfb_hz=30`, and their
+listed sweetgpu mode. Manifest: `shim/out/manifest-0082.json`.
+
+Artifacts remain ignored in the external workspace under `out-0082/`,
+`ci-0082/` and `shim-out/`. Packaging runner:
+`research/package-0082.py`; log `logs/boot-package-0082.txt`.
+The phone test is pending device availability at this milestone.
 
 The intended phone test uses the normal UFS-root image with `sweetgpu=2`,
 the host `tools/phone-ecm-host.py` watcher and an independent UDP capture.
