@@ -76,3 +76,24 @@ Sequence (pinned Xiaomi `gpucc-sdmmagpie.c` / `gcc-sdmmagpie.c`):
 
 The RCG stays configured at 200 MHz after the test: UPDATE on an idle root is
 not relied on and nothing consumes it. Report lines: `SWEET GPU: GMU clk ...`.
+
+# 0085 — first GMU register reads (`sweetgpu=5`)
+
+Mode 5 = mode 4 plus, inside the same CX + GMU-clock window:
+
+1. GCC `gcc_gpu_memnoc_gfx_clk` (`0x7100c`) and `gcc_ddrss_gpu_axi_clk`
+   (`0x4452c`) enable bit0, the other two GMU DT clocks (`axi_clk`, `memnoc_clk`).
+   They are *voted* branches: ownership is decided by the enable bit only
+   (a clear status bit can be another master's vote); undo clears only our
+   enable bit and does not wait on status. Phone-measured before: memnoc
+   `0x80000220`, ddrss-axi `0x00000000`.
+2. Map `kgsl_gmu_reg` (`0x0506a000`, `0x31000` bytes) once, only after every clock
+   came up. Byte offset = (a6xx register dword index - 0x1A800) * 4, the
+   downstream `gmu2gpu_offset`.
+3. Read, in order, announcing each read in the log first:
+   `CM3_SYSRESET` +0x14000, `CM3_FW_BUSY` +0x14068, `CM3_FW_INIT_RESULT` +0x14070,
+   `CM3_CFG` +0x140b4, `GENERAL_0` +0x14714, `AO_HOST_IRQ_STATUS` +0x24c14.
+   No writes to the GMU block. Values are cached for the USB reports.
+
+Everything is undone as in 0084. Risk: a read that faults the bus ends the
+boot; the announce lines and the persistent log are the evidence in that case.

@@ -1,0 +1,224 @@
+diff --git a/bsd/dev/sweet_gpu.c b/bsd/dev/sweet_gpu.c
+index f2a2d16..8f7e5b5 100644
+--- a/bsd/dev/sweet_gpu.c
++++ b/bsd/dev/sweet_gpu.c
+@@ -18,6 +18,9 @@
+  * sweetgpu=4 additionally, while CX is held on, enables the GMU clock tree
+  * (GPLL0/2 gate, GMU RCG at 200 MHz, GPUCC ahb/cx-gmu/cxo branches), reads
+  * everything back, and undoes it in reverse order. GMU registers stay unmapped.
++ * sweetgpu=5 also enables the two GCC bus branches Linux holds for the GMU
++ * (memnoc, ddrss-axi), maps the GMU register block and reads a short list of
++ * CX-side registers inside that window; reads are cached for the report.
+  * Register provenance and limitations: ios-extra/docs/GPU_BRINGUP.md.
+  */
+ #if defined(ARM64_BOARD_CONFIG_SWEET)
+@@ -63,6 +66,12 @@ int sweet_rpmh_arc_set(const char *res, unsigned corner, unsigned *level);
+ #define GPU_CC_CX_GMU           0x1098
+ #define GPU_CC_CXO              0x109c
+ #define GPU_CBCR_WAKE_SLEEP     ((0xfu << 8) | (0xfu << 4))
++#define GPU_GCC_MEMNOC_GFX      0x7100c   /* BRANCH_VOTED */
++#define GPU_GCC_DDRSS_GPU_AXI   0x4452c   /* BRANCH_VOTED */
++#define GPU_CLK_BRANCHES        5u
++#define GPU_GMU_PA              0x0506a000
++#define GPU_GMU_SIZE            0x00031000
++#define GPU_GMU_READS           6u
+ #define GPU_GDSC_HOLD_US        1000u
+ 
+ #define GPU_DB_LOCATOR_PA       0x0c3f000cu
+@@ -105,8 +114,11 @@ struct gpu_power_experiment {
+ 	unsigned int clk_requested, clk_stage, clk_restored;
+ 	uint32_t gpll0_mode, gpll0_vote, gate_before, gate_on;
+ 	uint32_t rcg_cmd0, rcg_cfg0, rcg_cmd1, rcg_cfg1;
+-	uint32_t cbcr_before[3], cbcr_on[3], cbcr_after[3];
++	uint32_t cbcr_before[GPU_CLK_BRANCHES], cbcr_on[GPU_CLK_BRANCHES], cbcr_after[GPU_CLK_BRANCHES];
+ 	const char *clk_error;
++	/* sweetgpu=5: GMU register reads (done = how many completed). */
++	unsigned int gmu_mapped, gmu_done;
++	uint32_t gmu_value[GPU_GMU_READS];
+ };
+ 
+ struct sweet_gpu_clock {
+@@ -226,9 +238,13 @@ gpu_branch_on(vm_offset_t cc, uint32_t off, uint32_t extra, uint32_t *value)
+ }
+ 
+ static void
+-gpu_branch_off(vm_offset_t cc, uint32_t off, uint32_t *value)
++gpu_branch_off(vm_offset_t cc, uint32_t off, uint32_t *value, int poll)
+ {
+ 	gpu_write32(cc, off, gpu_read32(cc, off) & ~GPU_BRANCH_ENABLE);
++	if (!poll) { /* voted branch: another master may keep it running */
++		*value = gpu_read32(cc, off);
++		return;
++	}
+ 	for (unsigned int i = 0; i < GPU_CLK_POLL_US; i++) {
+ 		*value = gpu_read32(cc, off);
+ 		if (*value != ~0u && (*value & GPU_BRANCH_OFF)) {
+@@ -254,6 +270,34 @@ gpu_rcg_update(vm_offset_t cc, uint32_t cfg)
+ 	return -1;
+ }
+ 
++/* GMU CSR byte offset = (gpu register dword index - 0x1A800) * 4, the downstream
++ * gmu2gpu_offset for kgsl_gmu_reg at 0x506a000. Names are a6xx_reg.h. */
++static const struct { const char *name; uint32_t off; } gpu_gmu_regs[GPU_GMU_READS] = {
++	{ "CM3_SYSRESET",     0x14000 },
++	{ "CM3_FW_BUSY",      0x14068 },
++	{ "CM3_FW_INIT_RESULT", 0x14070 },
++	{ "CM3_CFG",          0x140b4 },
++	{ "GENERAL_0",        0x14714 },
++	{ "AO_HOST_IRQ_STATUS", 0x24c14 },
++};
++
++static void
++gpu_gmu_read(struct gpu_power_experiment *x)
++{
++	vm_offset_t gmu = ml_io_map(GPU_GMU_PA, GPU_GMU_SIZE);
++
++	if (!gmu) {
++		return;
++	}
++	x->gmu_mapped = 1;
++	for (unsigned int i = 0; i < GPU_GMU_READS; i++) {
++		/* Announce first: a bus error here would end the boot. */
++		printf("SWEET GPU: reading GMU %s +0x%x\n", gpu_gmu_regs[i].name, gpu_gmu_regs[i].off);
++		x->gmu_value[i] = gpu_read32(gmu, gpu_gmu_regs[i].off);
++		x->gmu_done = i + 1;
++	}
++}
++
+ /*
+  * GMU clock stage, run with CX held on. Order follows downstream: parent
+  * gate, 200 MHz RCG config, then branches (ahb, cx-gmu with the recommended
+@@ -262,10 +306,14 @@ gpu_rcg_update(vm_offset_t cc, uint32_t cfg)
+  * to complete with the root idle, and nothing consumes it afterwards.
+  */
+ static void
+-gpu_clock_stage(vm_offset_t gcc, vm_offset_t cc, struct gpu_power_experiment *x)
++gpu_clock_stage(vm_offset_t gcc, vm_offset_t cc, int mode, struct gpu_power_experiment *x)
+ {
+-	static const uint32_t branch[3] = { GPU_CC_AHB, GPU_CC_CX_GMU, GPU_CC_CXO };
+-	unsigned int enabled = 0, owned = 7;
++	/* Order follows kgsl: gmu, cxo, then (mode 5) the GCC bus branches. */
++	static const uint32_t off[GPU_CLK_BRANCHES] = {
++		GPU_CC_AHB, GPU_CC_CX_GMU, GPU_CC_CXO, GPU_GCC_MEMNOC_GFX, GPU_GCC_DDRSS_GPU_AXI,
++	};
++	const unsigned int n = mode >= 5 ? GPU_CLK_BRANCHES : 3u;
++	unsigned int enabled = 0, owned = (1u << GPU_CLK_BRANCHES) - 1u;
+ 	int set_gate = 0;
+ 	uint32_t v;
+ 
+@@ -275,8 +323,8 @@ gpu_clock_stage(vm_offset_t gcc, vm_offset_t cc, struct gpu_power_experiment *x)
+ 	x->gate_before = gpu_read32(gcc, GPU_GCC_GPU_GPLL_VOTE);
+ 	x->rcg_cmd0 = gpu_read32(cc, GPU_GMU_RCG_CMD);
+ 	x->rcg_cfg0 = gpu_read32(cc, GPU_GMU_RCG_CFG);
+-	for (unsigned int i = 0; i < 3; i++) {
+-		x->cbcr_before[i] = gpu_read32(cc, branch[i]);
++	for (unsigned int i = 0; i < n; i++) {
++		x->cbcr_before[i] = gpu_read32(i < 3 ? cc : gcc, off[i]);
+ 	}
+ 	if (x->gpll0_mode == ~0u || !(x->gpll0_mode & GPU_PLL_LOCK_DET) ||
+ 	    x->gpll0_vote == ~0u || !(x->gpll0_vote & 1u) || x->gate_before == ~0u) {
+@@ -289,11 +337,17 @@ gpu_clock_stage(vm_offset_t gcc, vm_offset_t cc, struct gpu_power_experiment *x)
+ 	}
+ 	/* ABL leaves ahb and cxo enabled (they read running once CX is on); only
+ 	 * cx-gmu is off. Branches already enabled are used as found and never
+-	 * touched, so the undo path cannot disable a clock somebody else relies on. */
+-	for (unsigned int i = 0; i < 3; i++) {
++	 * touched, so the undo path cannot disable a clock somebody else relies on.
++	 * The GCC branches are voted: their status bit may read running because
++	 * of another master, so only the enable bit decides ownership. */
++	for (unsigned int i = 0; i < n; i++) {
+ 		uint32_t b = x->cbcr_before[i];
+-		if (b == ~0u || ((b & GPU_BRANCH_ENABLE) && (b & GPU_BRANCH_OFF)) ||
+-		    (!(b & GPU_BRANCH_ENABLE) && !(b & GPU_BRANCH_OFF))) {
++		if (b == ~0u) {
++			x->clk_error = "a GMU branch is unreadable; clocks not attempted";
++			return;
++		}
++		if (i < 3 && (((b & GPU_BRANCH_ENABLE) && (b & GPU_BRANCH_OFF)) ||
++		    (!(b & GPU_BRANCH_ENABLE) && !(b & GPU_BRANCH_OFF)))) {
+ 			x->clk_error = "a GMU branch has an inconsistent enable/status state; clocks not attempted";
+ 			return;
+ 		}
+@@ -320,27 +374,30 @@ gpu_clock_stage(vm_offset_t gcc, vm_offset_t cc, struct gpu_power_experiment *x)
+ 	}
+ 	x->rcg_cmd1 = gpu_read32(cc, GPU_GMU_RCG_CMD);
+ 	x->rcg_cfg1 = gpu_read32(cc, GPU_GMU_RCG_CFG);
+-	for (unsigned int i = 0; i < 3; i++) {
++	for (unsigned int i = 0; i < n; i++) {
+ 		x->clk_stage = 3 + i;
+ 		if (!(owned & (1u << i))) {
+ 			continue;
+ 		}
+ 		enabled |= 1u << i; /* enable bit is written even if the wait fails */
+-		if (gpu_branch_on(cc, branch[i], branch[i] == GPU_CC_CX_GMU ?
++		if (gpu_branch_on(i < 3 ? cc : gcc, off[i], off[i] == GPU_CC_CX_GMU ?
+ 		    GPU_CBCR_WAKE_SLEEP : 0, &x->cbcr_on[i])) {
+ 			x->clk_error = "a GMU branch did not turn on";
+ 			goto undo;
+ 		}
+ 	}
+-	x->clk_stage = 6;
++	x->clk_stage = 3 + n;
+ 	delay(GPU_GDSC_HOLD_US);
+-	for (unsigned int i = 0; i < 3; i++) {
+-		x->cbcr_on[i] = gpu_read32(cc, branch[i]);
++	for (unsigned int i = 0; i < n; i++) {
++		x->cbcr_on[i] = gpu_read32(i < 3 ? cc : gcc, off[i]);
++	}
++	if (mode >= 5) {
++		gpu_gmu_read(x);
+ 	}
+ undo:
+-	for (int i = 2; i >= 0; i--) {
++	for (int i = (int)n - 1; i >= 0; i--) {
+ 		if (enabled & (1u << i)) {
+-			gpu_branch_off(cc, branch[i], &x->cbcr_after[i]);
++			gpu_branch_off(i < 3 ? cc : gcc, off[i], &x->cbcr_after[i], i < 3);
+ 		}
+ 	}
+ 	if (set_gate) {
+@@ -386,8 +443,8 @@ gpu_power_experiment(vm_offset_t gcc, vm_offset_t cc, int mode,
+ 	if (x->enabled) {
+ 		delay(GPU_GDSC_HOLD_US);
+ 		x->after_hold = gpu_read32(cc, GPU_CX_GDSCR);
+-		if (mode == 4) {
+-			gpu_clock_stage(gcc, cc, x);
++		if (mode >= 4) {
++			gpu_clock_stage(gcc, cc, mode, x);
+ 		}
+ 	} else {
+ 		x->error = "CX PWR_ON did not assert";
+@@ -432,6 +489,22 @@ gpu_power_log(const struct gpu_power_experiment *x)
+ 	    x->cbcr_on[0], x->cbcr_on[1], x->cbcr_on[2]);
+ 	printf("SWEET GPU: GMU clk CBCR ahb/cx-gmu/cxo off   =0x%08x/0x%08x/0x%08x\n",
+ 	    x->cbcr_after[0], x->cbcr_after[1], x->cbcr_after[2]);
++	if (x->cbcr_before[3] || x->cbcr_on[3] || x->cbcr_before[4] || x->cbcr_on[4]) {
++		printf("SWEET GPU: GCC memnoc/ddrss-axi before=0x%08x/0x%08x on=0x%08x/0x%08x off=0x%08x/0x%08x\n",
++		    x->cbcr_before[3], x->cbcr_before[4], x->cbcr_on[3], x->cbcr_on[4],
++		    x->cbcr_after[3], x->cbcr_after[4]);
++	}
++	if (x->gmu_mapped) {
++		for (unsigned int i = 0; i < GPU_GMU_READS; i++) {
++			if (i < x->gmu_done) {
++				printf("SWEET GPU: GMU %s +0x%x = 0x%08x\n", gpu_gmu_regs[i].name,
++				    gpu_gmu_regs[i].off, x->gmu_value[i]);
++			} else {
++				printf("SWEET GPU: GMU %s +0x%x not read\n", gpu_gmu_regs[i].name,
++				    gpu_gmu_regs[i].off);
++			}
++		}
++	}
+ 	printf("SWEET GPU: GMU clk stage=%u restored=%u result: %s\n", x->clk_stage,
+ 	    x->clk_restored, x->clk_error ? x->clk_error : "complete, rolled back");
+ }
+@@ -629,8 +702,8 @@ sweet_gpu_probe(void)
+ 	if (!PE_parse_boot_argn("sweetgpu", &mode, sizeof(mode)) || mode == 0) {
+ 		return;
+ 	}
+-	if (mode < 1 || mode > 4) {
+-		printf("SWEET GPU: unsupported sweetgpu=%d (0=off, 1=clocks, 2=+ARC, 3=+CX, 4=+GMU clocks)\n", mode);
++	if (mode < 1 || mode > 5) {
++		printf("SWEET GPU: unsupported sweetgpu=%d (0=off, 1=clocks, 2=+ARC, 3=+CX, 4=+GMU clocks, 5=+GMU reads)\n", mode);
+ 		return;
+ 	}
+ 	if (mode >= 2) {

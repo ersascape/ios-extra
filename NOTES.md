@@ -1,5 +1,14 @@
 # ios-extra — active handoff
 
+## Active implementation — 0085 first GMU register reads (not yet built/booted)
+
+- `xnu/patches/0085-sweet-gpu-gmu-regs.patch` (on top of 0084): `sweetgpu=5` adds
+  GCC memnoc/ddrss-axi branches and reads 6 GMU CX registers; docs in
+  `docs/GPU_CX_EXPERIMENT.md`. Host tests pass (incl. ASan/UBSan); arm64 compile ok.
+  Isolated tree baseline 0a8eef9 (0084).
+- 0084 revised was home-screen confirmed by the user. Phone currently in fastboot
+  (user put it there) and idle.
+
 ## Latest phone result — 0084 revised GMU clock stage, 2026-10-18 20:11 UTC
 
 - `shim/out/shim-boot-0084-gmuclk.img` (SHA256 `b7bd5903…d652e6`, CI 39161422925,
