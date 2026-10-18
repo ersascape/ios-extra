@@ -1,5 +1,5 @@
 diff --git a/bsd/dev/sweet_gpu.c b/bsd/dev/sweet_gpu.c
-index e198fdc..4ecee45 100644
+index e198fdc..f2a2d16 100644
 --- a/bsd/dev/sweet_gpu.c
 +++ b/bsd/dev/sweet_gpu.c
 @@ -15,6 +15,9 @@
@@ -49,7 +49,7 @@ index e198fdc..4ecee45 100644
  };
  
  struct sweet_gpu_clock {
-@@ -183,6 +209,133 @@ gpu_gdsc_wait(vm_offset_t cc, int want, uint32_t *value)
+@@ -183,6 +209,147 @@ gpu_gdsc_wait(vm_offset_t cc, int want, uint32_t *value)
  	return 0;
  }
  
@@ -101,7 +101,7 @@ index e198fdc..4ecee45 100644
 +/*
 + * GMU clock stage, run with CX held on. Order follows downstream: parent
 + * gate, 200 MHz RCG config, then branches (ahb, cx-gmu with the recommended
-+ * wake/sleep fields, cxo). The undo path only disables what was enabled.
++ * wake/sleep fields, cxo). The undo path only disables what this code enabled.
 + * The RCG is left configured for 200 MHz: its UPDATE cannot be relied on
 + * to complete with the root idle, and nothing consumes it afterwards.
 + */
@@ -109,7 +109,7 @@ index e198fdc..4ecee45 100644
 +gpu_clock_stage(vm_offset_t gcc, vm_offset_t cc, struct gpu_power_experiment *x)
 +{
 +	static const uint32_t branch[3] = { GPU_CC_AHB, GPU_CC_CX_GMU, GPU_CC_CXO };
-+	unsigned int enabled = 0;
++	unsigned int enabled = 0, owned = 7;
 +	int set_gate = 0;
 +	uint32_t v;
 +
@@ -131,12 +131,23 @@ index e198fdc..4ecee45 100644
 +		x->clk_error = "GMU RCG unreadable; clocks not attempted";
 +		return;
 +	}
++	/* ABL leaves ahb and cxo enabled (they read running once CX is on); only
++	 * cx-gmu is off. Branches already enabled are used as found and never
++	 * touched, so the undo path cannot disable a clock somebody else relies on. */
 +	for (unsigned int i = 0; i < 3; i++) {
-+		if (x->cbcr_before[i] == ~0u || (x->cbcr_before[i] & GPU_BRANCH_ENABLE) ||
-+		    !(x->cbcr_before[i] & GPU_BRANCH_OFF)) {
-+			x->clk_error = "a GMU branch is not in the expected off state; clocks not attempted";
++		uint32_t b = x->cbcr_before[i];
++		if (b == ~0u || ((b & GPU_BRANCH_ENABLE) && (b & GPU_BRANCH_OFF)) ||
++		    (!(b & GPU_BRANCH_ENABLE) && !(b & GPU_BRANCH_OFF))) {
++			x->clk_error = "a GMU branch has an inconsistent enable/status state; clocks not attempted";
 +			return;
 +		}
++		if (b & GPU_BRANCH_ENABLE) {
++			owned &= ~(1u << i);
++		}
++	}
++	if (!(owned & 2u)) {
++		x->clk_error = "cx-gmu branch already enabled; clocks not attempted";
++		return;
 +	}
 +	x->clk_stage = 1;
 +	if (!(x->gate_before & GPU_GPLL0_DIV_GATE)) {
@@ -155,6 +166,9 @@ index e198fdc..4ecee45 100644
 +	x->rcg_cfg1 = gpu_read32(cc, GPU_GMU_RCG_CFG);
 +	for (unsigned int i = 0; i < 3; i++) {
 +		x->clk_stage = 3 + i;
++		if (!(owned & (1u << i))) {
++			continue;
++		}
 +		enabled |= 1u << i; /* enable bit is written even if the wait fails */
 +		if (gpu_branch_on(cc, branch[i], branch[i] == GPU_CC_CX_GMU ?
 +		    GPU_CBCR_WAKE_SLEEP : 0, &x->cbcr_on[i])) {
@@ -183,7 +197,7 @@ index e198fdc..4ecee45 100644
  /*
   * Mirrors the downstream gdsc_enable/disable order for the CX domain, which
   * has no clocks, resets or clamps of its own in the DT: parent rail first
-@@ -190,7 +343,8 @@ gpu_gdsc_wait(vm_offset_t cc, int want, uint32_t *value)
+@@ -190,7 +357,8 @@ gpu_gdsc_wait(vm_offset_t cc, int want, uint32_t *value)
   * collapses the domain again and releases the votes in reverse order.
   */
  static void
@@ -193,7 +207,7 @@ index e198fdc..4ecee45 100644
  {
  	uint32_t v;
  
-@@ -218,6 +372,9 @@ gpu_power_experiment(vm_offset_t cc, struct gpu_power_experiment *x)
+@@ -218,6 +386,9 @@ gpu_power_experiment(vm_offset_t cc, struct gpu_power_experiment *x)
  	if (x->enabled) {
  		delay(GPU_GDSC_HOLD_US);
  		x->after_hold = gpu_read32(cc, GPU_CX_GDSCR);
@@ -203,7 +217,7 @@ index e198fdc..4ecee45 100644
  	} else {
  		x->error = "CX PWR_ON did not assert";
  	}
-@@ -248,6 +405,21 @@ gpu_power_log(const struct gpu_power_experiment *x)
+@@ -248,6 +419,21 @@ gpu_power_log(const struct gpu_power_experiment *x)
  	printf("SWEET GPU: CX experiment collapse=%d polls=%u GDSCR=0x%08x\n",
  	    x->disabled, x->disable_polls, x->after_disable);
  	printf("SWEET GPU: CX experiment result: %s\n", x->error ? x->error : "complete, rolled back");
@@ -225,7 +239,7 @@ index e198fdc..4ecee45 100644
  }
  
  static void
-@@ -443,8 +615,8 @@ sweet_gpu_probe(void)
+@@ -443,8 +629,8 @@ sweet_gpu_probe(void)
  	if (!PE_parse_boot_argn("sweetgpu", &mode, sizeof(mode)) || mode == 0) {
  		return;
  	}
@@ -236,7 +250,7 @@ index e198fdc..4ecee45 100644
  		return;
  	}
  	if (mode >= 2) {
-@@ -474,12 +646,12 @@ sweet_gpu_probe(void)
+@@ -474,12 +660,12 @@ sweet_gpu_probe(void)
  	}
  	inventory.state = GPU_COMPLETE;
  	/* Only after the read-only inventory above, and only if the ARC tables parsed. */

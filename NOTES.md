@@ -1,6 +1,17 @@
 # ios-extra — active handoff
 
-## Active implementation — 0084 GMU clocks (not yet built/booted)
+## 0084 first phone boot — precondition refused, nothing written (2026-10-18 19:59 UTC)
+
+- `shim-boot-0084-gmuclk.img` (SHA e8dca213…c57d8, CI 39160714701, commit
+  473ab51) booted via fastboot; **user confirmed home screen**. CX experiment
+  repeated cleanly (0xf8222000 then 0x00222001). The GMU clock stage refused:
+  my precondition wrongly required ahb/cxo off. Measured instead: GPLL0 mode
+  0xd0100005, vote 0x1, gate 0x52004 0x01241d7b, RCG 0x80000000/0x0, CBCR
+  ahb/cx-gmu/cxo = 0x00000001/0x80004220/0x00000001. No clock register written.
+- Fix (0084 revised, not yet built): leave pre-enabled branches alone; own only
+  cx-gmu. Tests updated.
+
+## Active implementation — 0084 GMU clocks (revised after first boot; rebuild pending)
 
 - `xnu/patches/0084-sweet-gpu-gmu-clocks.patch`: `sweetgpu=4` runs a GMU clock
   stage inside the 0083 CX window (GPLL0/2 gate, RCG 200 MHz, ahb/cx-gmu/cxo

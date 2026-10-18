@@ -171,7 +171,9 @@ static void arc_reset(void)
     gcc[GPU_GCC_GPLL0_MODE / 4] = GPU_PLL_LOCK_DET | 7u;
     gcc[GPU_GCC_GPLL0_VOTE / 4] = 1;
     gcc[GPU_GCC_GPU_GPLL_VOTE / 4] = 1u << 15;
-    cc[GPU_CC_AHB / 4] = cc[GPU_CC_CX_GMU / 4] = cc[GPU_CC_CXO / 4] = 0x80004220u;
+    /* Phone-measured: ABL leaves ahb/cxo enabled (running once CX is on). */
+    cc[GPU_CC_AHB / 4] = cc[GPU_CC_CXO / 4] = 0x00000001u;
+    cc[GPU_CC_CX_GMU / 4] = 0x80004220u;
     cc[GPU_GMU_RCG_CMD / 4] = 0x80000000u; cc[GPU_GMU_RCG_CFG / 4] = 0x100u;
     db32(0, 1); db32(4, GPU_DB_MAGIC);
     db16(8, 3); db16(10, 0); db16(12, 128); db16(14, 3); db16(16, 0x100);
@@ -355,8 +357,12 @@ int main(void)
     assert(!(x->rcg_cmd1 & GPU_RCG_UPDATE) && (cmd0 & GPU_RCG_UPDATE) == 0);
     for (unsigned i = 0; i < 3; i++) {
         assert(!(x->cbcr_on[i] & GPU_BRANCH_OFF) && (x->cbcr_on[i] & 1u));
-        assert((x->cbcr_after[i] & GPU_BRANCH_OFF) && !(x->cbcr_after[i] & 1u));
     }
+    /* Only the branch this code enabled is disabled again. */
+    assert((x->cbcr_after[1] & GPU_BRANCH_OFF) && !(x->cbcr_after[1] & 1u));
+    assert(cc[GPU_CC_AHB / 4] == 1u && cc[GPU_CC_CXO / 4] == 1u && x->cbcr_after[0] == 0 &&
+           x->cbcr_after[2] == 0);
+    assert(!(cc[GPU_CC_CX_GMU / 4] & 1u));
     assert((x->cbcr_on[1] & GPU_CBCR_WAKE_SLEEP) == GPU_CBCR_WAKE_SLEEP);
     assert(gcc[GPU_GCC_GPU_GPLL_VOTE / 4] == (1u << 15)); /* gate restored */
     assert(x->gate_on & GPU_GPLL0_DIV_GATE);
@@ -378,7 +384,10 @@ int main(void)
     arc_reset(); mode = 4; cc[GPU_CX_GDSCR / 4] = GPU_CX_IDLE_GDSCR; cc[GPU_CC_CX_GMU / 4] = 0x4221u;
     arc_run(); assert(gpu_boot_inventory.power.clk_error && gpu_boot_inventory.power.clk_stage == 0);
     assert(cc[GPU_CC_CX_GMU / 4] == 0x4221u);
-    arc_reset(); mode = 4; cc[GPU_CX_GDSCR / 4] = GPU_CX_IDLE_GDSCR; cc[GPU_CC_CXO / 4] = ~0u;
+    arc_reset(); mode = 4; cc[GPU_CX_GDSCR / 4] = GPU_CX_IDLE_GDSCR; cc[GPU_CC_AHB / 4] = 0x80000001u; clk_stuck = 1;
+    arc_run(); assert(gpu_boot_inventory.power.clk_error && gpu_boot_inventory.power.clk_stage == 0);
+    assert(cc[GPU_CC_AHB / 4] == 0x80000001u);
+    arc_reset(); mode = 4; cc[GPU_CX_GDSCR / 4] = GPU_CX_IDLE_GDSCR; cc[GPU_CC_CXO / 4] = ~0u; clk_stuck = 4;
     arc_run(); assert(gpu_boot_inventory.power.clk_error && gpu_boot_inventory.power.clk_stage == 0);
     /* RCG update never completes: gate undone, no branch enabled. */
     arc_reset(); mode = 4; cc[GPU_CX_GDSCR / 4] = GPU_CX_IDLE_GDSCR; rcg_stuck = 1;
@@ -386,13 +395,13 @@ int main(void)
     arc_run(); x = &gpu_boot_inventory.power;
     assert(x->clk_error && x->clk_stage == 2 && x->clk_restored && x->disabled);
     assert(gcc[GPU_GCC_GPU_GPLL_VOTE / 4] == (1u << 15));
-    assert(cc[GPU_CC_AHB / 4] == 0x80004220u && cc[GPU_CC_CX_GMU / 4] == 0x80004220u);
+    assert(cc[GPU_CC_AHB / 4] == 1u && cc[GPU_CC_CX_GMU / 4] == 0x80004220u);
     /* cx-gmu branch never reports on: it and ahb are disabled again. */
     arc_reset(); mode = 4; cc[GPU_CX_GDSCR / 4] = GPU_CX_IDLE_GDSCR; clk_stuck = 2;
     arc_run(); x = &gpu_boot_inventory.power;
     assert(x->clk_error && x->clk_stage == 4 && x->clk_restored && x->disabled);
-    assert(!(cc[GPU_CC_CX_GMU / 4] & 1u) && !(cc[GPU_CC_AHB / 4] & 1u));
-    assert(!(cc[GPU_CC_CXO / 4] & 1u) && gcc[GPU_GCC_GPU_GPLL_VOTE / 4] == (1u << 15));
+    assert(!(cc[GPU_CC_CX_GMU / 4] & 1u) && cc[GPU_CC_AHB / 4] == 1u);
+    assert(cc[GPU_CC_CXO / 4] == 1u && gcc[GPU_GCC_GPU_GPLL_VOTE / 4] == (1u << 15));
     /* Mode 3 never runs the clock stage. */
     arc_reset(); mode = 3; cc[GPU_CX_GDSCR / 4] = GPU_CX_IDLE_GDSCR; arc_run();
     assert(!gpu_boot_inventory.power.clk_requested);

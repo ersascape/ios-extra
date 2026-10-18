@@ -52,15 +52,24 @@ untouched.
 
 Preconditions (otherwise nothing is written, reason cached): GPLL0 mode
 `LOCK_DET` set and apps vote (`0x52000` bit0) set; GMU RCG and the three
-branches readable; GPUCC ahb (`0x1078`), cx-gmu (`0x1098`) and cxo (`0x109c`)
-branches in the off state measured after ABL.
+branches readable and self-consistent (enable bit vs CLK_OFF); the cx-gmu
+branch (`0x1098`) disabled. The ahb (`0x1078`) and cxo (`0x109c`) branches are
+**already enabled by ABL** (phone: 0x00000001 each once CX is on; the earlier
+0x80000001 inventory reads were just CX being collapsed). Branches found
+enabled are used as they are and never touched; only branches this code enables
+are disabled again (report `off` values for the others read 0).
+
+First boot of the stage (0084 image e8dca213) refused on exactly this wrong
+assumption and wrote nothing; measured GPLL0 mode 0xd0100005 (locked), vote
+0x1, gate 0x52004 = 0x01241d7b (bit16 clear), RCG cmd/cfg 0x80000000/0x0 (root
+off, XO source), cx-gmu 0x80004220.
 
 Sequence (pinned Xiaomi `gpucc-sdmmagpie.c` / `gcc-sdmmagpie.c`):
 1. set `0x52004` bit16 (GPLL0/2 gate; bit15 and others preserved), 5 us;
 2. GMU RCG `0x1124`: source 6 (GPLL0_OUT_MAIN_DIV), HID 2 (divide 1.5, 200 MHz),
    then `CMD` UPDATE (bit0) and poll it clear (500 us bound);
-3. ahb, then cx-gmu (wake/sleep fields set to 0xF as downstream does), then cxo:
-   set enable bit, poll CLK_OFF (bit31) clear (500 us bound each);
+3. cx-gmu only in practice (wake/sleep fields set to 0xF as downstream does);
+   ahb/cxo only if they were found disabled. Set enable bit, poll CLK_OFF (bit31) clear (500 us bound each);
 4. hold 1 ms, read all three CBCRs;
 5. undo in reverse: disable branches (poll off), clear the gate only if this
    code set it, then the 0083 CX collapse and vote release.
