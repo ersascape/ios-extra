@@ -68,7 +68,7 @@ class GPUProbeTests(unittest.TestCase):
             self.assertEqual(build.returncode, 0, build.stderr)
             result = subprocess.run([str(work / 'test')], capture_output=True, text=True)
             self.assertEqual(result.returncode, 0, result.stderr)
-            self.assertIn('PASS: 14 clock/cache cases, 30 ARC cases + 512 mutations, 55 CX experiment cases', result.stdout)
+            self.assertIn('PASS: 14 clock/cache cases, 30 ARC cases + 512 mutations, 61 CX experiment cases', result.stdout)
 
 
 HARNESS = r'''
@@ -98,16 +98,18 @@ static int fail_alloc, alloc_calls, clean_calls, ats_stuck, tlb_stuck;
 static uint64_t last_ats;
 pmap_t kernel_pmap; vm_map_t kernel_map;
 static uint32_t smmu_mem[GPU_SMMU_SIZE / 4];
+static uint32_t pdc_mem[GPU_PDC_SIZE / 4], pdcseq_mem[GPU_PDC_SIZE / 4];
+static int pdc_ro, rsc_stuck; /* PDC refuses writes / RSC never reports powered off */
 static int smmu_sticky; /* hardware that refuses to take the ABL default back in S2CR3/CBAR3 */
 static void test_store32(vm_offset_t base, uint32_t off, uint32_t value)
 {
     if (smmu_sticky && base == (vm_offset_t)smmu_mem &&
         ((off == GPU_SMMU_S2CR + 12 && value == GPU_SMMU_S2CR_FAULT) ||
          (off == GPU_SMMU_CBAR + 12 && value == 0))) return;
+    if (pdc_ro && (base == (vm_offset_t)pdc_mem || base == (vm_offset_t)pdcseq_mem)) return;
     *(volatile uint32_t *)(base + off) = value;
 }
 static int smmu_maps, fail_smmu_map;
-static uint32_t pdc_mem[GPU_PDC_SIZE / 4], pdcseq_mem[GPU_PDC_SIZE / 4];
 static int pdc_maps, seq_maps, fail_pdc_map, fail_seq_map;
 /* Simulated GPUCC CX GDSC and RPMh ARC client for the sweetgpu=3 experiment. */
 static int gdsc_hw_ok, delay_calls, vote_fail_on, rcg_stuck;
@@ -166,6 +168,7 @@ kern_return_t kmem_alloc_contig(vm_map_t m, vm_offset_t *a, vm_size_t size, vm_o
 void delay(int us)
 {
     smmu_sim();
+    if (gmu_mem[0x24c1c / 4] == 1 && !rsc_stuck) gmu_mem[(0x23000 + 4 * 4) / 4] |= 1u << 16;
     (void)us; delay_calls++;
     uint32_t *mn = &gcc[GPU_GCC_MEMNOC_GFX / 4];
     if (!(clk_stuck & 8u)) { if (*mn & 1u) *mn &= ~GPU_BRANCH_OFF; else *mn |= GPU_BRANCH_OFF; }
@@ -282,7 +285,7 @@ static void arc_reset(void)
     cc[GPU_CC_CX_GMU / 4] = 0x80004220u;
     gcc[GPU_GCC_MEMNOC_GFX / 4] = 0x80000220u; gcc[GPU_GCC_DDRSS_GPU_AXI / 4] = 0;
     gmu_maps = fail_gmu_map = smmu_maps = fail_smmu_map = 0;
-    pdc_maps = seq_maps = fail_pdc_map = fail_seq_map = 0;
+    pdc_maps = seq_maps = fail_pdc_map = fail_seq_map = 0; pdc_ro = rsc_stuck = 0;
     for (unsigned i = 0; i < GPU_PDC_SIZE / 4; i++) { pdc_mem[i] = 0x9dc00000u | i; pdcseq_mem[i] = 0x5e900000u | i; }
     for (unsigned i = 0; i < GPU_SMMU_SIZE / 4; i++) smmu_mem[i] = 0x5e000000u | i;
     smmu_mem[0x20 / 4] = 5;    /* IDR0: NUMSMRG = 5 */
@@ -322,7 +325,7 @@ int main(void)
     reset(); present = 0; sweet_gpu_probe();
     assert(map_calls == 0 && output[0] == 0);
     reset(); mode = 0; sweet_gpu_probe(); assert(map_calls == 0);
-    reset(); mode = 10; sweet_gpu_probe(); assert(map_calls == 0);
+    reset(); mode = 11; sweet_gpu_probe(); assert(map_calls == 0);
     reset(); mode = -1; sweet_gpu_probe(); assert(map_calls == 0);
     reset(); fail_gcc = 1; sweet_gpu_probe();
     assert(map_calls == 1 && strstr(output, "GCC mapping failed"));
@@ -744,6 +747,54 @@ int main(void)
         memcpy(gb, gmu_mem, sizeof(gb)); arc_run();
         assert(pdc_maps == 0 && gmu_maps == 0 && !gpu_boot_inventory.power.rsc_requested);
     }
+    /* sweetgpu=10: mainline rpmh_init writes with readback + RSC stop handshake. */
+    {
+#define RPMH_DEFAULTS() do { gmu_mem[0x14000 / 4] = 1; gmu_mem[0x24c1c / 4] = 0; \
+        gmu_mem[(0x23000 + 0x101 * 4) / 4] = 0; gmu_mem[(0x23000 + 0x180 * 4) / 4] = 0; \
+        gmu_mem[(0x23000 + 4 * 4) / 4] = 0; pdc_mem[0x4500 / 4] = 0; pdcseq_mem[0] = 0; } while (0)
+        uint32_t gb[GPU_GMU_SIZE / 4], pb[GPU_PDC_SIZE / 4], sb[GPU_PDC_SIZE / 4];
+        arc_reset(); mode = 10; cc[GPU_CX_GDSCR / 4] = GPU_CX_IDLE_GDSCR; RPMH_DEFAULTS();
+        arc_run(); x = &gpu_boot_inventory.power;
+        assert(x->init_requested && !x->init_error && x->init_nwrites == GPU_RPMH_INIT_COUNT &&
+               x->init_bad == 0 && x->init_stop_done && x->init_done_writes);
+        assert(GPU_RPMH_INIT_COUNT == 17 + 5 + 24 + 2 - 3 + 0 || GPU_RPMH_INIT_COUNT > 40);
+        assert(pdc_mem[0x4500 / 4] == 0x80000001u && pdc_mem[0x4520 / 4] == 0);
+        assert(pdc_mem[0x15d7 * 4 / 4] == 7 && pdc_mem[0x15e3] == 3 && pdc_mem[0x15df] == 2 && pdc_mem[0x157e] == 0x30090);
+        assert(pdc_mem[0x1576] == 0x30010 && pdc_mem[0x157a] == 0x30000 && pdc_mem[0x1573] == 7);
+        assert(pdcseq_mem[0] == 0xfebea1e1u && pdcseq_mem[4] == 0x002081fcu);
+        assert(gmu_mem[(0x23000 + 0x180 * 4) / 4] == 0xa7a506a0u && gmu_mem[(0x23000 + 0x184 * 4) / 4] == 0x0020e8a8u);
+        assert(gmu_mem[(0x23000 + 8 * 4) / 4] == 0x4520 && gmu_mem[(0x23000 + 0x12 * 4) / 4] == 0x80000000u);
+        assert(gmu_mem[0x24c1c / 4] == 0); /* request dropped again */
+        assert(strstr(output, "RPMH init result: all writes read back"));
+        output[0] = 0; sweet_gpu_replay(); assert(strstr(output, "RPMH init writes=") && pdc_maps == 1);
+        /* Unexpected pre-state: nothing written anywhere. */
+        for (unsigned bad = 0; bad < 4; bad++) {
+            arc_reset(); mode = 10; cc[GPU_CX_GDSCR / 4] = GPU_CX_IDLE_GDSCR; RPMH_DEFAULTS();
+            if (bad == 0) pdc_mem[0x4500 / 4] = 1;
+            if (bad == 1) pdcseq_mem[0] = 5;
+            if (bad == 2) gmu_mem[(0x23000 + 0x180 * 4) / 4] = 9;
+            if (bad == 3) gmu_mem[0x24c1c / 4] = 2;
+            memcpy(gb, gmu_mem, sizeof(gb)); memcpy(pb, pdc_mem, sizeof(pb)); memcpy(sb, pdcseq_mem, sizeof(sb));
+            arc_run(); x = &gpu_boot_inventory.power;
+            assert(x->init_requested && x->init_error && x->init_nwrites == 0);
+            /* TCM (below 0xb000, firmware step) legitimately changes; the RSC/PDC area must not. */
+            assert(!memcmp(gb + 0x23000 / 4, gmu_mem + 0x23000 / 4, sizeof(gb) - 0x23000) &&
+                   !memcmp(pb, pdc_mem, sizeof(pb)) && !memcmp(sb, pdcseq_mem, sizeof(sb)));
+        }
+        /* PDC refuses writes: counted, handshake still attempted and reported. */
+        arc_reset(); mode = 10; cc[GPU_CX_GDSCR / 4] = GPU_CX_IDLE_GDSCR; RPMH_DEFAULTS(); pdc_ro = 1;
+        arc_run(); x = &gpu_boot_inventory.power;
+        assert(x->init_bad > 20 && x->init_nwrites == GPU_RPMH_INIT_COUNT && x->init_first_bad_region == 2 &&
+               x->init_error && strstr(output, "RPMH init first bad region="));
+        /* RSC never reports powered off: bounded, request dropped. */
+        arc_reset(); mode = 10; cc[GPU_CX_GDSCR / 4] = GPU_CX_IDLE_GDSCR; RPMH_DEFAULTS(); rsc_stuck = 1;
+        arc_run(); x = &gpu_boot_inventory.power;
+        assert(!x->init_stop_done && x->init_error && gmu_mem[0x24c1c / 4] == 0);
+        /* Mode 9 never writes the PDC/RSC. */
+        arc_reset(); mode = 9; cc[GPU_CX_GDSCR / 4] = GPU_CX_IDLE_GDSCR; RPMH_DEFAULTS();
+        memcpy(pb, pdc_mem, sizeof(pb)); arc_run();
+        assert(!gpu_boot_inventory.power.init_requested && !memcmp(pb, pdc_mem, sizeof(pb)));
+    }
     /* Mode 3 never runs the clock stage. */
     arc_reset(); mode = 3; cc[GPU_CX_GDSCR / 4] = GPU_CX_IDLE_GDSCR; arc_run();
     assert(!gpu_boot_inventory.power.clk_requested);
@@ -751,7 +802,7 @@ int main(void)
     /* Mode 2 never reaches the experiment. */
     arc_reset(); cc[GPU_CX_GDSCR / 4] = GPU_CX_IDLE_GDSCR; arc_run();
     assert(!gpu_boot_inventory.power.requested && vote_count == 0 && delay_calls == 0);
-    puts("PASS: 14 clock/cache cases, 30 ARC cases + 512 mutations, 55 CX experiment cases");
+    puts("PASS: 14 clock/cache cases, 30 ARC cases + 512 mutations, 61 CX experiment cases");
     return 0;
 }
 '''

@@ -1,0 +1,191 @@
+diff --git a/bsd/dev/sweet_gpu.c b/bsd/dev/sweet_gpu.c
+index 10d9c14..2d38f75 100644
+--- a/bsd/dev/sweet_gpu.c
++++ b/bsd/dev/sweet_gpu.c
+@@ -34,6 +34,9 @@
+  * sweetgpu=9 additionally reads (never writes) the GPU RSC/RSCC registers inside
+  * the GMU block and the two GPU PDC regions (0x0b290000, 0x0b490000) that mainline
+  * programs before booting the GMU, to see what ABL left there.
++ * sweetgpu=10 performs mainline's a6xx_gmu_rpmh_init for A618: RSCC, RSC sequencer
++ * microcode, PDC sequence memory and PDC TCS commands, then the RSC "stop" handshake,
++ * with an immediate readback of every write. It leaves that configuration in place.
+  * Register provenance and limitations: ios-extra/docs/GPU_BRINGUP.md.
+  */
+ #if defined(ARM64_BOARD_CONFIG_SWEET)
+@@ -129,6 +132,8 @@ int sweet_rpmh_arc_set(const char *res, unsigned corner, unsigned *level);
+ #define GPU_PDC_SIZE            0x00010000
+ #define GPU_PDC_READS           6u
+ #define GPU_PDC_SEQ_READS       5u
++#define GPU_RPMH_INIT_LOG       80u
++#define GPU_RPMH_STOP_POLL_US   10000u
+ #define GPU_SMMU_LOG            40u
+ #define GPU_GDSC_HOLD_US        1000u
+ 
+@@ -194,6 +199,13 @@ struct gpu_power_experiment {
+ 	/* sweetgpu=9: RSC/PDC read-only inventory (done = reads completed per group). */
+ 	unsigned int rsc_requested, rsc_done, pdc_mapped, pdc_done, seq_mapped, seq_done;
+ 	uint32_t rsc_value[GPU_RSC_READS], pdc_value[GPU_PDC_READS], seq_value[GPU_PDC_SEQ_READS];
++	/* sweetgpu=10: mainline rpmh_init writes with readback. */
++	vm_offset_t pdc_base, seq_base; /* mappings from the read-only pass, reused for the writes */
++	unsigned int init_requested, init_nwrites, init_bad, init_stop_done, init_done_writes;
++	const char *init_error;
++	uint32_t init_stop_status, init_first_bad_off;
++	unsigned char init_first_bad_region;
++	uint32_t init_first_bad_wrote, init_first_bad_got;
+ 	/* Write transcript: every SMMU write with its immediate readback. */
+ 	unsigned int ctx_nlog;
+ 	uint32_t ctx_log_off[GPU_SMMU_LOG];
+@@ -675,6 +687,7 @@ gpu_rsc_read(vm_offset_t gmu, struct gpu_power_experiment *x)
+ 	pdc = ml_io_map(GPU_PDC_PA, GPU_PDC_SIZE);
+ 	if (pdc) {
+ 		x->pdc_mapped = 1;
++		x->pdc_base = pdc;
+ 		for (unsigned int i = 0; i < GPU_PDC_READS; i++) {
+ 			printf("SWEET GPU: reading PDC %s +0x%x\n", gpu_pdc_regs[i].name, gpu_pdc_regs[i].off);
+ 			x->pdc_value[i] = gpu_read32(pdc, gpu_pdc_regs[i].off);
+@@ -684,6 +697,7 @@ gpu_rsc_read(vm_offset_t gmu, struct gpu_power_experiment *x)
+ 	seq = ml_io_map(GPU_PDC_SEQ_PA, GPU_PDC_SIZE);
+ 	if (seq) {
+ 		x->seq_mapped = 1;
++		x->seq_base = seq;
+ 		for (unsigned int i = 0; i < GPU_PDC_SEQ_READS; i++) {
+ 			printf("SWEET GPU: reading PDC SEQ_MEM_%u +0x%x\n", i, 4 * i);
+ 			x->seq_value[i] = gpu_read32(seq, 4 * i);
+@@ -692,6 +706,97 @@ gpu_rsc_read(vm_offset_t gmu, struct gpu_power_experiment *x)
+ 	}
+ }
+ 
++/* One write of mainline's A618 a6xx_gmu_rpmh_init. region 0 = GMU block (RSCC base
++ * 0x23000 applied by the table), 1 = gmu_pdc, 2 = gmu_pdc_seq. off is a byte offset. */
++static const struct { unsigned char region; uint32_t off; uint32_t value; } gpu_rpmh_init[] = {
++	{ 0, GPU_RSCC_BASE + 0x0004 * 4, 1u << 24 },          /* disable SDE clock gating */
++	{ 0, GPU_RSCC_BASE + 0x000b * 4, 1 },                 /* PDC_SLAVE_ID_DRV0 */
++	{ 0, GPU_RSCC_BASE + 0x000e * 4, 0 },                 /* HIDDEN_TCS_CMD0_DATA */
++	{ 0, GPU_RSCC_BASE + 0x000d * 4, 0 },                 /* HIDDEN_TCS_CMD0_ADDR */
++	{ 0, GPU_RSCC_BASE + 0x0010 * 4, 0 },
++	{ 0, GPU_RSCC_BASE + 0x000f * 4, 0 },
++	{ 0, GPU_RSCC_BASE + 0x0012 * 4, 0x80000000u },
++	{ 0, GPU_RSCC_BASE + 0x0011 * 4, 0 },
++	{ 0, GPU_RSCC_BASE + 0x0100 * 4, 0 },                 /* OVERRIDE_START_ADDR */
++	{ 0, GPU_RSCC_BASE + 0x0008 * 4, 0x4520 },            /* PDC_SEQ_START_ADDR */
++	{ 0, GPU_RSCC_BASE + 0x0009 * 4, 0x4510 },            /* PDC_MATCH_VALUE_LO */
++	{ 0, GPU_RSCC_BASE + 0x000a * 4, 0x4514 },            /* PDC_MATCH_VALUE_HI */
++	{ 0, GPU_RSCC_BASE + 0x0180 * 4, 0xa7a506a0u },       /* RSC sequencer uCode */
++	{ 0, GPU_RSCC_BASE + 0x0181 * 4, 0xa1e6a6e7u },
++	{ 0, GPU_RSCC_BASE + 0x0182 * 4, 0xa2e081e1u },
++	{ 0, GPU_RSCC_BASE + 0x0183 * 4, 0xe9a982e2u },
++	{ 0, GPU_RSCC_BASE + 0x0184 * 4, 0x0020e8a8u },
++	{ 2, 0 * 4, 0xfebea1e1u },                            /* PDC sequencer uCode */
++	{ 2, 1 * 4, 0xa5a4a3a2u },
++	{ 2, 2 * 4, 0x8382a6e0u },
++	{ 2, 3 * 4, 0xbce3e284u },
++	{ 2, 4 * 4, 0x002081fcu },
++	{ 1, 0x1573 * 4, 7 }, { 1, 0x1574 * 4, 0 }, { 1, 0x1572 * 4, 0 },   /* TCS1 (sleep) */
++	{ 1, 0x1575 * 4, 0x10108 }, { 1, 0x1576 * 4, 0x30010 }, { 1, 0x1577 * 4, 1 },
++	{ 1, 0x1579 * 4, 0x10108 }, { 1, 0x157a * 4, 0x30000 }, { 1, 0x157b * 4, 0 },
++	{ 1, 0x157d * 4, 0x10108 }, { 1, 0x157e * 4, 0x30090 }, { 1, 0x157f * 4, 0 },
++	{ 1, 0x15d7 * 4, 7 }, { 1, 0x15d8 * 4, 0 }, { 1, 0x15d6 * 4, 0 },   /* TCS3 (wake), A618 data */
++	{ 1, 0x15d9 * 4, 0x10108 }, { 1, 0x15da * 4, 0x30010 }, { 1, 0x15db * 4, 2 },
++	{ 1, 0x15dd * 4, 0x10108 }, { 1, 0x15de * 4, 0x30000 }, { 1, 0x15df * 4, 2 },
++	{ 1, 0x15e1 * 4, 0x10108 }, { 1, 0x15e2 * 4, 0x30090 }, { 1, 0x15e3 * 4, 3 },
++	{ 1, 0x1148 * 4, 0 },                                 /* GPU_SEQ_START_ADDR */
++	{ 1, 0x1140 * 4, 0x80000001u },                       /* GPU_ENABLE_PDC */
++};
++#define GPU_RPMH_INIT_COUNT (sizeof(gpu_rpmh_init) / sizeof(gpu_rpmh_init[0]))
++
++static void
++gpu_rpmh_init_run(vm_offset_t gmu, struct gpu_power_experiment *x)
++{
++	vm_offset_t base[3] = { gmu, 0, 0 };
++
++	x->init_requested = 1;
++	/* Only on the state measured by 0090: PDC disabled, sequencer memories empty, idle RSC. */
++	if (!x->pdc_mapped || !x->seq_mapped || x->rsc_done < GPU_RSC_READS || x->pdc_done < GPU_PDC_READS ||
++	    x->seq_done < GPU_PDC_SEQ_READS) {
++		x->init_error = "RSC/PDC inventory incomplete; nothing written";
++		return;
++	}
++	if (x->pdc_value[0] != 0 || x->seq_value[0] != 0 || x->rsc_value[9] != 0 ||
++	    x->rsc_value[12] != 0 || x->rsc_value[8] != 0) {
++		x->init_error = "RSC/PDC not in the expected unprogrammed state; nothing written";
++		return;
++	}
++	base[1] = x->pdc_base;
++	base[2] = x->seq_base;
++	for (unsigned int i = 0; i < GPU_RPMH_INIT_COUNT; i++) {
++		uint32_t got;
++		gpu_write32(base[gpu_rpmh_init[i].region], gpu_rpmh_init[i].off, gpu_rpmh_init[i].value);
++		x->init_nwrites = i + 1;
++		got = gpu_read32(base[gpu_rpmh_init[i].region], gpu_rpmh_init[i].off);
++		if (got != gpu_rpmh_init[i].value) {
++			if (!x->init_bad) {
++				x->init_first_bad_region = gpu_rpmh_init[i].region;
++				x->init_first_bad_off = gpu_rpmh_init[i].off;
++				x->init_first_bad_wrote = gpu_rpmh_init[i].value;
++				x->init_first_bad_got = got;
++			}
++			x->init_bad++;
++		}
++	}
++	x->init_done_writes = 1;
++	/* a6xx_rpmh_stop: request the RSC power-off handshake, wait for the status bit. */
++	gpu_write32(gmu, 0x9307 * 4, 1);
++	for (unsigned int i = 0; i < GPU_RPMH_STOP_POLL_US; i++) {
++		x->init_stop_status = gpu_read32(gmu, GPU_RSCC_BASE + 0x0004 * 4);
++		if (x->init_stop_status != ~0u && (x->init_stop_status & (1u << 16))) {
++			x->init_stop_done = 1;
++			break;
++		}
++		delay(1);
++	}
++	gpu_write32(gmu, 0x9307 * 4, 0);
++	if (!x->init_stop_done) {
++		x->init_error = "RSC stop handshake did not complete";
++	} else if (x->init_bad) {
++		x->init_error = "some writes did not read back";
++	}
++}
++
+ static void
+ gpu_gmu_read(struct gpu_power_experiment *x, int mode)
+ {
+@@ -713,6 +818,9 @@ gpu_gmu_read(struct gpu_power_experiment *x, int mode)
+ 	if (mode >= 9) {
+ 		gpu_rsc_read(gmu, x);
+ 	}
++	if (mode >= 10) {
++		gpu_rpmh_init_run(gmu, x);
++	}
+ 	if (mode >= 7) {
+ 		vm_offset_t smmu = gpu_smmu_read(x);
+ 		if (smmu && mode >= 8) {
+@@ -950,6 +1058,18 @@ gpu_power_log(const struct gpu_power_experiment *x)
+ 		}
+ 		printf("SWEET GPU: SMMU micro-mmu +0x6000 = 0x%08x (read-only inventory)\n", x->smmu_micro);
+ 	}
++	if (x->init_requested) {
++		printf("SWEET GPU: RPMH init writes=%u/%u bad=%u stop-handshake=%u RSC_STATUS0=0x%08x\n",
++		    x->init_nwrites, (unsigned int)GPU_RPMH_INIT_COUNT, x->init_bad, x->init_stop_done,
++		    x->init_stop_status);
++		if (x->init_bad) {
++			printf("SWEET GPU: RPMH init first bad region=%u off=+0x%x wrote=0x%08x got=0x%08x\n",
++			    x->init_first_bad_region, x->init_first_bad_off, x->init_first_bad_wrote,
++			    x->init_first_bad_got);
++		}
++		printf("SWEET GPU: RPMH init result: %s\n", x->init_error ? x->init_error :
++		    "all writes read back; RSC stop handshake complete (configuration left in place)");
++	}
+ 	if (x->rsc_requested) {
+ 		for (unsigned int i = 0; i < GPU_RSC_READS; i++) {
+ 			printf("SWEET GPU: RSC %s +0x%x = 0x%08x%s\n", gpu_rsc_regs[i].name, gpu_rsc_regs[i].off,
+@@ -1182,8 +1302,8 @@ sweet_gpu_probe(void)
+ 	if (!PE_parse_boot_argn("sweetgpu", &mode, sizeof(mode)) || mode == 0) {
+ 		return;
+ 	}
+-	if (mode < 1 || mode > 9) {
+-		printf("SWEET GPU: unsupported sweetgpu=%d (0=off, 1=clocks, 2=+ARC, 3=+CX, 4=+GMU clocks, 5=+GMU reads, 6=+GMU firmware to TCM, 7=+SMMU read, 8=+GMU SMMU context test, 9=+RSC/PDC read)\n", mode);
++	if (mode < 1 || mode > 10) {
++		printf("SWEET GPU: unsupported sweetgpu=%d (0=off, 1=clocks, 2=+ARC, 3=+CX, 4=+GMU clocks, 5=+GMU reads, 6=+GMU firmware to TCM, 7=+SMMU read, 8=+GMU SMMU context test, 9=+RSC/PDC read, 10=+RSC/PDC init)\n", mode);
+ 		return;
+ 	}
+ 	if (mode >= 2) {

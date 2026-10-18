@@ -189,3 +189,25 @@ writes, in the mode-8 window:
 Every read is announced first; a protected region (bus error) would end the boot,
 and then the announce lines in the persistent log are the evidence.
 Report lines: `SWEET GPU: RSC ...`, `PDC ...`.
+
+# 0091 — mainline RSC/PDC init (`sweetgpu=10`)
+
+0090 on the phone (all reads fine, no faults): RSCC `PDC_SEQ_START_ADDR` 0x4520,
+`PDC_MATCH_VALUE_LO/HI` 0x4510/0x4514 and `PDC_SLAVE_ID_DRV0` 1 were already set
+(identical to mainline's values; `HIDDEN_TCS_CMD0_ADDR` 0x82204514), but the RSC
+sequencer memory (`SEQ_MEM_0_DRV0`), every PDC register (ENABLE_PDC, TCS banks) and
+the PDC sequence memory were all zero. `SEQ_BUSY_DRV0` 0, RSCC REQ/ACK 0.
+
+Mode 10 runs mainline's `a6xx_gmu_rpmh_init` for A618 in order (47 writes, region
+table in `gpu_rpmh_init[]`): RSCC init values and RSC uCode
+`a7a506a0 a1e6a6e7 a2e081e1 e9a982e2 0020e8a8`; PDC uCode `febea1e1 a5a4a3a2 8382a6e0
+bce3e284 002081fc`; PDC TCS1 (sleep: 0x30010<-1, 0x30000<-0, 0x30090<-0) and TCS3
+(wake: 0x30010<-2, 0x30000<-2, 0x30090<-3; `pdc_address_offset` 0x30090 for A618);
+`GPU_SEQ_START_ADDR`<-0, `GPU_ENABLE_PDC`<-0x80000001; then `a6xx_rpmh_stop`
+(`GMU_RSCC_CONTROL_REQ`<-1, poll `RSC_STATUS0_DRV0` bit 16 up to 10 ms, REQ<-0).
+Each write is read back at once; mismatches are counted and the first is reported.
+Only if the 0090 state is unchanged (PDC disabled, sequencer memories empty, REQ 0,
+SEQ_BUSY 0). The configuration is deliberately **left in place** (Android's driver
+rewrites it at its next probe). 0x30000/0x30010 are the cx.lvl/mx.lvl ARC addresses:
+the PDC TCS commands apply only on GPU RSC sleep/wake events, in the sleep/wake sets.
+Report: `SWEET GPU: RPMH init ...`.

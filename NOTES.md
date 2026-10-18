@@ -1,6 +1,27 @@
 # ios-extra — active handoff
 
-## Active implementation — 0090 RSC/PDC read-only inventory (not yet built/booted)
+## Latest phone result — 0090 RSC/PDC read-only inventory, 2026-10-18 21:58 UTC
+
+- `shim/out/shim-boot-0090-rscpdc.img` (SHA256 `a30aef87…695787`, CI 39169517724,
+  sweetgpu=9), fastboot success 0.566s. Logs outside Git: logs/phone-0090-*.
+- **No faults: GMU-block RSCC registers and both PDC regions (0x0b290000, 0x0b490000)
+  are readable.** RSCC already holds the mainline values PDC_SEQ_START_ADDR=0x4520,
+  PDC_MATCH_LO/HI=0x4510/0x4514, PDC_SLAVE_ID_DRV0=1 (HIDDEN_TCS_CMD0_ADDR=
+  0x82204514); everything else is zero: RSC_STATUS0 0, OVERRIDE 0, SEQ_BUSY 0,
+  SEQ_MEM_0 0, TCS0/TCS3 status 1, RSCC REQ/ACK 0; PDC ENABLE_PDC, SEQ_START,
+  TCS0/1/3 banks and SEQ_MEM_0..4 all 0. So ABL/firmware did part of the RSCC setup
+  but the PDC/RSC sequencer programming is still missing.
+- User did not report the home screen for this boot yet.
+
+## Active implementation — 0091 mainline RSC/PDC init (not yet built/booted)
+
+- `xnu/patches/0091-sweet-gpu-rpmh-init.patch`: `sweetgpu=10` performs mainline
+  `a6xx_gmu_rpmh_init` for A618 with readback of every write, then the RSC stop
+  handshake; leaves the configuration in place. Docs: `docs/GPU_CX_EXPERIMENT.md`.
+  Host tests (61 cases) pass incl. ASan/UBSan; arm64 compile ok. Isolated baseline
+  8bd13d2 (0090).
+
+## Active implementation — 0090 RSC/PDC read-only inventory (built, phone-tested)
 
 - `xnu/patches/0090-sweet-gpu-rsc-pdc-inventory.patch`: `sweetgpu=9` reads the GPU RSCC
   (gmu+0x23000), RSCC handshake and the two PDC regions before the real mainline
