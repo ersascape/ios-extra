@@ -7,8 +7,17 @@
   enable, PWR_ON check, full rollback). Details: `docs/GPU_CX_EXPERIMENT.md`.
 - Host tests pass (4 tests, also ASan/UBSan); arm64 objects compile (0/2 failed).
   Isolated tree baseline for 0083 is local commit 843344a (0082).
-- **Next:** push, CI build, package `shim-boot-0083-cx.img`, ask user before the
-  first hardware-write boot.
+- Implementation **1408d1c** pushed; CI **39159151996 PASSED**. Kernel SHA256
+  `de3a8499286902ba07ddc697f9a8337b6746a6882b896fa8bcf97a2af50a8a14` (checksum
+  file verified); `_sweet_rpmh_arc_set` and `_sweet_gpu_probe` linked; CI copies
+  of sweet_gpu.c/sweet_rpmh.c match the isolated tree. Artifacts `out-0083/`,
+  `ci-0083/` (external).
+- Images (17,203,200 bytes, ADT identical to 0082): `shim/out/shim-boot-0083-cx.img`
+  (sweetgpu=3) SHA256 `836062ec0a3882850ee5e95a42f4f2833395bde632a2a5761ed778932dabc451`,
+  and `shim-boot-0083-arc.img` (sweetgpu=2 fallback). Manifest manifest-0083.json.
+- **Next:** boot `shim-boot-0083-cx.img` once (first GPU hardware write), using the
+  HANDOFF.md capture procedure with phone-0083 file names. Report the lines
+  `SWEET GPU: CX experiment ...`. Another agent also uses the phone: coordinate.
 
 ## Latest phone result — 0082 ARC inventory, 2026-10-18 19:23 UTC
 
