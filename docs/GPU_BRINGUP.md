@@ -38,8 +38,9 @@ that guarantee yet. The probe therefore never maps the GPU, GMU, GPU SMMU,
 firmware memory or protected carve-outs, even if the clock inventory looks on.
 It performs no MMIO writes, votes, resets or firmware operations.
 
-This is a source-derived access policy. Its behavior on the phone after ABL
-is still untested; a successful compile does not validate MMIO accessibility.
+This is a source-derived access policy, subsequently exercised on one phone
+boot through the home screen as recorded below. That result validates this
+limited inventory path for that boot, not arbitrary GPU register access.
 
 ## Isolated local build
 
@@ -140,4 +141,31 @@ produce the GPUCC inventory, ending with
 Test both the default mode and the opt-in mode, keeping the existing UI and
 USB logging functioning. Record the actual clock/domain values before
 designing power-up, firmware loading and GPU address-space support.
-No hardware test has been run in this session.
+### First phone result
+
+At 18:27:49 UTC on 2026-10-18 the user authorized a temporary fastboot boot
+of `shim-boot-0080-probe.img`. Fastboot completed successfully in 0.562s.
+USB Ethernet responded to 3/3 pings with 0% loss. The stream shows the probe
+completion, HFS root mount, iOS processes and framebuffer swaps; the user
+confirmed the home screen. No images were flashed.
+
+| Captured GPUCC branch | Raw CBCR | Reported state |
+| --- | --- | --- |
+| CX GMU | `0x80004220` | off |
+| CXO | `0x80000001` | off |
+| CX GFX3D | `0x80000000` | off |
+| CX slave | `0x80000000` | off |
+| GX GFX3D | `0x80004220` | off |
+| GX CXO | `0x80000001` | off |
+| GX GMU | `0x80000000` | off |
+
+The stream begins partway through the inventory, so it does not contain the
+GCC and CX/GX domain-control readings. Their raw values remain unknown.
+Recover the persistent console or repeat the inventory after USB is established
+before using those values to plan power-up. The terminal probe message confirms
+that GPU/GMU/SMMU accesses were skipped and no hardware writes were performed.
+
+A separate packet capture preserved 621 log datagrams; tcpdump reported zero
+kernel capture drops. The existing UDP receiver was not disturbed. Evidence:
+`/run/media/dipa/android/ios-extra-work/logs/phone-0080-{fastboot.txt,probe.pcap,probe.txt}`.
+The independent capture was stopped after recording the confirmed home screen.

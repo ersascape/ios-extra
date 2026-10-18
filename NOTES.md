@@ -1,5 +1,40 @@
 # ios-extra — active handoff
 
+## Latest phone result — 2026-10-18
+
+- **Probe 0080 temporary boot PASSED; user confirmed the home screen.**
+  Boot started at **18:27:49 UTC**, using
+  `shim/out/shim-boot-0080-probe.img`, SHA256
+  `7deeb1c9badd6cda5f3e5dcf4959f909680b1b1b1ecf4ee40d05e1651265b5d9`.
+  Exactly one fastboot device was detected. `fastboot boot` returned success:
+  send 0.420s, boot 0.136s, total 0.562s. No images were flashed.
+- The probe completed, USB ECM came up on `enp0s20f0u3u1`, and ping to
+  192.168.7.2 returned 3/3 packets, 0% loss, average 0.554ms.
+- Logs show HFS root mount, launchd/SpringBoard/backboardd startup and
+  framebuffer swaps. No kernel panic or SpringBoard/backboardd crash marker
+  was observed in the captured stream. The user separately confirmed GUI
+  arrival; this is not inferred merely from process startup.
+- Captured GPUCC branches are OFF: CX GMU `0x80004220`, CXO `0x80000001`,
+  CX GFX3D `0x80000000`, CX slave `0x80000000`, GX GFX3D `0x80004220`,
+  GX CXO `0x80000001`, GX GMU `0x80000000`. The final probe line confirms
+  GPU/GMU/SMMU were skipped and no hardware writes were performed.
+- **Capture limitation:** live UDP starts partway through the inventory.
+  GCC and CX/GX GDSCR raw values are missing; do not infer domain state from
+  those absent lines. The precise early-stream loss mechanism is unverified.
+- Existing UDP receiver was left running. Used a separate tcpdump capture,
+  then stopped only our tcpdump process after the home-screen confirmation:
+  621 packets captured, 0 dropped by tcpdump's kernel capture path. This does
+  not establish that every UDP datagram was emitted/delivered by the phone.
+- Local evidence, kept out of Git, under `ios-extra-work/logs/`:
+  `phone-0080-fastboot.txt`, `phone-0080-probe.pcap`,
+  `phone-0080-probe.txt` (200,037 bytes). Decoder in this checkout's ignored
+  `research/decode-probe-pcap.py`. Other agents' checkout was not edited.
+- **Next GPU step:** obtain the missing complete power/clock inventory
+  (persistent console extraction or a delayed/repeated read-only report)
+  before implementing controlled CX/GMU/GX initialization, firmware loading,
+  SMMU mappings and the first command-processor memory write. The phone is
+  left running this probe kernel at the home screen.
+
 ## Purpose and workspace
 
 - Created 2026-10-18 at the user's request as a separate, initially private
@@ -32,15 +67,16 @@
   navigation fixes; 0078 allows eight CPU cores; 0079 adds framebuffer
   fade-to-black for display-off. Neither the presence of a patch nor a local
   kernel artifact proves its latest phone test passed.
-- This session has not booted, flashed or otherwise changed the phone.
+- The initial source/build work did not access the phone; the subsequent
+  user-authorized temporary boot and result are recorded above.
 
 ## Builds and integration
 
 - `.github/workflows/xnu.yml` retains the inherited build and staging process.
   Its build job runs only when repository visibility is public. The user
   approved publication; public builds are now enabled.
-- GPU probe 0080 is implemented, locally cross-compiled and fully CI-linked.
-  No GPU phone test has been performed.
+- GPU probe 0080 is implemented, locally cross-compiled, fully CI-linked and
+  phone-tested through the home screen. GPU execution remains unimplemented.
 - Verified initial push workflow run **39150033548**, head `8b1e4f2`:
   completed with conclusion **skipped**. No macOS build ran while private.
 - Verified the imported baseline Git tree exactly matches upstream `347e190`
@@ -122,7 +158,7 @@
   setup; `MTLIOAccelDevice` adds IOAccel device/configuration/shared-memory
   contracts. Evidence and candidate custom-transport implications recorded
   in `docs/GPU_API_RE.md`.
-- Next: coordinate a separate phone test.
+- The phone test above supersedes the earlier pending-test state.
   iOS renderer selection,
   power-up, firmware, SMMU and submission remain future milestones.
-  No GPU hardware test or upstream integration yet.
+  No GPU command execution or upstream integration yet.
