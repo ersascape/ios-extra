@@ -1,6 +1,28 @@
 # ios-extra — active handoff
 
-## Active implementation — 0089 SMMU write transcript (not yet built/booted)
+## Latest phone result — 0089 SMMU write transcript, 2026-10-18 21:44 UTC
+
+- `shim/out/shim-boot-0089-smmuctx.img` (SHA256 `f45e1d25…a0ddd3`, CI 39168706195,
+  sweetgpu=8); fastboot success 0.567s. Logs outside Git: logs/phone-0089-*.
+  (Home screen for this boot not yet confirmed.) ATOS results identical to 0088.
+- Transcript (write -> readback): CBA2R3<-1 ok; CBAR3<-0x10000 low bits ok; CB3
+  TCR2/TCR/TTBR0/MAIR/SCTLR(0x27) all read back exactly; S2CR3<-3 ok; SMR3<-
+  0x80000005 ok (valid bit stuck); restore: SMR3<-0 ok; **S2CR3<-0x200ff and <-0x20000
+  both refused (stays 3); CBAR3<-0 and <-0x20000 both refused (stays 0x10000)**;
+  CB3 registers (SCTLR/TTBR0/TCR/TCR2/MAIR) all clear again; CBA2R3<-0 accepted.
+- Pattern: every refused write has TYPE field value 0 (CBAR) or 2 (S2CR): only
+  translate/bypass-type S2CR and stage-1/nested-type CBAR are accepted. Inference,
+  not proven.
+- **Anomaly:** several 32-bit readbacks of GR0/GR1 registers (SMR/S2CR/CBAR/CBA2R,
+  not the CB registers) came back with 0xfffffe3f in bits 63:32 of the 64-bit
+  variable although the instruction was `ldr w` (verified in the arm64 object): a
+  hardware load cannot do that, so these register pages are probably trapped and
+  emulated by the hypervisor with sloppy upper bits. Treat GR0/GR1 reads as 32-bit.
+- Net: the SMMU is partly hypervisor-mediated; stream 5 -> CB3 programming works and
+  an SMR write of 0 safely deactivates it. Left behind: S2CR3=3, CBAR3=0x10000 with
+  SMR3 invalid and SCTLR=0 (inert).
+
+## Active implementation — 0089 SMMU write transcript (built, phone-tested above)
 
 - `xnu/patches/0089-sweet-gpu-smmu-write-transcript.patch`: same `sweetgpu=8`, now
   records each SMMU write with immediate readback and tries inert alternatives for
