@@ -68,7 +68,7 @@ class GPUProbeTests(unittest.TestCase):
             self.assertEqual(build.returncode, 0, build.stderr)
             result = subprocess.run([str(work / 'test')], capture_output=True, text=True)
             self.assertEqual(result.returncode, 0, result.stderr)
-            self.assertIn('PASS: 14 clock/cache cases, 30 ARC cases + 512 mutations, 49 CX experiment cases', result.stdout)
+            self.assertIn('PASS: 14 clock/cache cases, 30 ARC cases + 512 mutations, 55 CX experiment cases', result.stdout)
 
 
 HARNESS = r'''
@@ -107,6 +107,8 @@ static void test_store32(vm_offset_t base, uint32_t off, uint32_t value)
     *(volatile uint32_t *)(base + off) = value;
 }
 static int smmu_maps, fail_smmu_map;
+static uint32_t pdc_mem[GPU_PDC_SIZE / 4], pdcseq_mem[GPU_PDC_SIZE / 4];
+static int pdc_maps, seq_maps, fail_pdc_map, fail_seq_map;
 /* Simulated GPUCC CX GDSC and RPMh ARC client for the sweetgpu=3 experiment. */
 static int gdsc_hw_ok, delay_calls, vote_fail_on, rcg_stuck;
 static unsigned clk_stuck;
@@ -214,6 +216,14 @@ vm_offset_t ml_io_map(vm_offset_t physical, vm_size_t size)
         return fail_gcc ? 0 : (vm_offset_t)gcc;
     if (physical == GPU_CC_PA && size == GPU_CC_SIZE)
         return fail_cc ? 0 : (vm_offset_t)cc;
+    if (physical == GPU_PDC_PA && size == GPU_PDC_SIZE) {
+        pdc_maps++;
+        return fail_pdc_map ? 0 : (vm_offset_t)pdc_mem;
+    }
+    if (physical == GPU_PDC_SEQ_PA && size == GPU_PDC_SIZE) {
+        seq_maps++;
+        return fail_seq_map ? 0 : (vm_offset_t)pdcseq_mem;
+    }
     if (physical == GPU_SMMU_PA && size == GPU_SMMU_SIZE) {
         smmu_maps++;
         return fail_smmu_map ? 0 : (vm_offset_t)smmu_mem;
@@ -272,6 +282,8 @@ static void arc_reset(void)
     cc[GPU_CC_CX_GMU / 4] = 0x80004220u;
     gcc[GPU_GCC_MEMNOC_GFX / 4] = 0x80000220u; gcc[GPU_GCC_DDRSS_GPU_AXI / 4] = 0;
     gmu_maps = fail_gmu_map = smmu_maps = fail_smmu_map = 0;
+    pdc_maps = seq_maps = fail_pdc_map = fail_seq_map = 0;
+    for (unsigned i = 0; i < GPU_PDC_SIZE / 4; i++) { pdc_mem[i] = 0x9dc00000u | i; pdcseq_mem[i] = 0x5e900000u | i; }
     for (unsigned i = 0; i < GPU_SMMU_SIZE / 4; i++) smmu_mem[i] = 0x5e000000u | i;
     smmu_mem[0x20 / 4] = 5;    /* IDR0: NUMSMRG = 5 */
     smmu_mem[0x24 / 4] = 3;    /* IDR1: NUMCB = 3 */
@@ -310,7 +322,7 @@ int main(void)
     reset(); present = 0; sweet_gpu_probe();
     assert(map_calls == 0 && output[0] == 0);
     reset(); mode = 0; sweet_gpu_probe(); assert(map_calls == 0);
-    reset(); mode = 9; sweet_gpu_probe(); assert(map_calls == 0);
+    reset(); mode = 10; sweet_gpu_probe(); assert(map_calls == 0);
     reset(); mode = -1; sweet_gpu_probe(); assert(map_calls == 0);
     reset(); fail_gcc = 1; sweet_gpu_probe();
     assert(map_calls == 1 && strstr(output, "GCC mapping failed"));
@@ -701,6 +713,37 @@ int main(void)
         arc_run(); assert(alloc_calls == 0 && !gpu_boot_inventory.power.ctx_requested &&
                           !memcmp(before, smmu_mem, sizeof(before)));
     }
+    /* sweetgpu=9: RSC/PDC read-only inventory. */
+    {
+        uint32_t gb[GPU_GMU_SIZE / 4], pb[GPU_PDC_SIZE / 4], sb[GPU_PDC_SIZE / 4];
+        arc_reset(); mode = 9; cc[GPU_CX_GDSCR / 4] = GPU_CX_IDLE_GDSCR; gmu_mem[0x14000 / 4] = 1;
+        memcpy(pb, pdc_mem, sizeof(pb)); memcpy(sb, pdcseq_mem, sizeof(sb));
+        arc_run(); x = &gpu_boot_inventory.power;
+        assert(x->rsc_requested && x->rsc_done == GPU_RSC_READS && x->pdc_done == GPU_PDC_READS &&
+               x->seq_done == GPU_PDC_SEQ_READS && pdc_maps == 1 && seq_maps == 1);
+        assert(!memcmp(pb, pdc_mem, sizeof(pb)) && !memcmp(sb, pdcseq_mem, sizeof(sb))); /* no writes */
+        /* Offsets: mainline dword indexes x4 from gmu+0x23000; handshake regs in the GMU block. */
+        assert(gpu_rsc_regs[8].off == 0x23000 + 0x101 * 4 && gpu_rsc_regs[12].off == 0x24c1c &&
+               gpu_rsc_regs[13].off == 0x24c20);
+        assert(x->rsc_value[8] == gmu_mem[(0x23000 + 0x101 * 4) / 4]);
+        assert(x->pdc_value[0] == pdc_mem[0x4500 / 4] && x->pdc_value[1] == pdc_mem[0x4520 / 4]);
+        assert(x->seq_value[3] == pdcseq_mem[3]);
+        assert(strstr(output, "RSC SEQ_BUSY_DRV0 +0x23404") && strstr(output, "PDC GPU_ENABLE_PDC +0x4500"));
+        output[0] = 0; sweet_gpu_replay(); assert(pdc_maps == 1 && strstr(output, "PDC SEQ_MEM_4"));
+        /* Mapping failures are reported, not fatal. */
+        arc_reset(); mode = 9; cc[GPU_CX_GDSCR / 4] = GPU_CX_IDLE_GDSCR; gmu_mem[0x14000 / 4] = 1;
+        fail_pdc_map = 1; arc_run(); x = &gpu_boot_inventory.power;
+        assert(x->rsc_done == GPU_RSC_READS && !x->pdc_mapped && x->seq_done == GPU_PDC_SEQ_READS);
+        assert(strstr(output, "(not mapped)"));
+        arc_reset(); mode = 9; cc[GPU_CX_GDSCR / 4] = GPU_CX_IDLE_GDSCR; gmu_mem[0x14000 / 4] = 1;
+        fail_seq_map = 1; arc_run(); assert(!gpu_boot_inventory.power.seq_mapped && gpu_boot_inventory.power.pdc_done == GPU_PDC_READS);
+        /* Modes below 9 never map the PDC; no GMU access unless clocks came up. */
+        arc_reset(); mode = 8; cc[GPU_CX_GDSCR / 4] = GPU_CX_IDLE_GDSCR; gmu_mem[0x14000 / 4] = 1;
+        arc_run(); assert(pdc_maps == 0 && seq_maps == 0 && !gpu_boot_inventory.power.rsc_requested);
+        arc_reset(); mode = 9; cc[GPU_CX_GDSCR / 4] = GPU_CX_IDLE_GDSCR; gmu_mem[0x14000 / 4] = 1; clk_stuck = 2;
+        memcpy(gb, gmu_mem, sizeof(gb)); arc_run();
+        assert(pdc_maps == 0 && gmu_maps == 0 && !gpu_boot_inventory.power.rsc_requested);
+    }
     /* Mode 3 never runs the clock stage. */
     arc_reset(); mode = 3; cc[GPU_CX_GDSCR / 4] = GPU_CX_IDLE_GDSCR; arc_run();
     assert(!gpu_boot_inventory.power.clk_requested);
@@ -708,7 +751,7 @@ int main(void)
     /* Mode 2 never reaches the experiment. */
     arc_reset(); cc[GPU_CX_GDSCR / 4] = GPU_CX_IDLE_GDSCR; arc_run();
     assert(!gpu_boot_inventory.power.requested && vote_count == 0 && delay_calls == 0);
-    puts("PASS: 14 clock/cache cases, 30 ARC cases + 512 mutations, 49 CX experiment cases");
+    puts("PASS: 14 clock/cache cases, 30 ARC cases + 512 mutations, 55 CX experiment cases");
     return 0;
 }
 '''

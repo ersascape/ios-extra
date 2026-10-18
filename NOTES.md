@@ -1,5 +1,15 @@
 # ios-extra — active handoff
 
+## Active implementation — 0090 RSC/PDC read-only inventory (not yet built/booted)
+
+- `xnu/patches/0090-sweet-gpu-rsc-pdc-inventory.patch`: `sweetgpu=9` reads the GPU RSCC
+  (gmu+0x23000), RSCC handshake and the two PDC regions before the real mainline
+  `a6xx_gmu_rpmh_init` programming is attempted. Host tests (55 cases) pass incl.
+  ASan/UBSan; arm64 compile ok. Isolated baseline f6b7900 (0089). Reference sources
+  (mainline v6.12 a6xx_gmu.c/.xml, linux-firmware blobs) are external in `gpu-fw/`.
+- Also known: mainline a6xx_gmu_start expects FW_INIT_RESULT 0xbabeface if the DTCM
+  word at GMU+0xAFE0 (image offset 0x7fe0) is <= 0x20010004, else (&0x1ff)==0x100.
+
 ## Latest phone result — 0089 SMMU write transcript, 2026-10-18 21:44 UTC
 
 - `shim/out/shim-boot-0089-smmuctx.img` (SHA256 `f45e1d25…a0ddd3`, CI 39168706195,

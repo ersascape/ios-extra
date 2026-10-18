@@ -1,0 +1,143 @@
+diff --git a/bsd/dev/sweet_gpu.c b/bsd/dev/sweet_gpu.c
+index 302779a..10d9c14 100644
+--- a/bsd/dev/sweet_gpu.c
++++ b/bsd/dev/sweet_gpu.c
+@@ -31,6 +31,9 @@
+  * into context bank 3 with a small 4 KiB-granule table mapping IOVA 0x60000000 to
+  * a kernel page, checks it with the SMMU's own address-translate (ATOS) and then
+  * restores every SMMU register it touched. No master ever uses the mapping.
++ * sweetgpu=9 additionally reads (never writes) the GPU RSC/RSCC registers inside
++ * the GMU block and the two GPU PDC regions (0x0b290000, 0x0b490000) that mainline
++ * programs before booting the GMU, to see what ABL left there.
+  * Register provenance and limitations: ios-extra/docs/GPU_BRINGUP.md.
+  */
+ #if defined(ARM64_BOARD_CONFIG_SWEET)
+@@ -119,6 +122,13 @@ int sweet_rpmh_arc_set(const char *res, unsigned corner, unsigned *level);
+ #define GPU_SMMU_GMU_IOVA       0x60000000u
+ #define GPU_SMMU_TBL_BYTES      0x4000u
+ #define GPU_SMMU_VERIFY         4u
++#define GPU_RSCC_BASE           0x23000u   /* gmu->rscc = gmu mmio + 0x23000 (mainline) */
++#define GPU_RSC_READS           14u
++#define GPU_PDC_PA              0x0b290000
++#define GPU_PDC_SEQ_PA          0x0b490000
++#define GPU_PDC_SIZE            0x00010000
++#define GPU_PDC_READS           6u
++#define GPU_PDC_SEQ_READS       5u
+ #define GPU_SMMU_LOG            40u
+ #define GPU_GDSC_HOLD_US        1000u
+ 
+@@ -181,6 +191,9 @@ struct gpu_power_experiment {
+ 	uint64_t ctx_pa, ctx_ttbr, ctx_pte3, ctx_par[GPU_SMMU_VERIFY];
+ 	uint32_t ctx_va[GPU_SMMU_VERIFY], ctx_expect_fault[GPU_SMMU_VERIFY];
+ 	uint32_t ctx_fsr, ctx_gfsr, ctx_final[4];
++	/* sweetgpu=9: RSC/PDC read-only inventory (done = reads completed per group). */
++	unsigned int rsc_requested, rsc_done, pdc_mapped, pdc_done, seq_mapped, seq_done;
++	uint32_t rsc_value[GPU_RSC_READS], pdc_value[GPU_PDC_READS], seq_value[GPU_PDC_SEQ_READS];
+ 	/* Write transcript: every SMMU write with its immediate readback. */
+ 	unsigned int ctx_nlog;
+ 	uint32_t ctx_log_off[GPU_SMMU_LOG];
+@@ -623,6 +636,62 @@ gpu_smmu_gmu_context(vm_offset_t smmu, struct gpu_power_experiment *x)
+ 	    x->ctx_final[2] == 0 && x->ctx_final[3] == 0;
+ }
+ 
++/* RSCC offsets are mainline a6xx_gmu.xml dword indexes (x4) from gmu+0x23000; the two
++ * RSCC handshake registers are GMU-block indexes 0x9307/0x9308. */
++static const struct { const char *name; uint32_t off; } gpu_rsc_regs[GPU_RSC_READS] = {
++	{ "RSC_STATUS0_DRV0", GPU_RSCC_BASE + 0x0004 * 4 },
++	{ "PDC_SEQ_START_ADDR", GPU_RSCC_BASE + 0x0008 * 4 },
++	{ "PDC_MATCH_VALUE_LO", GPU_RSCC_BASE + 0x0009 * 4 },
++	{ "PDC_MATCH_VALUE_HI", GPU_RSCC_BASE + 0x000a * 4 },
++	{ "PDC_SLAVE_ID_DRV0", GPU_RSCC_BASE + 0x000b * 4 },
++	{ "HIDDEN_TCS_CMD0_ADDR", GPU_RSCC_BASE + 0x000d * 4 },
++	{ "HIDDEN_TCS_CMD0_DATA", GPU_RSCC_BASE + 0x000e * 4 },
++	{ "OVERRIDE_START_ADDR", GPU_RSCC_BASE + 0x0100 * 4 },
++	{ "SEQ_BUSY_DRV0", GPU_RSCC_BASE + 0x0101 * 4 },
++	{ "SEQ_MEM_0_DRV0", GPU_RSCC_BASE + 0x0180 * 4 },
++	{ "TCS0_DRV0_STATUS", GPU_RSCC_BASE + 0x0346 * 4 },
++	{ "TCS3_DRV0_STATUS", GPU_RSCC_BASE + 0x053e * 4 },
++	{ "GMU_RSCC_CONTROL_REQ", 0x9307 * 4 },
++	{ "GMU_RSCC_CONTROL_ACK", 0x9308 * 4 },
++};
++/* gmu_pdc: ENABLE_PDC, SEQ_START_ADDR, TCS0 control, TCS1/TCS3 CMD_ENABLE_BANK and CMD0_ADDR. */
++static const struct { const char *name; uint32_t off; } gpu_pdc_regs[GPU_PDC_READS] = {
++	{ "GPU_ENABLE_PDC", 0x1140 * 4 }, { "GPU_SEQ_START_ADDR", 0x1148 * 4 },
++	{ "GPU_TCS0_CONTROL", 0x1540 * 4 }, { "GPU_TCS1_CMD_ENABLE_BANK", 0x1573 * 4 },
++	{ "GPU_TCS3_CMD_ENABLE_BANK", 0x15d7 * 4 }, { "GPU_TCS3_CMD0_ADDR", 0x15da * 4 },
++};
++
++static void
++gpu_rsc_read(vm_offset_t gmu, struct gpu_power_experiment *x)
++{
++	vm_offset_t pdc, seq;
++
++	x->rsc_requested = 1;
++	for (unsigned int i = 0; i < GPU_RSC_READS; i++) {
++		printf("SWEET GPU: reading RSC %s +0x%x\n", gpu_rsc_regs[i].name, gpu_rsc_regs[i].off);
++		x->rsc_value[i] = gpu_read32(gmu, gpu_rsc_regs[i].off);
++		x->rsc_done = i + 1;
++	}
++	pdc = ml_io_map(GPU_PDC_PA, GPU_PDC_SIZE);
++	if (pdc) {
++		x->pdc_mapped = 1;
++		for (unsigned int i = 0; i < GPU_PDC_READS; i++) {
++			printf("SWEET GPU: reading PDC %s +0x%x\n", gpu_pdc_regs[i].name, gpu_pdc_regs[i].off);
++			x->pdc_value[i] = gpu_read32(pdc, gpu_pdc_regs[i].off);
++			x->pdc_done = i + 1;
++		}
++	}
++	seq = ml_io_map(GPU_PDC_SEQ_PA, GPU_PDC_SIZE);
++	if (seq) {
++		x->seq_mapped = 1;
++		for (unsigned int i = 0; i < GPU_PDC_SEQ_READS; i++) {
++			printf("SWEET GPU: reading PDC SEQ_MEM_%u +0x%x\n", i, 4 * i);
++			x->seq_value[i] = gpu_read32(seq, 4 * i);
++			x->seq_done = i + 1;
++		}
++	}
++}
++
+ static void
+ gpu_gmu_read(struct gpu_power_experiment *x, int mode)
+ {
+@@ -641,6 +710,9 @@ gpu_gmu_read(struct gpu_power_experiment *x, int mode)
+ 	if (mode >= 6) {
+ 		gpu_gmu_fw_load(gmu, x);
+ 	}
++	if (mode >= 9) {
++		gpu_rsc_read(gmu, x);
++	}
+ 	if (mode >= 7) {
+ 		vm_offset_t smmu = gpu_smmu_read(x);
+ 		if (smmu && mode >= 8) {
+@@ -878,6 +950,20 @@ gpu_power_log(const struct gpu_power_experiment *x)
+ 		}
+ 		printf("SWEET GPU: SMMU micro-mmu +0x6000 = 0x%08x (read-only inventory)\n", x->smmu_micro);
+ 	}
++	if (x->rsc_requested) {
++		for (unsigned int i = 0; i < GPU_RSC_READS; i++) {
++			printf("SWEET GPU: RSC %s +0x%x = 0x%08x%s\n", gpu_rsc_regs[i].name, gpu_rsc_regs[i].off,
++			    x->rsc_value[i], i < x->rsc_done ? "" : " (not read)");
++		}
++		for (unsigned int i = 0; i < GPU_PDC_READS; i++) {
++			printf("SWEET GPU: PDC %s +0x%x = 0x%08x%s\n", gpu_pdc_regs[i].name, gpu_pdc_regs[i].off,
++			    x->pdc_value[i], i < x->pdc_done ? "" : x->pdc_mapped ? " (not read)" : " (not mapped)");
++		}
++		for (unsigned int i = 0; i < GPU_PDC_SEQ_READS; i++) {
++			printf("SWEET GPU: PDC SEQ_MEM_%u = 0x%08x%s\n", i, x->seq_value[i],
++			    i < x->seq_done ? "" : x->seq_mapped ? " (not read)" : " (not mapped)");
++		}
++	}
+ 	if (x->ctx_requested) {
+ 		printf("SWEET GPU: SMMU ctx tables pa=0x%llx TTBR0=0x%llx L3[0]=0x%llx stage=%u\n",
+ 		    x->ctx_pa, x->ctx_ttbr, x->ctx_pte3, x->ctx_stage);
+@@ -1096,8 +1182,8 @@ sweet_gpu_probe(void)
+ 	if (!PE_parse_boot_argn("sweetgpu", &mode, sizeof(mode)) || mode == 0) {
+ 		return;
+ 	}
+-	if (mode < 1 || mode > 8) {
+-		printf("SWEET GPU: unsupported sweetgpu=%d (0=off, 1=clocks, 2=+ARC, 3=+CX, 4=+GMU clocks, 5=+GMU reads, 6=+GMU firmware to TCM, 7=+SMMU read, 8=+GMU SMMU context test)\n", mode);
++	if (mode < 1 || mode > 9) {
++		printf("SWEET GPU: unsupported sweetgpu=%d (0=off, 1=clocks, 2=+ARC, 3=+CX, 4=+GMU clocks, 5=+GMU reads, 6=+GMU firmware to TCM, 7=+SMMU read, 8=+GMU SMMU context test, 9=+RSC/PDC read)\n", mode);
+ 		return;
+ 	}
+ 	if (mode >= 2) {

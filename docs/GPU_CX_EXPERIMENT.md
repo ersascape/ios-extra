@@ -169,3 +169,23 @@ ABL default is refused, `S2CR3` retries with `0x00020000` (type fault, CB 0) and
 `CBAR3` with `0x20000` (stage 1, stage 2 fault); the final-state line and result
 text now say when registers did not restore. State left behind is harmless
 either way: `SMR3` invalid (group inactive) and `SCTLR`=0 (context disabled).
+
+# 0090 — read-only RSC/PDC inventory (`sweetgpu=9`)
+
+Mainline programs the GPU's RSC sequencer and PDC before the GMU boots
+(`a6xx_gmu_rpmh_init`; for A618 PDC address offset 0x30090, TCS commands
+0x30010/0x30000/0x30090). Before writing any of that, mode 9 reads, never
+writes, in the mode-8 window:
+
+- inside the GMU block: RSCC registers at `gmu+0x23000` (mainline dword indexes
+  x4: RSC_STATUS0_DRV0, PDC_SEQ_START_ADDR, PDC_MATCH_VALUE_LO/HI,
+  PDC_SLAVE_ID_DRV0, HIDDEN_TCS_CMD0_ADDR/DATA, OVERRIDE_START_ADDR, SEQ_BUSY_DRV0,
+  SEQ_MEM_0_DRV0, TCS0/TCS3 DRV0 status) and `GMU_RSCC_CONTROL_REQ/ACK`
+  (`0x24c1c`/`0x24c20`);
+- `kgsl_gmu_pdc_cfg` `0x0b290000`: GPU_ENABLE_PDC (+0x4500), SEQ_START_ADDR
+  (+0x4520), TCS0 control, TCS1/TCS3 CMD_ENABLE_BANK, TCS3 CMD0_ADDR;
+- `kgsl_gmu_pdc_seq` `0x0b490000`: SEQ_MEM_0..4.
+
+Every read is announced first; a protected region (bus error) would end the boot,
+and then the announce lines in the persistent log are the evidence.
+Report lines: `SWEET GPU: RSC ...`, `PDC ...`.
