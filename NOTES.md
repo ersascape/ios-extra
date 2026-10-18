@@ -1,5 +1,13 @@
 # ios-extra — active handoff
 
+## Active implementation — 0087 SMMU read-only inventory (not yet built/booted)
+
+- `xnu/patches/0087-sweet-gpu-smmu-inventory.patch`: `sweetgpu=7` (= mode 6 + SMMU
+  reads at 0x05040000). Docs in `docs/GPU_CX_EXPERIMENT.md`. 0086 was confirmed to
+  reach the home screen by the user.
+- Host tests (38 CX/GMU/SMMU cases) pass incl. ASan/UBSan; arm64 compile ok;
+  isolated tree baseline 3afeabe (0086).
+
 ## Latest phone result — 0086 GMU firmware in TCM, 2026-10-18 20:45 UTC
 
 - `shim/out/shim-boot-0086-gmufw.img` (SHA256 `a5804983…0db467`, CI 39164168730,

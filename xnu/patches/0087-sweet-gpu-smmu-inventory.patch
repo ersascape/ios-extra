@@ -1,0 +1,137 @@
+diff --git a/bsd/dev/sweet_gpu.c b/bsd/dev/sweet_gpu.c
+index d5836bb..6ae5fe8 100644
+--- a/bsd/dev/sweet_gpu.c
++++ b/bsd/dev/sweet_gpu.c
+@@ -24,6 +24,9 @@
+  * sweetgpu=6 additionally copies the GMU firmware (linux-firmware a630_gmu.bin,
+  * staged by 0086-stage-gpu-firmware.sh) into the GMU ITCM/DTCM and reads it back,
+  * only while the CM3 is verified to be held in reset. The CM3 is never released.
++ * sweetgpu=7 additionally maps the GPU SMMU (0x05040000, needs the same two GCC
++ * bus branches) and reads its global/ID registers, the first stream mapping
++ * entries and context bank 0, read-only, inside the same window.
+  * Register provenance and limitations: ios-extra/docs/GPU_BRINGUP.md.
+  */
+ #if defined(ARM64_BOARD_CONFIG_SWEET)
+@@ -78,6 +81,16 @@ int sweet_rpmh_arc_set(const char *res, unsigned corner, unsigned *level);
+ #define GPU_GMU_READS           6u
+ #define GPU_GMU_TCM             0x3000u   /* ITCM_START 0x1B400; DTCM follows at +0x4000 */
+ #define GPU_GMU_FW_MAX          0x8000u
++#define GPU_SMMU_PA             0x05040000
++#define GPU_SMMU_SIZE           0x00010000
++#define GPU_SMMU_GR0            10u
++#define GPU_SMMU_MAXSMR         8u
++#define GPU_SMMU_MAXCB          4u
++#define GPU_SMMU_SMR            0x0800u
++#define GPU_SMMU_S2CR           0x0c00u
++#define GPU_SMMU_CBAR           0x1000u
++#define GPU_SMMU_CB0            0x8000u   /* gfx3d_user: DT gpu-offset 0x48000 = SMMU+0x8000 */
++#define GPU_SMMU_MICRO          0x6000u   /* DT qcom,micro-mmu-control */
+ #define GPU_GDSC_HOLD_US        1000u
+ 
+ #define GPU_DB_LOCATOR_PA       0x0c3f000cu
+@@ -129,6 +142,10 @@ struct gpu_power_experiment {
+ 	unsigned int fw_requested, fw_written, fw_checked, fw_bad;
+ 	uint32_t fw_size, fw_hash, fw_first_bad;
+ 	const char *fw_error;
++	/* sweetgpu=7: SMMU read-only inventory. */
++	unsigned int smmu_mapped, smmu_gr0_done, smmu_nsmr, smmu_ncb;
++	uint32_t smmu_gr0[GPU_SMMU_GR0], smmu_smr[GPU_SMMU_MAXSMR], smmu_s2cr[GPU_SMMU_MAXSMR];
++	uint32_t smmu_cbar[GPU_SMMU_MAXCB], smmu_cb[GPU_SMMU_MAXCB], smmu_micro;
+ };
+ 
+ struct sweet_gpu_clock {
+@@ -337,6 +354,49 @@ gpu_gmu_fw_load(vm_offset_t gmu, struct gpu_power_experiment *x)
+ 	}
+ }
+ 
++static const struct { const char *name; uint32_t off; } gpu_smmu_gr0[GPU_SMMU_GR0] = {
++	{ "sCR0", 0x00 }, { "sCR1", 0x04 }, { "sCR2", 0x08 }, { "sACR", 0x10 },
++	{ "IDR0", 0x20 }, { "IDR1", 0x24 }, { "IDR2", 0x28 }, { "IDR7", 0x3c },
++	{ "sGFSR", 0x48 }, { "sGFSYNR0", 0x50 },
++};
++/* Context bank 0 registers read: SCTLR, TTBR0 low, TCR, FSR. */
++static const uint32_t gpu_smmu_cb0[GPU_SMMU_MAXCB] = { 0x00, 0x20, 0x30, 0x58 };
++
++static void
++gpu_smmu_read(struct gpu_power_experiment *x)
++{
++	vm_offset_t smmu = ml_io_map(GPU_SMMU_PA, GPU_SMMU_SIZE);
++	unsigned int nsmr, ncb;
++
++	if (!smmu) {
++		return;
++	}
++	x->smmu_mapped = 1;
++	for (unsigned int i = 0; i < GPU_SMMU_GR0; i++) {
++		printf("SWEET GPU: reading SMMU %s +0x%x\n", gpu_smmu_gr0[i].name, gpu_smmu_gr0[i].off);
++		x->smmu_gr0[i] = gpu_read32(smmu, gpu_smmu_gr0[i].off);
++		x->smmu_gr0_done = i + 1;
++	}
++	/* Counts come from the hardware ID registers (IDR0.NUMSMRG, IDR1.NUMCB). */
++	nsmr = x->smmu_gr0[4] == ~0u ? 0 : x->smmu_gr0[4] & 0xffu;
++	ncb = x->smmu_gr0[5] == ~0u ? 0 : x->smmu_gr0[5] & 0xffu;
++	x->smmu_nsmr = nsmr < GPU_SMMU_MAXSMR ? nsmr : GPU_SMMU_MAXSMR;
++	x->smmu_ncb = ncb < GPU_SMMU_MAXCB ? ncb : GPU_SMMU_MAXCB;
++	for (unsigned int i = 0; i < x->smmu_nsmr; i++) {
++		x->smmu_smr[i] = gpu_read32(smmu, GPU_SMMU_SMR + 4 * i);
++		x->smmu_s2cr[i] = gpu_read32(smmu, GPU_SMMU_S2CR + 4 * i);
++	}
++	for (unsigned int i = 0; i < x->smmu_ncb; i++) {
++		x->smmu_cbar[i] = gpu_read32(smmu, GPU_SMMU_CBAR + 4 * i);
++	}
++	if (x->smmu_ncb > 0) {
++		for (unsigned int i = 0; i < GPU_SMMU_MAXCB; i++) {
++			x->smmu_cb[i] = gpu_read32(smmu, GPU_SMMU_CB0 + gpu_smmu_cb0[i]);
++		}
++	}
++	x->smmu_micro = gpu_read32(smmu, GPU_SMMU_MICRO);
++}
++
+ static void
+ gpu_gmu_read(struct gpu_power_experiment *x, int mode)
+ {
+@@ -355,6 +415,9 @@ gpu_gmu_read(struct gpu_power_experiment *x, int mode)
+ 	if (mode >= 6) {
+ 		gpu_gmu_fw_load(gmu, x);
+ 	}
++	if (mode >= 7) {
++		gpu_smmu_read(x);
++	}
+ }
+ 
+ /*
+@@ -569,6 +632,23 @@ gpu_power_log(const struct gpu_power_experiment *x)
+ 			printf("SWEET GPU: GMU fw result: %s\n", x->fw_error ? x->fw_error : "TCM readback matches; CM3 left in reset");
+ 		}
+ 	}
++	if (x->smmu_mapped) {
++		for (unsigned int i = 0; i < x->smmu_gr0_done; i++) {
++			printf("SWEET GPU: SMMU %s +0x%x = 0x%08x\n", gpu_smmu_gr0[i].name,
++			    gpu_smmu_gr0[i].off, x->smmu_gr0[i]);
++		}
++		for (unsigned int i = 0; i < x->smmu_nsmr; i++) {
++			printf("SWEET GPU: SMMU SMR%u = 0x%08x S2CR%u = 0x%08x\n", i, x->smmu_smr[i], i, x->smmu_s2cr[i]);
++		}
++		for (unsigned int i = 0; i < x->smmu_ncb; i++) {
++			printf("SWEET GPU: SMMU CBAR%u = 0x%08x\n", i, x->smmu_cbar[i]);
++		}
++		if (x->smmu_ncb > 0) {
++			printf("SWEET GPU: SMMU CB0 SCTLR=0x%08x TTBR0=0x%08x TCR=0x%08x FSR=0x%08x\n",
++			    x->smmu_cb[0], x->smmu_cb[1], x->smmu_cb[2], x->smmu_cb[3]);
++		}
++		printf("SWEET GPU: SMMU micro-mmu +0x6000 = 0x%08x (read-only inventory)\n", x->smmu_micro);
++	}
+ 	printf("SWEET GPU: GMU clk stage=%u restored=%u result: %s\n", x->clk_stage,
+ 	    x->clk_restored, x->clk_error ? x->clk_error : "complete, rolled back");
+ }
+@@ -766,8 +846,8 @@ sweet_gpu_probe(void)
+ 	if (!PE_parse_boot_argn("sweetgpu", &mode, sizeof(mode)) || mode == 0) {
+ 		return;
+ 	}
+-	if (mode < 1 || mode > 6) {
+-		printf("SWEET GPU: unsupported sweetgpu=%d (0=off, 1=clocks, 2=+ARC, 3=+CX, 4=+GMU clocks, 5=+GMU reads, 6=+GMU firmware to TCM)\n", mode);
++	if (mode < 1 || mode > 7) {
++		printf("SWEET GPU: unsupported sweetgpu=%d (0=off, 1=clocks, 2=+ARC, 3=+CX, 4=+GMU clocks, 5=+GMU reads, 6=+GMU firmware to TCM, 7=+SMMU read)\n", mode);
+ 		return;
+ 	}
+ 	if (mode >= 2) {

@@ -116,3 +116,19 @@ contiguous). Mode 6 does that inside the mode-5 window, then reads every word
 back. It writes only if `CM3_SYSRESET == 1` was just read; the CM3 is never
 released. Report: `SWEET GPU: GMU fw ...` (size, FNV-1a, words written/checked/bad).
 TCM contents are lost when CX collapses afterwards; nothing else is written.
+
+# 0087 — read-only GPU SMMU inventory (`sweetgpu=7`)
+
+Mode 7 = mode 6 plus, in the same window (needs the two GCC bus branches, which
+are the SMMU's `mem_clk`/`mem_iface_clk` in the downstream DT), a read-only map of
+the kgsl SMMU at `0x05040000` (`0x10000`, DT `qcom,kgsl-smmu-v2`):
+
+- global: `sCR0 sCR1 sCR2 sACR IDR0 IDR1 IDR2 IDR7 sGFSR sGFSYNR0`;
+- `SMR`/`S2CR` entries, count = min(IDR0.NUMSMRG, 8);
+- `CBAR` and context bank 0 (`+0x8000`, DT gfx3d_user `gpu-offset 0x48000`):
+  SCTLR, TTBR0, TCR, FSR, count = min(IDR1.NUMCB, 4);
+- `+0x6000` (DT `qcom,micro-mmu-control`, the GMU micro-MMU).
+
+Each global read is announced first. No writes. Purpose: learn whether ABL/hyp left
+the SMMU in bypass, faulting or owned state before designing the GMU stream 4/5
+mappings (HFI queue table and log memory must be visible to the GMU).

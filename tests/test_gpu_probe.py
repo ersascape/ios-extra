@@ -54,7 +54,7 @@ class GPUProbeTests(unittest.TestCase):
             self.assertEqual(build.returncode, 0, build.stderr)
             result = subprocess.run([str(work / 'test')], capture_output=True, text=True)
             self.assertEqual(result.returncode, 0, result.stderr)
-            self.assertIn('PASS: 14 clock/cache cases, 30 ARC cases + 512 mutations, 32 CX experiment cases', result.stdout)
+            self.assertIn('PASS: 14 clock/cache cases, 30 ARC cases + 512 mutations, 38 CX experiment cases', result.stdout)
 
 
 HARNESS = r'''
@@ -75,6 +75,8 @@ static int present, mode, map_calls, fail_gcc, fail_cc;
 static uint32_t locator[2], database[1024];
 static uint32_t gmu_mem[GPU_GMU_SIZE / 4];
 static int gmu_maps, fail_gmu_map;
+static uint32_t smmu_mem[GPU_SMMU_SIZE / 4];
+static int smmu_maps, fail_smmu_map;
 /* Simulated GPUCC CX GDSC and RPMh ARC client for the sweetgpu=3 experiment. */
 static int gdsc_hw_ok, delay_calls, vote_fail_on, rcg_stuck;
 static unsigned clk_stuck;
@@ -135,6 +137,10 @@ vm_offset_t ml_io_map(vm_offset_t physical, vm_size_t size)
         return fail_gcc ? 0 : (vm_offset_t)gcc;
     if (physical == GPU_CC_PA && size == GPU_CC_SIZE)
         return fail_cc ? 0 : (vm_offset_t)cc;
+    if (physical == GPU_SMMU_PA && size == GPU_SMMU_SIZE) {
+        smmu_maps++;
+        return fail_smmu_map ? 0 : (vm_offset_t)smmu_mem;
+    }
     if (physical == GPU_GMU_PA && size == GPU_GMU_SIZE) {
         gmu_maps++;
         return fail_gmu_map ? 0 : (vm_offset_t)gmu_mem;
@@ -188,7 +194,10 @@ static void arc_reset(void)
     cc[GPU_CC_AHB / 4] = cc[GPU_CC_CXO / 4] = 0x00000001u;
     cc[GPU_CC_CX_GMU / 4] = 0x80004220u;
     gcc[GPU_GCC_MEMNOC_GFX / 4] = 0x80000220u; gcc[GPU_GCC_DDRSS_GPU_AXI / 4] = 0;
-    gmu_maps = fail_gmu_map = 0;
+    gmu_maps = fail_gmu_map = smmu_maps = fail_smmu_map = 0;
+    for (unsigned i = 0; i < GPU_SMMU_SIZE / 4; i++) smmu_mem[i] = 0x5e000000u | i;
+    smmu_mem[0x20 / 4] = 5;    /* IDR0: NUMSMRG = 5 */
+    smmu_mem[0x24 / 4] = 3;    /* IDR1: NUMCB = 3 */
     for (unsigned i = 0; i < GPU_GMU_SIZE / 4; i++) gmu_mem[i] = 0xa5000000u | i;
     cc[GPU_GMU_RCG_CMD / 4] = 0x80000000u; cc[GPU_GMU_RCG_CFG / 4] = 0x100u;
     db32(0, 1); db32(4, GPU_DB_MAGIC);
@@ -220,7 +229,7 @@ int main(void)
     reset(); present = 0; sweet_gpu_probe();
     assert(map_calls == 0 && output[0] == 0);
     reset(); mode = 0; sweet_gpu_probe(); assert(map_calls == 0);
-    reset(); mode = 7; sweet_gpu_probe(); assert(map_calls == 0);
+    reset(); mode = 8; sweet_gpu_probe(); assert(map_calls == 0);
     reset(); mode = -1; sweet_gpu_probe(); assert(map_calls == 0);
     reset(); fail_gcc = 1; sweet_gpu_probe();
     assert(map_calls == 1 && strstr(output, "GCC mapping failed"));
@@ -497,6 +506,42 @@ int main(void)
         clk_stuck = 2; memcpy(before, gmu_mem, sizeof(before));
         arc_run(); assert(!gpu_boot_inventory.power.fw_requested && !memcmp(before, gmu_mem, sizeof(before)));
     }
+    /* sweetgpu=7: SMMU inventory, read-only, counts bounded by IDR0/IDR1. */
+    {
+        uint32_t before[GPU_SMMU_SIZE / 4];
+        arc_reset(); mode = 7; cc[GPU_CX_GDSCR / 4] = GPU_CX_IDLE_GDSCR; gmu_mem[0x14000 / 4] = 1;
+        memcpy(before, smmu_mem, sizeof(before));
+        arc_run(); x = &gpu_boot_inventory.power;
+        assert(!x->clk_error && x->smmu_mapped && smmu_maps == 1 && x->smmu_gr0_done == GPU_SMMU_GR0);
+        assert(!memcmp(before, smmu_mem, sizeof(before))); /* no SMMU writes */
+        assert(x->smmu_nsmr == 5 && x->smmu_ncb == 3);
+        assert(x->smmu_smr[4] == smmu_mem[(GPU_SMMU_SMR + 16) / 4] && x->smmu_smr[5] == 0);
+        assert(x->smmu_s2cr[2] == smmu_mem[(GPU_SMMU_S2CR + 8) / 4]);
+        assert(x->smmu_cbar[2] == smmu_mem[(GPU_SMMU_CBAR + 8) / 4] && x->smmu_cbar[3] == 0);
+        assert(x->smmu_cb[1] == smmu_mem[(GPU_SMMU_CB0 + 0x20) / 4]);
+        assert(x->smmu_micro == smmu_mem[GPU_SMMU_MICRO / 4]);
+        assert(x->fw_requested && !x->fw_error); /* firmware step still runs first */
+        assert(strstr(output, "SMMU IDR1 +0x24 = 0x00000003"));
+        output[0] = 0; sweet_gpu_replay(); assert(smmu_maps == 1 && strstr(output, "SMMU SMR4"));
+        /* Hostile ID registers cannot push reads past the fixed arrays. */
+        arc_reset(); mode = 7; cc[GPU_CX_GDSCR / 4] = GPU_CX_IDLE_GDSCR; gmu_mem[0x14000 / 4] = 1;
+        smmu_mem[0x20 / 4] = 0xff; smmu_mem[0x24 / 4] = 0xff;
+        arc_run(); x = &gpu_boot_inventory.power;
+        assert(x->smmu_nsmr == GPU_SMMU_MAXSMR && x->smmu_ncb == GPU_SMMU_MAXCB);
+        arc_reset(); mode = 7; cc[GPU_CX_GDSCR / 4] = GPU_CX_IDLE_GDSCR; gmu_mem[0x14000 / 4] = 1;
+        smmu_mem[0x20 / 4] = smmu_mem[0x24 / 4] = ~0u;
+        arc_run(); x = &gpu_boot_inventory.power;
+        assert(x->smmu_nsmr == 0 && x->smmu_ncb == 0);
+        /* Mapping failure, and modes below 7 never map the SMMU. */
+        arc_reset(); mode = 7; cc[GPU_CX_GDSCR / 4] = GPU_CX_IDLE_GDSCR; gmu_mem[0x14000 / 4] = 1;
+        fail_smmu_map = 1; arc_run();
+        assert(smmu_maps == 1 && !gpu_boot_inventory.power.smmu_mapped);
+        arc_reset(); mode = 6; cc[GPU_CX_GDSCR / 4] = GPU_CX_IDLE_GDSCR; gmu_mem[0x14000 / 4] = 1;
+        arc_run(); assert(smmu_maps == 0);
+        /* No SMMU access unless every clock came up. */
+        arc_reset(); mode = 7; cc[GPU_CX_GDSCR / 4] = GPU_CX_IDLE_GDSCR; gmu_mem[0x14000 / 4] = 1;
+        clk_stuck = 8; arc_run(); assert(smmu_maps == 0 && gpu_boot_inventory.power.clk_error);
+    }
     /* Mode 3 never runs the clock stage. */
     arc_reset(); mode = 3; cc[GPU_CX_GDSCR / 4] = GPU_CX_IDLE_GDSCR; arc_run();
     assert(!gpu_boot_inventory.power.clk_requested);
@@ -504,7 +549,7 @@ int main(void)
     /* Mode 2 never reaches the experiment. */
     arc_reset(); cc[GPU_CX_GDSCR / 4] = GPU_CX_IDLE_GDSCR; arc_run();
     assert(!gpu_boot_inventory.power.requested && vote_count == 0 && delay_calls == 0);
-    puts("PASS: 14 clock/cache cases, 30 ARC cases + 512 mutations, 32 CX experiment cases");
+    puts("PASS: 14 clock/cache cases, 30 ARC cases + 512 mutations, 38 CX experiment cases");
     return 0;
 }
 '''
