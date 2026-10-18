@@ -43,3 +43,27 @@ simulated GDSC. Both also pass under ASan/UBSan (`IOS_EXTRA_CFLAGS`).
 ## Phone result
 
 Not run yet. Report lines to look for: `SWEET GPU: CX experiment ...`.
+
+# 0084 — GMU clock stage (`sweetgpu=4`)
+
+Runs inside the 0083 CX window (after the 1 ms hold, before collapse); CX
+failures skip it. Nothing is mapped beyond GCC and GPUCC; GMU registers are
+untouched.
+
+Preconditions (otherwise nothing is written, reason cached): GPLL0 mode
+`LOCK_DET` set and apps vote (`0x52000` bit0) set; GMU RCG and the three
+branches readable; GPUCC ahb (`0x1078`), cx-gmu (`0x1098`) and cxo (`0x109c`)
+branches in the off state measured after ABL.
+
+Sequence (pinned Xiaomi `gpucc-sdmmagpie.c` / `gcc-sdmmagpie.c`):
+1. set `0x52004` bit16 (GPLL0/2 gate; bit15 and others preserved), 5 us;
+2. GMU RCG `0x1124`: source 6 (GPLL0_OUT_MAIN_DIV), HID 2 (divide 1.5, 200 MHz),
+   then `CMD` UPDATE (bit0) and poll it clear (500 us bound);
+3. ahb, then cx-gmu (wake/sleep fields set to 0xF as downstream does), then cxo:
+   set enable bit, poll CLK_OFF (bit31) clear (500 us bound each);
+4. hold 1 ms, read all three CBCRs;
+5. undo in reverse: disable branches (poll off), clear the gate only if this
+   code set it, then the 0083 CX collapse and vote release.
+
+The RCG stays configured at 200 MHz after the test: UPDATE on an idle root is
+not relied on and nothing consumes it. Report lines: `SWEET GPU: GMU clk ...`.

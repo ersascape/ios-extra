@@ -47,9 +47,9 @@ class GPUProbeTests(unittest.TestCase):
                                     str(work / 'test.c'), '-o', str(work / 'test')],
                                    capture_output=True, text=True)
             self.assertEqual(build.returncode, 0, build.stderr)
-            result = subprocess.run([str(work / 'test')], capture_output=True,
-                                    text=True, check=True)
-            self.assertIn('PASS: 14 clock/cache cases, 30 ARC cases + 512 mutations, 12 CX experiment cases', result.stdout)
+            result = subprocess.run([str(work / 'test')], capture_output=True, text=True)
+            self.assertEqual(result.returncode, 0, result.stderr)
+            self.assertIn('PASS: 14 clock/cache cases, 30 ARC cases + 512 mutations, 20 CX experiment cases', result.stdout)
 
 
 HARNESS = r'''
@@ -69,7 +69,8 @@ static uint32_t gcc[0x90000 / 4], cc[0x9000 / 4];
 static int present, mode, map_calls, fail_gcc, fail_cc;
 static uint32_t locator[2], database[1024];
 /* Simulated GPUCC CX GDSC and RPMh ARC client for the sweetgpu=3 experiment. */
-static int gdsc_hw_ok, delay_calls, vote_fail_on;
+static int gdsc_hw_ok, delay_calls, vote_fail_on, rcg_stuck;
+static unsigned clk_stuck;
 static unsigned vote_count, vote_seq[8];
 static char vote_name[8][8];
 static int fail_locator, fail_db;
@@ -78,6 +79,13 @@ static char output[65536];
 void delay(int us)
 {
     (void)us; delay_calls++;
+    static const unsigned cb[3] = { GPU_CC_AHB, GPU_CC_CX_GMU, GPU_CC_CXO };
+    for (unsigned i = 0; i < 3; i++) {
+        uint32_t *c = &cc[cb[i] / 4];
+        if (clk_stuck & (1u << i)) continue;
+        if (*c & 1u) *c &= ~GPU_BRANCH_OFF; else *c |= GPU_BRANCH_OFF;
+    }
+    if (!rcg_stuck) cc[GPU_GMU_RCG_CMD / 4] &= ~GPU_RCG_UPDATE;
     uint32_t *g = &cc[GPU_CX_GDSCR / 4];
     if (!gdsc_hw_ok) return;
     if (*g & 1u) *g &= ~GPU_DOMAIN_ON; else *g |= GPU_DOMAIN_ON;
@@ -139,6 +147,7 @@ static void reset(void)
     memset(&gpu_boot_inventory, 0, sizeof(gpu_boot_inventory));
     gpu_inventory_ready = gpu_replay_count = 0;
     gdsc_hw_ok = 1; delay_calls = vote_fail_on = 0; vote_count = 0;
+    rcg_stuck = 0; clk_stuck = 0;
     memset(vote_name, 0, sizeof(vote_name));
     gcc[GPU_CFG_AHB_CBCR / 4] = GPU_BRANCH_ENABLE;
 }
@@ -159,6 +168,11 @@ static void db32(unsigned offset, uint32_t value)
 static void arc_reset(void)
 {
     reset(); mode = 2;
+    gcc[GPU_GCC_GPLL0_MODE / 4] = GPU_PLL_LOCK_DET | 7u;
+    gcc[GPU_GCC_GPLL0_VOTE / 4] = 1;
+    gcc[GPU_GCC_GPU_GPLL_VOTE / 4] = 1u << 15;
+    cc[GPU_CC_AHB / 4] = cc[GPU_CC_CX_GMU / 4] = cc[GPU_CC_CXO / 4] = 0x80004220u;
+    cc[GPU_GMU_RCG_CMD / 4] = 0x80000000u; cc[GPU_GMU_RCG_CFG / 4] = 0x100u;
     db32(0, 1); db32(4, GPU_DB_MAGIC);
     db16(8, 3); db16(10, 0); db16(12, 128); db16(14, 3); db16(16, 0x100);
     for (unsigned r = 0; r < 3; r++) {
@@ -188,7 +202,7 @@ int main(void)
     reset(); present = 0; sweet_gpu_probe();
     assert(map_calls == 0 && output[0] == 0);
     reset(); mode = 0; sweet_gpu_probe(); assert(map_calls == 0);
-    reset(); mode = 4; sweet_gpu_probe(); assert(map_calls == 0);
+    reset(); mode = 5; sweet_gpu_probe(); assert(map_calls == 0);
     reset(); mode = -1; sweet_gpu_probe(); assert(map_calls == 0);
     reset(); fail_gcc = 1; sweet_gpu_probe();
     assert(map_calls == 1 && strstr(output, "GCC mapping failed"));
@@ -331,10 +345,62 @@ int main(void)
     arc_run(); x = &gpu_boot_inventory.power;
     assert(!x->enabled && x->error && vote_count == 4 && vote_seq[3] == 0);
     assert(cc[GPU_CX_GDSCR / 4] & 1u);
+    /* sweetgpu=4: GMU clock stage runs inside the CX window and undoes itself. */
+    arc_reset(); mode = 4; cc[GPU_CX_GDSCR / 4] = GPU_CX_IDLE_GDSCR;
+    uint32_t cmd0 = cc[GPU_GMU_RCG_CMD / 4], cfg0 = cc[GPU_GMU_RCG_CFG / 4];
+    arc_run(); x = &gpu_boot_inventory.power;
+    assert(x->enabled && x->disabled && !x->error && x->clk_requested && !x->clk_error);
+    assert(x->clk_stage == 6 && x->clk_restored);
+    assert(x->rcg_cfg1 == ((cfg0 & ~0x71fu) | GPU_GMU_RCG_200MHZ));
+    assert(!(x->rcg_cmd1 & GPU_RCG_UPDATE) && (cmd0 & GPU_RCG_UPDATE) == 0);
+    for (unsigned i = 0; i < 3; i++) {
+        assert(!(x->cbcr_on[i] & GPU_BRANCH_OFF) && (x->cbcr_on[i] & 1u));
+        assert((x->cbcr_after[i] & GPU_BRANCH_OFF) && !(x->cbcr_after[i] & 1u));
+    }
+    assert((x->cbcr_on[1] & GPU_CBCR_WAKE_SLEEP) == GPU_CBCR_WAKE_SLEEP);
+    assert(gcc[GPU_GCC_GPU_GPLL_VOTE / 4] == (1u << 15)); /* gate restored */
+    assert(x->gate_on & GPU_GPLL0_DIV_GATE);
+    assert(cc[GPU_CX_GDSCR / 4] == (GPU_CX_IDLE_GDSCR & ~GPU_DOMAIN_ON));
+    assert(strstr(output, "GMU clk stage=6 restored=1 result: complete, rolled back"));
+    /* Gate already set by someone else: left alone on undo. */
+    arc_reset(); mode = 4; cc[GPU_CX_GDSCR / 4] = GPU_CX_IDLE_GDSCR;
+    gcc[GPU_GCC_GPU_GPLL_VOTE / 4] |= GPU_GPLL0_DIV_GATE;
+    arc_run(); assert(!gpu_boot_inventory.power.clk_error);
+    assert(gcc[GPU_GCC_GPU_GPLL_VOTE / 4] & GPU_GPLL0_DIV_GATE);
+    /* Preconditions: nothing clock-related written. */
+    arc_reset(); mode = 4; cc[GPU_CX_GDSCR / 4] = GPU_CX_IDLE_GDSCR;
+    gcc[GPU_GCC_GPLL0_MODE / 4] = 0;
+    arc_run(); x = &gpu_boot_inventory.power;
+    assert(x->clk_error && x->clk_stage == 0 && x->enabled && x->disabled);
+    assert(gcc[GPU_GCC_GPU_GPLL_VOTE / 4] == (1u << 15) && cc[GPU_GMU_RCG_CFG / 4] == 0x100u);
+    arc_reset(); mode = 4; cc[GPU_CX_GDSCR / 4] = GPU_CX_IDLE_GDSCR; gcc[GPU_GCC_GPLL0_VOTE / 4] = 0;
+    arc_run(); assert(gpu_boot_inventory.power.clk_error && gpu_boot_inventory.power.clk_stage == 0);
+    arc_reset(); mode = 4; cc[GPU_CX_GDSCR / 4] = GPU_CX_IDLE_GDSCR; cc[GPU_CC_CX_GMU / 4] = 0x4221u;
+    arc_run(); assert(gpu_boot_inventory.power.clk_error && gpu_boot_inventory.power.clk_stage == 0);
+    assert(cc[GPU_CC_CX_GMU / 4] == 0x4221u);
+    arc_reset(); mode = 4; cc[GPU_CX_GDSCR / 4] = GPU_CX_IDLE_GDSCR; cc[GPU_CC_CXO / 4] = ~0u;
+    arc_run(); assert(gpu_boot_inventory.power.clk_error && gpu_boot_inventory.power.clk_stage == 0);
+    /* RCG update never completes: gate undone, no branch enabled. */
+    arc_reset(); mode = 4; cc[GPU_CX_GDSCR / 4] = GPU_CX_IDLE_GDSCR; rcg_stuck = 1;
+    cc[GPU_GMU_RCG_CMD / 4] = 0x80000001u;
+    arc_run(); x = &gpu_boot_inventory.power;
+    assert(x->clk_error && x->clk_stage == 2 && x->clk_restored && x->disabled);
+    assert(gcc[GPU_GCC_GPU_GPLL_VOTE / 4] == (1u << 15));
+    assert(cc[GPU_CC_AHB / 4] == 0x80004220u && cc[GPU_CC_CX_GMU / 4] == 0x80004220u);
+    /* cx-gmu branch never reports on: it and ahb are disabled again. */
+    arc_reset(); mode = 4; cc[GPU_CX_GDSCR / 4] = GPU_CX_IDLE_GDSCR; clk_stuck = 2;
+    arc_run(); x = &gpu_boot_inventory.power;
+    assert(x->clk_error && x->clk_stage == 4 && x->clk_restored && x->disabled);
+    assert(!(cc[GPU_CC_CX_GMU / 4] & 1u) && !(cc[GPU_CC_AHB / 4] & 1u));
+    assert(!(cc[GPU_CC_CXO / 4] & 1u) && gcc[GPU_GCC_GPU_GPLL_VOTE / 4] == (1u << 15));
+    /* Mode 3 never runs the clock stage. */
+    arc_reset(); mode = 3; cc[GPU_CX_GDSCR / 4] = GPU_CX_IDLE_GDSCR; arc_run();
+    assert(!gpu_boot_inventory.power.clk_requested);
+    assert(cc[GPU_CC_CX_GMU / 4] == 0x80004220u && cc[GPU_GMU_RCG_CFG / 4] == 0x100u);
     /* Mode 2 never reaches the experiment. */
     arc_reset(); cc[GPU_CX_GDSCR / 4] = GPU_CX_IDLE_GDSCR; arc_run();
     assert(!gpu_boot_inventory.power.requested && vote_count == 0 && delay_calls == 0);
-    puts("PASS: 14 clock/cache cases, 30 ARC cases + 512 mutations, 12 CX experiment cases");
+    puts("PASS: 14 clock/cache cases, 30 ARC cases + 512 mutations, 20 CX experiment cases");
     return 0;
 }
 '''

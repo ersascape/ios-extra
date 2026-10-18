@@ -1,5 +1,14 @@
 # ios-extra — active handoff
 
+## Active implementation — 0084 GMU clocks (not yet built/booted)
+
+- `xnu/patches/0084-sweet-gpu-gmu-clocks.patch`: `sweetgpu=4` runs a GMU clock
+  stage inside the 0083 CX window (GPLL0/2 gate, RCG 200 MHz, ahb/cx-gmu/cxo
+  branches), then undoes it. Details: `docs/GPU_CX_EXPERIMENT.md`.
+- 4 host tests pass (also ASan/UBSan); arm64 object compile 0/1 failed.
+  Isolated tree baseline f10f32d (0083).
+- **Next:** push, CI, package `shim-boot-0084-gmuclk.img`, boot once with user.
+
 ## Latest phone result — 0083 CX power experiment, 2026-10-18 19:47 UTC
 
 - Temporary boot of `shim/out/shim-boot-0083-cx.img` (SHA256 `836062ec…abc451`,
