@@ -5,6 +5,60 @@ CI runs, phone results and the reasoning at the time. The current state and the 
 action are in [NOTES.md](../NOTES.md) and [HANDOFF.md](../HANDOFF.md). Entries that say
 "not yet built/booted" were true when written; newer entries supersede them.
 
+## Phone result — 0096 read-only IRQ/fence preflight, 2026-10-19 18:39 UTC
+
+- Checked fastboot first: exactly one already present, serial redacted. Announced
+  and performed one temporary boot at 18:39:28 UTC; send 0.424s, boot 0.134s,
+  total 0.565s. Ping succeeds; **user confirmed the home screen**.
+- Image `shim/out/shim-boot-0096-irqpreflight.img`, SHA256
+  `3b9f7aa6e1cfdb337e5e4639ee57cea4b558c9396f4c18902e4f43bc14b4dbef`, mode 14;
+  source edd2b796ed7ff02434c42942c490543c17f95456, green CI 39303111412.
+- Capture: 461 UDP packets, 198599 decoded bytes, local/ignored
+  `ios-extra-work/logs/phone-0096-irqpreflight.{pcap,txt}` and sanitized
+  `phone-0096-irqpreflight-fastboot.txt`. Report 0 partial; all six raw values
+  below are from complete cached report 1. No panic marker observed.
+- Both mask words and both pending-status words are 0; fence control is 0;
+  RPMH power state is 0x0f. Source `a6xx_gmu_irq_disable()` masks both sources
+  with all ones; our zero defaults must not be assumed safe during execution.
+  This dump proves readability, not mask writability or interrupt delivery.
+- Lower probes still pass: RSC wake ACK=3/BUSY=0 and stop=0x01010006,
+  controls/state restored; pre-boot 29/29; buffer ATOS 29/29, inactive=1 and known
+  inert S2CR/CBAR residue only; FSR/sGFSR=0. Firmware bad=0, nine constrained
+  init readbacks unchanged, CX/clock/vote cleanup complete. CM3 stayed reset,
+  GX remained off. No firmware execution or GPU command.
+- Next measured prerequisite: a separate mask/verify/restore test with CM3 held
+  reset. Do not combine an unproved mask write with the first CM3 release.
+
+```text
+SWEET GPU: IRQ preflight AO_HOST_INTERRUPT_MASK +0x24c18 = 0x00000000
+SWEET GPU: IRQ preflight GMU2HOST_INTR_MASK +0x1464c = 0x00000000
+SWEET GPU: IRQ preflight GMU2HOST_INTR_INFO +0x14648 = 0x00000000
+SWEET GPU: IRQ preflight AO_HOST_INTERRUPT_STATUS +0x24c14 = 0x00000000
+SWEET GPU: IRQ preflight AO_AHB_FENCE_CTRL +0x24c40 = 0x00000000
+SWEET GPU: IRQ preflight RPMH_POWER_STATE +0x143b0 = 0x0000000f
+SWEET GPU: IRQ preflight read=6/6 result: read-only dump complete; masks/fence unchanged; CM3 held reset
+```
+
+## 0096 full build and verified image — 2026-10-19
+
+- Full [CI 39303111412](https://github.com/dipa-studio/ios-extra/actions/runs/39303111412)
+  **passed** on `edd2b796ed7ff02434c42942c490543c17f95456`.
+- Kernel SHA256 `36b92c5cd4cadbf0bc8c67871afcded91e09a60ec737c98d762d1b3899d555cb`;
+  SHA256SUMS passed. `_sweet_gpu_probe` at 0xfffffe00074fa838 and
+  `_sweet_rpmh_arc_set` at 0xfffffe00074f8548.
+- CI GPU source SHA256 `083d74dfec1ed99e5d1447b9e898622e46ff213bcc873d5531160d21895a5abf`;
+  firmware header `2c76898351726399ac212d29c3ca7670786ad00c77e5be28da3b847af0baedf2`;
+  RPMh source `fc3669172ee14592cbee2f4312450e68ca9eac7870612d7d669fa2872bf404ca`.
+  All byte-identical to the locally tested isolated files. Artifacts local/ignored
+  in `ios-extra-work/out-0096` and `ci-0096`.
+- Image `shim/out/shim-boot-0096-irqpreflight.img`, 17268736 bytes, SHA256
+  `3b9f7aa6e1cfdb337e5e4639ee57cea4b558c9396f4c18902e4f43bc14b4dbef`,
+  `sweetgpu=14`; manifest `shim/out/manifest-0096.json`. Unpacked payload and
+  boot arguments round-trip exactly. The first-start draft is excluded.
+- Checked fastboot first: exactly one device already present, serial redacted.
+  Announced and started the authorized single temporary read-only test. Phone
+  observations recorded separately after capture; no flash or reboot command.
+
 ## Implementation — 0096 read-only IRQ/fence preflight (local checks pass)
 
 - Patch `0096-sweet-gpu-irq-fence-preflight.patch`, mode 14, baseline 4be318c

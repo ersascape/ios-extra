@@ -55,7 +55,7 @@ dword index - `0x1A800`) x 4. The RSCC block is `gmu + 0x23000` (mainline
 | `GPU_GMU_CX_GMU_PWR_COL_CP_MSG` / `CP_RESP` | `0x5100` / `0x5101` | `0x14400` / `0x14404` | 0094: 0 / 0 |
 | `GMU_HFI_CTRL_STATUS` / `QTBL_INFO` / `QTBL_ADDR` / `CTRL_INIT` | `0x5180` / `0x5184` / `0x5185` / `0x5186` | `0x14600` / `0x14610` / `0x14614` / `0x14618` | 0094: all 0 |
 | `GMU_HFI_SFR_ADDR` | `0x5182` | `0x14608` | 0094: 0 |
-| `GMU_HOST2GMU_INTR_SET`, `GMU2HOST_INTR_INFO` | `0x5194`, `0x5192` | `0x14650`, `0x14648` | not read |
+| `GMU_HOST2GMU_INTR_SET`, `GMU2HOST_INTR_INFO` | `0x5194`, `0x5192` | `0x14650`, `0x14648` | SET not read; INFO=0 (0096) |
 | `GMU_GENERAL_0` / `GENERAL_7` | `0x51c5` / `0x51cc` | `0x14714` / `0x14730` | 0094: 0 / 0 |
 | `GMU_AO_HOST_INTERRUPT_STATUS` | `0x9305` | `0x24c14` | `0` |
 | `GMU_RSCC_CONTROL_REQ` / `ACK` | `0x9307` / `0x9308` | `0x24c1c` / `0x24c20` | before stop: 0 / 0; 0094 after stop: 0 / 1 |
@@ -261,6 +261,18 @@ restore; GX GDSCR stays 0x00222001, CM3 reset stays 1. Thus the nine constrained
 init readbacks do not prevent these RSC handshakes. No CM3 execution or GMU DMA
 has been tested. Full raw transition in GPU_LOG.
 
+### 0096 interrupt/fence preflight (phone measured)
+
+With the 0095 wake/stop restored and CM3 held reset, AO_HOST_INTERRUPT_MASK
+(+0x24c18) and GMU2HOST_INTR_MASK (+0x1464c) both read 0. Pending AO status
+(+0x24c14) and GMU2HOST info (+0x14648) are 0. AO_AHB_FENCE_CTRL (+0x24c40)
+is 0; RPMH_POWER_STATE (+0x143b0) is 0x0f. No new writes. All lower checks
+and cleanup pass; user confirmed home screen. Source `a6xx_gmu_irq_disable()`
+writes all ones to both masks, so the initial zeros do not establish interrupt
+containment. A separate mask/verify/restore measurement is required before
+CM3 execution. It will not prove interrupt routing/delivery to XNU. Raw values
+and artifacts in GPU_LOG.
+
 ## Rails and clocks (0082-0085)
 
 ARC raw level tables from the command DB (hardware requests carry the table **index**,
@@ -287,9 +299,11 @@ bit only. The measured RCG stays at `0x602` after the tests (unused).
 
 1. Why the three hidden addresses and six MSGID length bits read back differently:
    fixed/hardware-owned fields versus secure/EL2 filtering. 0092 identifies all
-   nine but cannot distinguish their owner; wake/rail-vote behavior is untested.
-2. Whether the GMU firmware reaches `FW_INIT_RESULT` with our (not yet allocated or
-   mapped) HFI/log/debug buffers, and what it does to the rails it controls.
+   nine but cannot distinguish their owner. 0095 proves wake/stop handshakes;
+   individual rail-vote effects remain unmeasured.
+2. Whether the GMU firmware reaches `FW_INIT_RESULT` with our HFI/log/debug
+   buffers (allocated and ATOS-tested in 0093, never used by a GMU master), and
+   what it does to the rails it controls.
 3. Whether the GMU stream really is 5 with mask `0x400`, and whether the GMU's
    masters work through our context bank (ATOS only proves the page tables).
 4. GX power-up, the CP/SQE microcode path (`a630_sqe.fw`), the secure `a615_zap`

@@ -49,10 +49,12 @@ GPU_GMU_BOOT. No CM3 release or GX power has occurred.
 
 0095 completed at 18:18:46 UTC; user confirmed home screen. RSC wake ACK=3,
 BUSY=0, stop STATUS=0x01010006, full sampled state restored, GX off and CM3 reset.
-0096 adds a **read-only** six-register IRQ/fence/power-state preflight (mode 14),
-because source review found interrupt masks missing from the 0094 dump.
-Normal/sanitized host tests and local arm64 compile pass; CI-build/package next,
-then always check fastboot before asking for it. No 0096 phone result yet.
+0096 passed at 18:39:28 UTC, home screen confirmed. Six read-only words:
+AO_HOST_INTERRUPT_MASK=0, GMU2HOST_INTR_MASK=0, both pending statuses=0,
+AO_AHB_FENCE_CTRL=0, RPMH_POWER_STATE=0x0f. Full CI 39303111412 passed on
+edd2b796ed7ff02434c42942c490543c17f95456; verified artifacts/image in GPU_LOG.
+Next is 0097: separately prove both interrupt masks accept all ones and restore,
+with CM3 still reset. No 0097 patch/image/phone result yet.
 
 The larger first-start draft is only external (`gmu-first-start-draft.patch` under
 `ios-extra-work`, based on 0095). It had an arm64 object compile, but no host tests,
@@ -71,12 +73,12 @@ bounded CM3-start patch. No first-start image exists; CM3 has never run.
    16 KiB each at 0x60001000/0x60005000/0x60009000, mainline legacy HFI layout.
    ATOS passes both ends of all 13 pages and three faults (29 checks). Map is
    disabled before cleanup; S2CR3/CBAR3 retain only the known inert encodings.
-3. **Read-only pre-boot dump — 0094 measured; 0096 adds missing IRQ masks.**
+3. **Read-only pre-boot dump — 0094 and 0096 measured; 0097 tests IRQ masking.**
    All 29 original offsets readable;
    nonzero stopped-state ACK/BUSY and power-control/hyst defaults recorded.
    CM3 remains reset. See GPU_LOG for raw values, GPU_GMU_BOOT for interpretation.
 4. **0095 RSC wake/stop measured and fully restored (CM3 held reset).**
-   After the additional 0096 IRQ/fence measurement, **GMU start, one bounded attempt** (mainline steps 2-12 in the doc): TCM retention,
+   After the 0096 read-only dump and a separate 0097 mask/restore proof, **GMU start, one bounded attempt** (mainline steps 2-12 in the doc): TCM retention,
    RSCC wake handshake (`REQ=BIT(1)`, ACK bit 1, `SEQ_BUSY`==0), fw (already done),
    boot config, HFI table address, fence range, `CM3_CFG=0x4052`, chip id, log
    address, power config, then `SYSRESET` 1 -> 0 and poll `FW_INIT_RESULT` (10 ms
@@ -100,7 +102,7 @@ announce lines are the evidence. Make the next build smaller, not bigger.
 
 1. Edit `bsd/dev/sweet_gpu.c` (and, if needed, `sweet_rpmh.c`) in the **isolated tree**
    `/run/media/dipa/android/ios-extra-work/buildtree/xnu`. Its local git has one commit
-   per CI-validated baseline (latest `4be318c` = 0095; 0096 is the uncommitted diff).
+   per CI-validated baseline (latest `328cafb` = 0096; next patch starts from this baseline).
    Before starting a new step, commit the validated state there:
    `git add -A bsd/dev/sweet_gpu.c && git -c user.name=ios-extra -c
    user.email=ios-extra@localhost commit -m "Validated 009N baseline"`. The untracked
@@ -164,8 +166,8 @@ the user's words "home screen" for the boot confirmation they give.
 > `docs/GPU_GMU_BOOT.md`; `docs/GPU_LOG.md` is history. Do not touch
 > `/home/dipa/ios-sweet`. The phone is only ever booted with a temporary
 > `fastboot boot` after the user puts it in fastboot; never flash, never run
-> `fastboot getvar`, never reboot it unannounced. The next action is the pending 0094
-> read-only test (`tools/gpu-phone-test.py`, command in `HANDOFF.md`); always check
+> `fastboot getvar`, never reboot it unannounced. The next action is to implement/build 0097 interrupt mask/restore, then
+> test it (`tools/gpu-phone-test.py`, command in `HANDOFF.md`); always check
 > fastboot first, ask only if none is present, run it, record raw values, then continue with the numbered "Next
 > steps", one measured patch per phone boot. Test every precondition, keep every
 > experiment opt-in (`sweetgpu=N`) and rolled back, distinguish source reading /
