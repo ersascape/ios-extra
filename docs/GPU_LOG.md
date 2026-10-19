@@ -5,6 +5,117 @@ CI runs, phone results and the reasoning at the time. The current state and the 
 action are in [NOTES.md](../NOTES.md) and [HANDOFF.md](../HANDOFF.md). Entries that say
 "not yet built/booted" were true when written; newer entries supersede them.
 
+## Phone result — 0092 RSC/PDC diagnostics, 2026-10-19 16:55 UTC
+
+- Temporary boot only, issued 16:55:16 UTC after the user confirmed fastboot;
+  exactly one device, send 0.421s, boot 0.136s, total 0.563s. Image
+  `shim/out/shim-boot-0092-rpmhinit.img`, SHA256
+  `6fe97291353d16ac2edae5ee679599cf52c7e4e62fd1cb4ddf75408658a1f24c`,
+  `sweetgpu=10`; source `a5bd9a2d61d445b1793f9c44d6e152230df26bd2`,
+  green CI [39171199100](https://github.com/dipa-studio/ios-extra/actions/runs/39171199100).
+- Ping succeeded. Capture: 450 UDP packets, 178296 decoded bytes; files outside
+  Git at `ios-extra-work/logs/phone-0092-rpmhinit.{pcap,txt}` and
+  `phone-0092-rpmhinit-fastboot.txt`. Initial live report 0 was partial; the first
+  complete cached report is **report 1**, copied below. Later cached reports are
+  not independent measurements. No panic marker in the decoded capture.
+- **Home-screen confirmation pending.**
+- **Measured:** pre-write table differs in 34/48 entries; RSC/PDC sequencer
+  memory and PDC enable/TCS entries are back to zero, including registers that
+  accepted 0091 writes. Thus the 0091 configuration did not persist through this
+  user-controlled return to fastboot and temporary boot. This does not identify
+  which reset/power transition cleared it. SMMU S2CR3/CBAR3 and GMU RCG also start
+  at their ABL defaults on this boot.
+- **Measured:** 48 writes, 9 readback mismatches, successful stop handshake
+  `RSC_STATUS0=0x01010006`. Three hidden RSCC addresses retain `0x82204514`,
+  `0x82204510`, `0x82204520`; all six PDC MSGID differences are exactly bit 3
+  (`0x10108 -> 0x10100`). Interpretation and limits: `GPU_GMU_BOOT.md`.
+- Other raw checks: firmware 8192/8192 words verified, bad=0; CM3 reset=1,
+  busy/init=0, CFG=0x52; CX complete and rolled back, clocks stage=8 restored=1.
+  ATOS TTBR=0x104664000, data PA=0x104667000, PTE=0x40000104667f43;
+  PARs for 0x60000000/0x60000fff/0x60001000/0x20000000 are respectively
+  `0x4000000104667b80`, `0x104667b80`, `0x304667a03`, `0x104667a03`;
+  passed=4, FSR=0x400, sGFSR=0. Final SMR/S2CR/SCTLR/CBAR = 0/3/0/0x10000
+  (the known inert restore limitation). No GMU or GX execution.
+
+Raw RSC/PDC portion of the first complete cached report (all 48 pre-write
+values can be reconstructed: the 34 differing entries below plus the other 14
+entries equal to the init table in patch 0091):
+
+```text
+SWEET GPU: RPMH init writes=48/48 bad=9 stop-handshake=1 RSC_STATUS0=0x01010006
+SWEET GPU: RPMH init first bad region=0 off=+0x23034 wrote=0x00000000 got=0x82204514
+SWEET GPU: RPMH init bad region=0 off=+0x23034 wrote=0x00000000 got=0x82204514
+SWEET GPU: RPMH init bad region=0 off=+0x2303c wrote=0x00000000 got=0x82204510
+SWEET GPU: RPMH init bad region=0 off=+0x23044 wrote=0x00000000 got=0x82204520
+SWEET GPU: RPMH init bad region=1 off=+0x55d4 wrote=0x00010108 got=0x00010100
+SWEET GPU: RPMH init bad region=1 off=+0x55e4 wrote=0x00010108 got=0x00010100
+SWEET GPU: RPMH init bad region=1 off=+0x55f4 wrote=0x00010108 got=0x00010100
+SWEET GPU: RPMH init bad region=1 off=+0x5764 wrote=0x00010108 got=0x00010100
+SWEET GPU: RPMH init bad region=1 off=+0x5774 wrote=0x00010108 got=0x00010100
+SWEET GPU: RPMH init bad region=1 off=+0x5784 wrote=0x00010108 got=0x00010100
+SWEET GPU: RPMH init result: some writes did not read back
+SWEET GPU: RPMH table pre-write region=0 off=+0x23010 found=0x00000000 mainline=0x01000000
+SWEET GPU: RPMH table pre-write region=0 off=+0x23034 found=0x82204514 mainline=0x00000000
+SWEET GPU: RPMH table pre-write region=0 off=+0x2303c found=0x82204510 mainline=0x00000000
+SWEET GPU: RPMH table pre-write region=0 off=+0x23048 found=0x00000000 mainline=0x80000000
+SWEET GPU: RPMH table pre-write region=0 off=+0x23044 found=0x82204520 mainline=0x00000000
+SWEET GPU: RPMH table pre-write region=0 off=+0x23600 found=0x00000000 mainline=0xa7a506a0
+SWEET GPU: RPMH table pre-write region=0 off=+0x23604 found=0x00000000 mainline=0xa1e6a6e7
+SWEET GPU: RPMH table pre-write region=0 off=+0x23608 found=0x00000000 mainline=0xa2e081e1
+SWEET GPU: RPMH table pre-write region=0 off=+0x2360c found=0x00000000 mainline=0xe9a982e2
+SWEET GPU: RPMH table pre-write region=0 off=+0x23610 found=0x00000000 mainline=0x0020e8a8
+SWEET GPU: RPMH table pre-write region=2 off=+0x0 found=0x00000000 mainline=0xfebea1e1
+SWEET GPU: RPMH table pre-write region=2 off=+0x4 found=0x00000000 mainline=0xa5a4a3a2
+SWEET GPU: RPMH table pre-write region=2 off=+0x8 found=0x00000000 mainline=0x8382a6e0
+SWEET GPU: RPMH table pre-write region=2 off=+0xc found=0x00000000 mainline=0xbce3e284
+SWEET GPU: RPMH table pre-write region=2 off=+0x10 found=0x00000000 mainline=0x002081fc
+SWEET GPU: RPMH table pre-write region=1 off=+0x55cc found=0x00000000 mainline=0x00000007
+SWEET GPU: RPMH table pre-write region=1 off=+0x55d4 found=0x00000000 mainline=0x00010108
+SWEET GPU: RPMH table pre-write region=1 off=+0x55d8 found=0x00000000 mainline=0x00030010
+SWEET GPU: RPMH table pre-write region=1 off=+0x55dc found=0x00000000 mainline=0x00000001
+SWEET GPU: RPMH table pre-write region=1 off=+0x55e4 found=0x00000000 mainline=0x00010108
+SWEET GPU: RPMH table pre-write region=1 off=+0x55e8 found=0x00000000 mainline=0x00030000
+SWEET GPU: RPMH table pre-write region=1 off=+0x55f4 found=0x00000000 mainline=0x00010108
+SWEET GPU: RPMH table pre-write region=1 off=+0x55f8 found=0x00000000 mainline=0x00030090
+SWEET GPU: RPMH table pre-write region=1 off=+0x575c found=0x00000000 mainline=0x00000007
+SWEET GPU: RPMH table pre-write region=1 off=+0x5764 found=0x00000000 mainline=0x00010108
+SWEET GPU: RPMH table pre-write region=1 off=+0x5768 found=0x00000000 mainline=0x00030010
+SWEET GPU: RPMH table pre-write region=1 off=+0x576c found=0x00000000 mainline=0x00000002
+SWEET GPU: RPMH table pre-write region=1 off=+0x5774 found=0x00000000 mainline=0x00010108
+SWEET GPU: RPMH table pre-write region=1 off=+0x5778 found=0x00000000 mainline=0x00030000
+SWEET GPU: RPMH table pre-write region=1 off=+0x577c found=0x00000000 mainline=0x00000002
+SWEET GPU: RPMH table pre-write region=1 off=+0x5784 found=0x00000000 mainline=0x00010108
+SWEET GPU: RPMH table pre-write region=1 off=+0x5788 found=0x00000000 mainline=0x00030090
+SWEET GPU: RPMH table pre-write region=1 off=+0x578c found=0x00000000 mainline=0x00000003
+SWEET GPU: RPMH table pre-write region=1 off=+0x4500 found=0x00000000 mainline=0x80000001
+SWEET GPU: RPMH table pre-write: 34 of 48 entries differ from the mainline values
+SWEET GPU: RSC RSC_STATUS0_DRV0 +0x23010 = 0x00000000
+SWEET GPU: RSC PDC_SEQ_START_ADDR +0x23020 = 0x00004520
+SWEET GPU: RSC PDC_MATCH_VALUE_LO +0x23024 = 0x00004510
+SWEET GPU: RSC PDC_MATCH_VALUE_HI +0x23028 = 0x00004514
+SWEET GPU: RSC PDC_SLAVE_ID_DRV0 +0x2302c = 0x00000001
+SWEET GPU: RSC HIDDEN_TCS_CMD0_ADDR +0x23034 = 0x82204514
+SWEET GPU: RSC HIDDEN_TCS_CMD0_DATA +0x23038 = 0x00000000
+SWEET GPU: RSC OVERRIDE_START_ADDR +0x23400 = 0x00000000
+SWEET GPU: RSC SEQ_BUSY_DRV0 +0x23404 = 0x00000000
+SWEET GPU: RSC SEQ_MEM_0_DRV0 +0x23600 = 0x00000000
+SWEET GPU: RSC TCS0_DRV0_STATUS +0x23d18 = 0x00000001
+SWEET GPU: RSC TCS3_DRV0_STATUS +0x244f8 = 0x00000001
+SWEET GPU: RSC GMU_RSCC_CONTROL_REQ +0x24c1c = 0x00000000
+SWEET GPU: RSC GMU_RSCC_CONTROL_ACK +0x24c20 = 0x00000000
+SWEET GPU: PDC GPU_ENABLE_PDC +0x4500 = 0x00000000
+SWEET GPU: PDC GPU_SEQ_START_ADDR +0x4520 = 0x00000000
+SWEET GPU: PDC GPU_TCS0_CONTROL +0x5500 = 0x00000000
+SWEET GPU: PDC GPU_TCS1_CMD_ENABLE_BANK +0x55cc = 0x00000000
+SWEET GPU: PDC GPU_TCS3_CMD_ENABLE_BANK +0x575c = 0x00000000
+SWEET GPU: PDC GPU_TCS3_CMD0_ADDR +0x5768 = 0x00000000
+SWEET GPU: PDC SEQ_MEM_0 = 0x00000000
+SWEET GPU: PDC SEQ_MEM_1 = 0x00000000
+SWEET GPU: PDC SEQ_MEM_2 = 0x00000000
+SWEET GPU: PDC SEQ_MEM_3 = 0x00000000
+SWEET GPU: PDC SEQ_MEM_4 = 0x00000000
+```
+
 ## Latest phone result — 0090 RSC/PDC read-only inventory, 2026-10-18 21:58 UTC
 
 - `shim/out/shim-boot-0090-rscpdc.img` (SHA256 `a30aef87…695787`, CI 39169517724,

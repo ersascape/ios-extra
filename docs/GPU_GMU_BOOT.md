@@ -157,11 +157,51 @@ are probably trapped and emulated by the hypervisor. Always treat GR0/GR1 reads 
 `PDC_MATCH_VALUE_LO/HI=0x4510/0x4514`, `PDC_SLAVE_ID_DRV0=1`, `HIDDEN_TCS_CMD0_ADDR=
 0x82204514`; everything else (RSC sequencer memory, all PDC registers, PDC sequence
 memory) was 0; RSCC REQ/ACK 0, `SEQ_BUSY` 0, `TCS0/TCS3_DRV0_STATUS` 1.
-**Measured after `sweetgpu=10`:** 48 writes (table `gpu_rpmh_init[]` in
-`bsd/dev/sweet_gpu.c`), 39 read back, 9 did not (the first was `HIDDEN_TCS_CMD0_ADDR`
-which keeps `0x82204514`; the other 8 are unknown until the 0092 image is run).
-RSC stop handshake completed: `RSC_STATUS0_DRV0 = 0x01010006`. The configuration is
-left in place; it is not known whether it survives a reboot.
+**Measured on 0092 (2026-10-19):** all 48 writes issued; 39 read back exactly.
+The nine differences are:
+
+| Region / byte offset | Register | Wrote | Read back |
+| --- | --- | --- | --- |
+| GMU +0x23034 | RSCC hidden CMD0 address | 0 | 0x82204514 |
+| GMU +0x2303c | RSCC hidden CMD1 address | 0 | 0x82204510 |
+| GMU +0x23044 | RSCC hidden CMD2 address | 0 | 0x82204520 |
+| PDC +0x55d4 / +0x55e4 / +0x55f4 | TCS1 CMD0/1/2 MSGID | 0x10108 | 0x10100 |
+| PDC +0x5764 / +0x5774 / +0x5784 | TCS3 CMD0/1/2 MSGID | 0x10108 | 0x10100 |
+
+The RSC stop handshake completes again: `RSC_STATUS0_DRV0=0x01010006`, REQ is
+cleared afterwards. Pre-write table: 34/48 differ from the mainline init table;
+RSC/PDC sequencer memories, PDC enable and TCS words are zero again. Thus the
+0091 configuration did not survive the user's return to fastboot and temporary
+boot. This does not isolate the reset or power transition responsible.
+Raw report and artifact identity: [GPU_LOG.md](GPU_LOG.md).
+
+### Interpretation of the nine differences (step 1 gate)
+
+**Source reading:** v6.12 `a6xx_gmu_rpmh_init()` issues exactly these values,
+then calls `a6xx_rpmh_stop()`. It does not read back or reject these registers.
+The hidden address readbacks have low words matching the three configured PDC
+handshake addresses (`MATCH_HI=0x4514`, `MATCH_LO=0x4510`, `SEQ_START=0x4520`),
+with the same `0x82200000` prefix. Their values already exist before our init.
+This is consistent with fixed or firmware-owned handshake routing; it is not a
+random corrupt address. The six MSGID words retain response-request bit 8 and
+write bit 16; only the literal length field's bit 3 disappears. The field decode
+comes from mainline's
+[rpmh-rsc.c](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/drivers/soc/qcom/rpmh-rsc.c?h=v6.12)
+(`CMD_MSGID_LEN=8`, `CMD_MSGID_RESP_REQ=BIT(8)`, `CMD_MSGID_WRITE=BIT(16)`).
+The register XML names the PDC registers but does not specify their writable masks.
+
+**Decision:** treat these as nine *specific constrained readbacks*, not evidence
+that all RSC/PDC writes failed, and keep issuing the mainline values. Hardware
+ownership/fixed fields are a plausible working explanation. These reads alone
+cannot distinguish that from EL2/secure filtering, and do not establish how the
+length field is transmitted. Do not assert that mainline on bare hardware would
+observe the same values, or mask away new differences. The already measured stop
+handshake proves the RSC can acknowledge stop with this configuration; it does
+not prove the PDC sent valid rail votes or that wake works. A separate buffer /
+ATOS experiment with CM3 held in reset can proceed without resolving that cause.
+Before GMU release, a separate bounded RSCC wake ACK / SEQ_BUSY check remains
+mandatory. No extra writes to the hidden addresses or arbitrary MSGID values are
+justified by this result.
 
 ## Rails and clocks (0082-0085)
 
@@ -181,14 +221,15 @@ bit only. The measured RCG stays at `0x602` after the tests (unused).
 
 - No test so far faulted on a read; GR0/GR1 SMMU pages behave as if emulated.
 - S2CR/CBAR "inert" encodings are refused; SMR=0 deactivates a group.
-- 9 of 48 RSC/PDC writes did not stick (reason unknown: read-only/hardware-owned
-  registers, or filtering).
+- 9 of 48 RSC/PDC writes have constrained readbacks: three hidden addresses and
+  six MSGID length fields (0092). Hardware ownership versus filtering is unresolved.
 - `fastboot getvar` must never be run on this phone.
 
 ## What is still unknown (do not guess; measure)
 
-1. Which 9 RSC/PDC writes are refused, and whether the RSC/PDC programming persists
-   across a reboot (0092 answers both).
+1. Why the three hidden addresses and six MSGID length bits read back differently:
+   fixed/hardware-owned fields versus secure/EL2 filtering. 0092 identifies all
+   nine but cannot distinguish their owner; wake/rail-vote behavior is untested.
 2. Whether the GMU firmware reaches `FW_INIT_RESULT` with our (not yet allocated or
    mapped) HFI/log/debug buffers, and what it does to the rails it controls.
 3. Whether the GMU stream really is 5 with mask `0x400`, and whether the GMU's

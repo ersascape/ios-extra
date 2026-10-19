@@ -1,6 +1,6 @@
 # ios-extra — current state
 
-Last updated 2026-10-19 after patch 0092. Read [HANDOFF.md](HANDOFF.md) for how to
+Last updated 2026-10-19 after the 0092 phone test. Read [HANDOFF.md](HANDOFF.md) for how to
 continue and [AGENTS.md](AGENTS.md) for the rules. The per-step history (images,
 hashes, CI runs, raw numbers) is [docs/GPU_LOG.md](docs/GPU_LOG.md); the hardware and
 mainline reference is [docs/GPU_GMU_BOOT.md](docs/GPU_GMU_BOOT.md); the per-patch
@@ -29,7 +29,7 @@ this repo's GitHub Actions (`.github/workflows/xnu.yml`, macOS runner, ~6 min).
 | 0088-0089 | 8 | stream 5 -> CB3, tiny 4 KiB page table, ATOS check, restore (+ write transcript) | 39167833774 / 39168706195 | translations correct; S2CR3/CBAR3 refuse restore |
 | 0090 | 9 | read-only RSC/PDC inventory | 39169517724 | ok |
 | 0091 | 10 | mainline A618 RSC/PDC init (48 writes, readback), RSC stop handshake | 39170396365 | handshake ok, 9/48 writes did not read back |
-| 0092 | 10 | same, logs every mismatch + reads the table first | 39171199100 | **built, not booted yet** |
+| 0092 | 10 | same, logs every mismatch + reads the table first | 39171199100 | stop handshake ok; all 9 mismatches identified |
 
 The user confirmed the home screen after every boot up to 0091. Each stage runs
 inside the previous one's window (`sweetgpu=N` includes all lower modes) and undoes
@@ -41,13 +41,16 @@ Rendering is still CPU. The GMU processor has never been released from reset.
 
 ## Immediate next action
 
-1. The phone must be put in fastboot by the user. Then:
-   `python3 tools/gpu-phone-test.py --image shim/out/shim-boot-0092-rpmhinit.img
-   --sha256 6fe97291353d16ac2edae5ee679599cf52c7e4e62fd1cb4ddf75408658a1f24c
-   --name phone-0092-rpmhinit`.
-   Read `SWEET GPU: RPMH table pre-write`, `RPMH init bad ...`, `RPMH init result`.
-2. Record the result here and in `docs/GPU_LOG.md`, then follow the plan in
-   [HANDOFF.md](HANDOFF.md) ("Next steps").
+0092 was temporarily booted at 16:55:16 UTC; ping and complete cached GPU report
+received. Home-screen confirmation is pending. Raw values are in
+[docs/GPU_LOG.md](docs/GPU_LOG.md). The 34/48 pre-write differences show the 0091
+RSC/PDC configuration did not persist through this boot path. Nine mismatches:
+RSCC hidden addresses +0x23034/3c/44 retain 0x82204514/10/20; six PDC MSGID words
+read 0x10100 after 0x10108 writes. Stop handshake succeeds (0x01010006).
+
+Continue HANDOFF next step 1: explain the mismatch signatures and the limits of
+what they prove before the separate GMU-buffer experiment. Do not repeat 0092
+or release CM3 merely because its diagnostics completed.
 
 ## Hard constraints (unchanged)
 

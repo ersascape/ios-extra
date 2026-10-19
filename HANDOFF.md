@@ -27,39 +27,19 @@ then the next question.** The user prefers slow and careful over fast and clever
 
 ## State in one paragraph
 
-Patches 0080-0091 are built, phone-tested and documented; 0092 is built (CI
-39171199100) and its image is ready but **not booted**. On the phone we have: CX rail
-votes + CX power domain, GMU clock tree, GCC bus branches, readable GMU registers
-(CM3 held in reset), the 32 KiB GMU firmware copied into GMU TCM and verified,
-a readable GPU SMMU in which stream 5 -> context bank 3 with a hand-built 4 KiB page
-table translates correctly under the SMMU's own ATOS, readable RSC/PDC registers, and
-mainline's A618 RSC/PDC init executed (48 writes, 39 read back, RSC stop handshake
-completed). We have **not**: allocated or mapped GMU buffers (HFI/log/debug), released
-the GMU processor, powered GX, or run any GPU command. See `NOTES.md` for the table.
+Patches 0080-0092 are built and phone-tested. 0092 was temporarily booted on
+2026-10-19 at 16:55:16 UTC; home-screen confirmation is pending. It reproduced all
+nine constrained RSC/PDC readbacks and a successful stop handshake (0x01010006).
+The init state did not persist through this boot path. Raw report in GPU_LOG;
+step 1 interpretation and limits in GPU_GMU_BOOT. CM3 remains held in reset and GX
+has never been powered. The next implementation is the separate opt-in GMU-buffer
+and ATOS experiment (step 2 below); do not repeat the 0092 boot.
 
-## Immediate next action (needs the user)
+## Immediate next action
 
-Ask the user to put the phone in fastboot, then run the 0092 image:
-
-```sh
-cd /home/dipa/ios-extra
-python3 tools/gpu-phone-test.py \
-  --image shim/out/shim-boot-0092-rpmhinit.img \
-  --sha256 6fe97291353d16ac2edae5ee679599cf52c7e4e62fd1cb4ddf75408658a1f24c \
-  --name phone-0092-rpmhinit
-```
-
-It checks the hash and that exactly one fastboot device exists, starts our own
-tcpdump of the phone's UDP log (needs `sudo -n`), configures the host USB-ECM side,
-boots once, waits for ping + the replay window, stops only its own tcpdump and
-prints the `SWEET GPU:` lines (logs land in
-`/run/media/dipa/android/ios-extra-work/logs/phone-0092-rpmhinit.{pcap,txt}`).
-Look at: `RPMH table pre-write` (did the 0091 programming persist? which entries
-differ), `RPMH init bad ...` (up to 16 refused writes), `RPMH init result`. If the
-table already matches the mainline values the init is refused ("expected unprogrammed
-state") by design — that itself is the answer (persistence).
-Then ask whether the home screen came up, and record everything in `NOTES.md` +
-`docs/GPU_LOG.md` (raw values, not just conclusions).
+Record the user's home-screen answer for 0092 when available. Complete and validate
+0093 GMU-buffer mapping, then build/package it and ask for a new user-controlled
+fastboot before its single temporary boot. No new image is ready yet.
 
 ## Next steps (each is its own measured patch; do not merge steps)
 
