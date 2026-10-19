@@ -45,21 +45,21 @@ dword index - `0x1A800`) x 4. The RSCC block is `gmu + 0x23000` (mainline
 
 | Register | Dword index | GMU byte offset | Seen on phone |
 | --- | --- | --- | --- |
-| `GMU_ICACHE_CONFIG` / `DCACHE_CONFIG` / `SYS_BUS_CONFIG` | `0x4c00` / `0x4c01` / `0x4c0f` | `0x13000` / `0x13004` / `0x1303c` | not read |
+| `GMU_ICACHE_CONFIG` / `DCACHE_CONFIG` / `SYS_BUS_CONFIG` | `0x4c00` / `0x4c01` / `0x4c0f` | `0x13000` / `0x13004` / `0x1303c` | 0094: 0 / 0 / 0 |
 | ITCM start / DTCM start | `0x1B400` / `0x1C400` (gpu index) | `0x3000` / `0x7000` | written + read back 0 mismatches |
 | `GMU_CM3_SYSRESET` | `0x5000` | `0x14000` | `1` (reset held) |
-| `GMU_CM3_BOOT_CONFIG` | `0x5001` | `0x14004` | not read |
+| `GMU_CM3_BOOT_CONFIG` | `0x5001` | `0x14004` | 0094: 0 |
 | `GMU_CM3_FW_BUSY` / `FW_INIT_RESULT` / `CM3_CFG` | `0x501a` / `0x501c` / `0x502d` | `0x14068` / `0x14070` / `0x140b4` | `0` / `0` / `0x52` |
-| `GMU_PWR_COL_INTER_FRAME_CTRL` / `HYST` | `0x50c0` / `0x50c1` | `0x14300` / `0x14304` | not read |
-| `GMU_RPMH_CTRL` | `0x50e8` | `0x143a0` | not read |
-| `GPU_GMU_CX_GMU_PWR_COL_CP_MSG` / `CP_RESP` | `0x5100` / `0x5101` | `0x14400` / `0x14404` | not read |
-| `GMU_HFI_CTRL_STATUS` / `QTBL_INFO` / `QTBL_ADDR` / `CTRL_INIT` | `0x5180` / `0x5184` / `0x5185` / `0x5186` | `0x14600` / `0x14610` / `0x14614` / `0x14618` | not read |
-| `GMU_HFI_SFR_ADDR` | `0x5182` | `0x14608` | not read |
+| `GMU_PWR_COL_INTER_FRAME_CTRL` / `HYST` | `0x50c0` / `0x50c1` | `0x14300` / `0x14304` | 0094: 0x09c40406 / 0x000a2710 |
+| `GMU_RPMH_CTRL` | `0x50e8` | `0x143a0` | 0094: 0 |
+| `GPU_GMU_CX_GMU_PWR_COL_CP_MSG` / `CP_RESP` | `0x5100` / `0x5101` | `0x14400` / `0x14404` | 0094: 0 / 0 |
+| `GMU_HFI_CTRL_STATUS` / `QTBL_INFO` / `QTBL_ADDR` / `CTRL_INIT` | `0x5180` / `0x5184` / `0x5185` / `0x5186` | `0x14600` / `0x14610` / `0x14614` / `0x14618` | 0094: all 0 |
+| `GMU_HFI_SFR_ADDR` | `0x5182` | `0x14608` | 0094: 0 |
 | `GMU_HOST2GMU_INTR_SET`, `GMU2HOST_INTR_INFO` | `0x5194`, `0x5192` | `0x14650`, `0x14648` | not read |
-| `GMU_GENERAL_0` / `GENERAL_7` | `0x51c5` / `0x51cc` | `0x14714` / `0x14730` | `0` / not read |
+| `GMU_GENERAL_0` / `GENERAL_7` | `0x51c5` / `0x51cc` | `0x14714` / `0x14730` | 0094: 0 / 0 |
 | `GMU_AO_HOST_INTERRUPT_STATUS` | `0x9305` | `0x24c14` | `0` |
-| `GMU_RSCC_CONTROL_REQ` / `ACK` | `0x9307` / `0x9308` | `0x24c1c` / `0x24c20` | `0` / `0` |
-| `GMU_AHB_FENCE_RANGE_0` | `0x9311` | `0x24c44` | not read |
+| `GMU_RSCC_CONTROL_REQ` / `ACK` | `0x9307` / `0x9308` | `0x24c1c` / `0x24c20` | before stop: 0 / 0; 0094 after stop: 0 / 1 |
+| `GMU_AHB_FENCE_RANGE_0` | `0x9311` | `0x24c44` | 0094: 0 |
 | `GMU_BOOT_SLUMBER_OPTION`, `GX_VOTE_IDX`, `MX_VOTE_IDX` | `0x23f8`, `0x23f9`, `0x23fa` | `0x8fe0`, `0x8fe4`, `0x8fe8` | not read |
 | `GMU_GX_SPTPRAC_POWER_CONTROL`, `SPTPRAC_PWR_CLK_STATUS` | `0x81`, `0x50d0` | `0x204`, `0x14340` | not read |
 

@@ -49,8 +49,9 @@ GPU_GMU_BOOT. No CM3 release or GX power has occurred.
 
 Split step 4 into a smaller bounded RSC wake/stop test first (new patch 0095,
 mode 13), leaving CM3 held in reset. This checks ACK bit 1 and SEQ_BUSY=0 under
-the exact known nine constrained readbacks before a firmware start. Implement,
-test all preconditions/rollback paths, CI-build and package; no 0095 code/image yet.
+the exact known nine constrained readbacks before a firmware start. 0095 is implemented; all 57 precondition refusals, timeout/rollback/GX scenarios,
+normal and sanitized host suites pass; local arm64 compile passes. CI-build and
+package it next; no 0095 image/phone result yet.
 Always check fastboot before asking for it. User confirmed 0094 home screen.
 
 ## Next steps (each is its own measured patch; do not merge steps)
@@ -93,7 +94,7 @@ announce lines are the evidence. Make the next build smaller, not bigger.
 
 1. Edit `bsd/dev/sweet_gpu.c` (and, if needed, `sweet_rpmh.c`) in the **isolated tree**
    `/run/media/dipa/android/ios-extra-work/buildtree/xnu`. Its local git has one commit
-   per CI-validated baseline (latest `d3a6423` = 0093; 0094 is the uncommitted diff).
+   per CI-validated baseline (latest `85017d8` = 0094; 0095 is the uncommitted diff).
    Before starting a new step, commit the validated state there:
    `git add -A bsd/dev/sweet_gpu.c && git -c user.name=ios-extra -c
    user.email=ios-extra@localhost commit -m "Validated 009N baseline"`. The untracked

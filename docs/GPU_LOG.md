@@ -5,6 +5,21 @@ CI runs, phone results and the reasoning at the time. The current state and the 
 action are in [NOTES.md](../NOTES.md) and [HANDOFF.md](../HANDOFF.md). Entries that say
 "not yet built/booted" were true when written; newer entries supersede them.
 
+## Implementation — 0095 bounded RSC wake/stop (local checks pass)
+
+- Patch `0095-sweet-gpu-rsc-wake-stop.patch`, mode 13; isolated source baseline
+  85017d8 (validated 0094). Smaller step 4a before any CM3 release: TCM retention,
+  wake ACK bit 1, BUSY=0, return to stop, restore retention. GX snapshots included.
+- Every new precondition comes from the fresh lower-mode proof and measured
+  stopped state, except GX is gated by powered-off/collapsed field predicates
+  rather than an unmeasured whole register value with CX held on. Exactly the nine
+  known init signatures are allowed; every tuple field is checked. All polls have
+  10 ms bounds. No CM3/GX control or HFI command added.
+- Normal/sanitized host suites pass: 57 zero-write refusals, exact write ordering,
+  all three handshake timeouts, retention set/restore failures, unexpected GX
+  change, reset preservation, replay and lower-mode exclusion. Arm64 compile
+  0 of 1 failed; isolated diff equals the patch. CI and phone pending.
+
 ## Phone result — 0094 pre-boot GMU dump, 2026-10-19 18:01 UTC
 
 - User confirmed fastboot. First check saw zero devices during USB reconnection;

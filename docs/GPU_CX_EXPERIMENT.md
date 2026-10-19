@@ -310,3 +310,44 @@ missing GMU/SMMU map, failed buffer gate, full mode-12 rollback and replay witho
 new allocations/writes. Normal and ASan/UBSan suites pass; local arm64 compile
 passes. Full CI 39297388718 subsequently passed with matching source artifacts;
 0094 phone inventory remains pending.
+
+## 0095 — bounded RSC wake/stop, CM3 held reset (`sweetgpu=13`)
+
+0094 showed ACK=1 / SEQ_BUSY=1 *after* RSC stop, with REQ=0. Split step 4 into
+this smaller measurement before any processor release: does mainline's RSC wake
+complete under the nine constrained RSC/PDC readbacks, and can it return to stop?
+
+The fresh mode-12 dump must be complete and error-free; buffer ATOS must have
+passed with the mapping inactive and no error. RSC init must have issued all 48
+writes, completed stop, and logged exactly the nine signatures from 0092-0094,
+matching each region, offset, written value and readback. There is no broad mask
+for additional mismatches. Live GENERAL_7/REQ/ACK/BUSY/STATUS/CM3_RESET must equal
+0/0/1/1/0x01010006/1, and FW_BUSY=0. GX must be readable, PWR_ON clear and
+SW_COLLAPSE set. Do not assume the whole GX GDSCR value read before CX was powered
+must match the value with CX held on.
+
+Write GENERAL_7=1 (mainline TCM retention), require readback=1; only then write
+REQ=2, poll ACK bit 1, then SEQ_BUSY=0. Each poll has 100 reads at 100 us intervals
+(10 ms bound). Snapshot GENERAL_7, REQ, ACK, BUSY, STATUS and CM3_RESET while awake,
+and GX GDSCR. Any GX change is reported as an error; no GX control is written.
+
+Success or timeout after REQ=2 always drops REQ to 0, requests the already measured
+stop (REQ=1, STATUS bit 16 within another 10 ms), drops REQ to 0 again and restores
+GENERAL_7 to its original 0. If retention=1 was refused, restore GENERAL_7 without
+attempting wake. Record separate wake ACK, idle, stop, controls-restored and exact
+six-word state-restored flags; never conflate a timeout with a restored handshake.
+Raw snapshots carry validity bits (before=1, awake=2, final=4), so unfilled snapshot
+slots after refusal are not measurements. Final GX must match its original value
+for controls-restored. The existing buffer, clock, CX and rail cleanup follows.
+
+New writes are only GENERAL_7 and the already used RSCC REQ register. No CM3 reset,
+boot config, HFI, cache, RPMH client or GPU commands are written by this step.
+First retention/wake request needs the usual one-line device-test confirmation
+after the concrete image is ready; always check fastboot before asking for it.
+
+Host tests cover 57 zero-write refusals (all metadata, all 36 fields of the nine
+known readback tuples, every live register and GX predicate); exact six-write
+success ordering and state restoration; bounded ACK/busy/stop timeouts; refused
+retention set/restore; unexpected GX change; full mode-13 source execution,
+mode-12 exclusion and cached replay. Normal and ASan/UBSan suites and arm64 compile
+pass. This is local evidence; full CI and phone result are pending.

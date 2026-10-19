@@ -78,6 +78,7 @@ class GPUProbeTests(unittest.TestCase):
             self.assertEqual(build.returncode, 0, build.stderr)
             result = subprocess.run([str(work / 'test')], capture_output=True, text=True)
             self.assertEqual(result.returncode, 0, result.stderr)
+            self.assertIn('PASS: RSC wake/stop', result.stdout)
             self.assertIn('PASS: 29 pre-boot registers', result.stdout)
             self.assertIn('PASS: GMU buffers 29 ATOS checks', result.stdout)
             self.assertIn('PASS: 14 clock/cache cases, 30 ARC cases + 512 mutations, 61 CX experiment cases', result.stdout)
@@ -118,10 +119,26 @@ static uint32_t smmu_mem[GPU_SMMU_SIZE / 4];
 static uint32_t pdc_mem[GPU_PDC_SIZE / 4], pdcseq_mem[GPU_PDC_SIZE / 4];
 static int pdc_ro, rsc_stuck;
 static uint32_t hw_ro_off; /* one GMU-block register that ignores writes */ /* PDC refuses writes / RSC never reports powered off */
+static int wake_model, wake_seen, wake_ack_stuck, wake_busy_stuck, wake_stop_stuck;
+static int retention_stuck, retention_restore_stuck, wake_gx_on;
+static unsigned wake_trace_n;
+static uint32_t wake_trace_off[16], wake_trace_val[16];
 static int smmu_sticky; /* hardware that refuses to take the ABL default back in S2CR3/CBAR3 */
 static void test_store32(vm_offset_t base, uint32_t off, uint32_t value)
 {
     all_mmio_writes++;
+    if (wake_model && base == (vm_offset_t)gmu_mem) {
+        if (off == 0x14730 || off == 0x24c1c || off == 0x14000) {
+            assert(wake_trace_n < 16);
+            wake_trace_off[wake_trace_n] = off; wake_trace_val[wake_trace_n++] = value;
+        }
+        if (off == 0x14730 && ((value == 1 && retention_stuck) || (value == 0 && retention_restore_stuck))) return;
+        if (off == 0x23034 || off == 0x2303c || off == 0x23044) return;
+        if (off == 0x24c1c && (value == 1 || value == 2)) gmu_mem[0x23010/4] &= ~(1u << 16);
+        if (off == 0x24c1c && value == 2) wake_seen = 1;
+    }
+    if (wake_model && base == (vm_offset_t)pdc_mem && (off == 0x55d4 || off == 0x55e4 || off == 0x55f4 ||
+        off == 0x5764 || off == 0x5774 || off == 0x5784)) value &= ~8u;
     if (base == (vm_offset_t)smmu_mem) {
         smmu_write_calls++;
         if (off == GPU_SMMU_CB0 + 3 * 0x1000 + GPU_SMMU_CB_TLBSYNC)
@@ -220,7 +237,19 @@ kern_return_t kmem_alloc_contig(vm_map_t m, vm_offset_t *a, vm_size_t size, vm_o
 void delay(int us)
 {
     smmu_sim();
-    if (gmu_mem[0x24c1c / 4] == 1 && !rsc_stuck) gmu_mem[(0x23000 + 4 * 4) / 4] |= 1u << 16;
+    if (gmu_mem[0x24c1c / 4] == 1 && !rsc_stuck && !(wake_model && wake_seen && wake_stop_stuck)) {
+        gmu_mem[(0x23000 + 4 * 4) / 4] |= 1u << 16;
+        if (wake_model) {
+            gmu_mem[0x23010/4] = 0x01010006;
+            gmu_mem[0x24c20/4] = gmu_mem[0x23404/4] = 1;
+            cc[GPU_GX_GDSCR/4] = GPU_CX_IDLE_GDSCR;
+        }
+    }
+    if (wake_model && gmu_mem[0x24c1c/4] == 2 && !wake_ack_stuck) {
+        gmu_mem[0x24c20/4] = 2;
+        if (!wake_busy_stuck) gmu_mem[0x23404/4] = 0;
+        if (wake_gx_on) cc[GPU_GX_GDSCR/4] |= GPU_DOMAIN_ON;
+    }
     (void)us; delay_calls++;
     uint32_t *mn = &gcc[GPU_GCC_MEMNOC_GFX / 4];
     if (!(clk_stuck & 8u)) { if (*mn & 1u) *mn &= ~GPU_BRANCH_OFF; else *mn |= GPU_BRANCH_OFF; }
@@ -346,6 +375,8 @@ static void arc_reset(void)
     ats_stuck = tlb_stuck = smmu_sticky = 0;
     alloc_null = alloc_unaligned = phys_discontig = bad_atos = smmu_write_calls = 0;
     refuse_smmu_off = refused_writes = clean_bytes = 0; all_mmio_writes = 0;
+    wake_model = wake_seen = wake_ack_stuck = wake_busy_stuck = wake_stop_stuck = 0;
+    retention_stuck = retention_restore_stuck = wake_gx_on = 0; wake_trace_n = 0;
     last_ats = smmu_rd64(GPU_SMMU_CB0 + 3 * 0x1000 + GPU_SMMU_CB_ATS1PR); /* not a pending request */
     memset(dma_block, 0, sizeof(dma_block));
     for (unsigned i = 0; i < GPU_GMU_SIZE / 4; i++) gmu_mem[i] = 0xa5000000u | i;
@@ -390,12 +421,33 @@ static void buffer_defaults(void)
     x->fw_checked = x->fw_written = 8192; x->fw_size = 32768;
 }
 
+static void wake_defaults(void)
+{
+    buffer_defaults(); mode = 13; wake_model = 1; cc[GPU_GX_GDSCR/4] = GPU_CX_IDLE_GDSCR;
+    struct gpu_power_experiment *x = &gpu_boot_inventory.power;
+    x->preboot_requested = 1; x->preboot_done = 29;
+    x->buf.requested = x->buf.inactive = 1; x->buf.stage = 3;
+    x->buf.checks = x->buf.passed = 29;
+    x->init_requested = x->init_done_writes = x->init_stop_done = 1;
+    x->init_nwrites = 48; x->init_bad = x->init_nbad_log = 9;
+    const uint32_t off[] = {0x23034,0x2303c,0x23044,0x55d4,0x55e4,0x55f4,0x5764,0x5774,0x5784};
+    for (unsigned i = 0; i < 9; i++) {
+        x->init_bad_off[i] = off[i]; x->init_bad_region[i] = i < 3 ? 0 : 1;
+        x->init_bad_wrote[i] = i < 3 ? 0 : 0x10108;
+        x->init_bad_got[i] = i == 0 ? 0x82204514u : i == 1 ? 0x82204510u : i == 2 ? 0x82204520u : 0x10100;
+        if (i < 3) gmu_mem[off[i]/4] = x->init_bad_got[i];
+    }
+    gmu_mem[0x14730/4] = gmu_mem[0x24c1c/4] = 0;
+    gmu_mem[0x24c20/4] = gmu_mem[0x23404/4] = 1;
+    gmu_mem[0x23010/4] = 0x01010006;
+}
+
 int main(void)
 {
     reset(); present = 0; sweet_gpu_probe();
     assert(map_calls == 0 && output[0] == 0);
     reset(); mode = 0; sweet_gpu_probe(); assert(map_calls == 0);
-    reset(); mode = 13; sweet_gpu_probe(); assert(map_calls == 0);
+    reset(); mode = 14; sweet_gpu_probe(); assert(map_calls == 0);
     reset(); mode = -1; sweet_gpu_probe(); assert(map_calls == 0);
     reset(); fail_gcc = 1; sweet_gpu_probe();
     assert(map_calls == 1 && strstr(output, "GCC mapping failed"));
@@ -1055,6 +1107,90 @@ int main(void)
         buffer_defaults(); mode = 12; fail_smmu_map = 1; arc_run();
         assert(!gpu_boot_inventory.power.preboot_requested);
         puts("PASS: 29 pre-boot registers, 8 refusal cases, read-only isolation, normalization and replay");
+    }
+
+    /* 0095: bounded RSC wake/stop before any firmware execution. */
+    {
+        struct gpu_power_experiment *x;
+        struct gpu_rsc_wake *w;
+        uint32_t before[GPU_GMU_SIZE/4];
+        wake_defaults(); x = &gpu_boot_inventory.power;
+        memcpy(before,gmu_mem,sizeof(before));
+        gpu_rsc_wake_run((vm_offset_t)gmu_mem,(vm_offset_t)cc,x); w = &x->wake;
+        assert(!w->error && w->started && w->ack_done && w->busy_done && w->stop_attempted && w->stop_done);
+        assert(w->snapshots == 7 && w->controls_restored && w->state_restored && w->ack_polls == 2 && w->busy_polls == 1 && w->stop_polls == 2);
+        const uint32_t off[] = {0x14730,0x24c1c,0x24c1c,0x24c1c,0x24c1c,0x14730};
+        const uint32_t val[] = {1,2,0,1,0,0};
+        assert(wake_trace_n == 6 && !memcmp(off,wake_trace_off,sizeof(off)) && !memcmp(val,wake_trace_val,sizeof(val)));
+        assert(!memcmp(before,gmu_mem,sizeof(before)));
+        /* Every metadata gate independently refuses before any MMIO store. */
+        for (unsigned bad = 0; bad < 11; bad++) {
+            wake_defaults(); x = &gpu_boot_inventory.power;
+            if (bad == 0) x->preboot_error = "test error";
+            if (bad == 1) x->preboot_done--;
+            if (bad == 2) x->buf.inactive = 0;
+            if (bad == 3) x->buf.error = "test error";
+            if (bad == 4) x->buf.passed--;
+            if (bad == 5) x->init_requested = 0;
+            if (bad == 6) x->init_done_writes = 0;
+            if (bad == 7) x->init_nwrites--;
+            if (bad == 8) x->init_stop_done = 0;
+            if (bad == 9) x->init_bad--;
+            if (bad == 10) x->init_nbad_log--;
+            memcpy(before,gmu_mem,sizeof(before));
+            gpu_rsc_wake_run((vm_offset_t)gmu_mem,(vm_offset_t)cc,x);
+            assert(x->wake.error && !x->wake.started && !all_mmio_writes && !wake_trace_n && !memcmp(before,gmu_mem,sizeof(before)));
+        }
+        /* No generic mismatch mask: every field of each of the nine signatures matters. */
+        for (unsigned i = 0; i < 9; i++) for (unsigned field = 0; field < 4; field++) {
+            wake_defaults(); x = &gpu_boot_inventory.power;
+            if (field == 0) x->init_bad_region[i] ^= 1;
+            if (field == 1) x->init_bad_off[i] ^= 4;
+            if (field == 2) x->init_bad_wrote[i] ^= 1;
+            if (field == 3) x->init_bad_got[i] ^= 1;
+            gpu_rsc_wake_run((vm_offset_t)gmu_mem,(vm_offset_t)cc,x);
+            assert(x->wake.error && !all_mmio_writes && !wake_trace_n);
+        }
+        for (unsigned bad = 0; bad < 10; bad++) {
+            wake_defaults(); x = &gpu_boot_inventory.power;
+            if (bad < 6) gmu_mem[gpu_wake_off[bad]/4] ^= 4;
+            else if (bad == 6) gmu_mem[0x14068/4] = 1;
+            else if (bad == 7) cc[GPU_GX_GDSCR/4] ^= GPU_DOMAIN_ON;
+            else if (bad == 8) cc[GPU_GX_GDSCR/4] = ~0u;
+            else cc[GPU_GX_GDSCR/4] &= ~GPU_GDSC_SW_COLLAPSE;
+            memcpy(before,gmu_mem,sizeof(before));
+            gpu_rsc_wake_run((vm_offset_t)gmu_mem,(vm_offset_t)cc,x);
+            assert(x->wake.error && !all_mmio_writes && !memcmp(before,gmu_mem,sizeof(before)));
+        }
+        /* Every failed handshake is bounded; clear REQ and restore retention on all paths. */
+        for (unsigned fail = 0; fail < 6; fail++) {
+            wake_defaults(); x = &gpu_boot_inventory.power;
+            if (fail == 0) wake_ack_stuck = 1;
+            if (fail == 1) wake_busy_stuck = 1;
+            if (fail == 2) wake_stop_stuck = 1;
+            if (fail == 3) retention_stuck = 1;
+            if (fail == 4) retention_restore_stuck = 1;
+            if (fail == 5) wake_gx_on = 1;
+            gpu_rsc_wake_run((vm_offset_t)gmu_mem,(vm_offset_t)cc,x); w = &x->wake;
+            assert(w->error && gmu_mem[0x24c1c/4] == 0 && gmu_mem[0x14000/4] == 1);
+            assert(gmu_mem[0x14730/4] == (fail == 4 ? 1u : 0u));
+            assert(w->ack_polls <= 100 && w->busy_polls <= 100 && w->stop_polls <= 100);
+            if (fail == 0) assert(!w->ack_done && w->ack_polls == 100 && !w->busy_polls && w->stop_done);
+            if (fail == 1) assert(w->ack_done && !w->busy_done && w->busy_polls == 100 && w->stop_done);
+            if (fail == 2) assert(w->ack_done && w->busy_done && !w->stop_done && w->stop_polls == 100 && !w->state_restored);
+            if (fail == 3) assert(!w->started && !w->stop_attempted && wake_trace_n == 2 && w->controls_restored && w->snapshots == 5);
+            if (fail == 4) assert(w->ack_done && w->busy_done && w->stop_done && !w->controls_restored);
+            if (fail == 5) assert(w->stop_done && w->controls_restored && (w->gx[1] & GPU_DOMAIN_ON));
+        }
+        /* Full source path models the exact known readbacks, plus lower-mode and replay isolation. */
+        wake_defaults(); gmu_mem[0x24c20/4] = gmu_mem[0x23404/4] = gmu_mem[0x23010/4] = 0;
+        arc_run(); x = &gpu_boot_inventory.power; w = &x->wake;
+        assert(!w->error && w->state_restored && x->buf.inactive && x->clk_restored && gmu_mem[0x14000/4] == 1);
+        assert(strstr(output,"wake/stop complete; CM3 stayed in reset"));
+        int writes = all_mmio_writes; sweet_gpu_replay(); assert(writes == all_mmio_writes);
+        wake_defaults(); mode = 12; gmu_mem[0x24c20/4] = gmu_mem[0x23404/4] = 0;
+        arc_run(); assert(!gpu_boot_inventory.power.wake.requested && !wake_seen);
+        puts("PASS: RSC wake/stop, 57 zero-write refusal cases, bounded failures and reset preservation");
     }
 
     /* Mode 3 never runs the clock stage. */

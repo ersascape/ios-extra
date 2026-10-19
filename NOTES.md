@@ -53,8 +53,10 @@ mapping and the known inert S2CR/CBAR residue. CX/clocks/votes rolled back.
 
 Split HANDOFF step 4 further: prepare a bounded RSC wake/stop experiment while CM3
 stays reset, before firmware execution. This checks ACK bit 1 then SEQ_BUSY=0 with
-the nine known constrained readbacks. No code or image for this new step yet.
-0094 source baseline before commit: d3a6423 (validated 0093), with 0094 as its diff.
+the nine known constrained readbacks. 0095 (`sweetgpu=13`) now implements this bounded wake/stop, with 57 tested zero-write
+refusals, timeout/rollback coverage and GX snapshots. Normal and ASan/UBSan host
+suites pass; arm64 compile passes. Full CI and phone pending; no image yet.
+Isolated source baseline: 85017d8 (validated 0094), with 0095 as its diff.
 
 ## User-visible iOS observation (2026-10-19)
 
