@@ -38,7 +38,9 @@ The init state did not persist through this boot path. Raw report in GPU_LOG;
 step 1 interpretation and limits in GPU_GMU_BOOT. CM3 remains held in reset and GX
 has never been powered. 0093 passed its phone test at 17:43:38 UTC: all 29 ATOS checks, inactive=1,
 restored=0 with the known inert S2CR/CBAR residue, FSR/sGFSR=0; raw values in GPU_LOG.
-Home-screen answer pending. No CM3 release or GX power. 0094 implements the separate
+The user confirmed the home screen, but reports missing wallpaper and some white
+Settings/widgets (see NOTES); cause unestablished. Continue GPU as requested.
+No CM3 release or GX power. 0094 implements the separate
 read-only pre-boot register dump (step 3), with normal/sanitized host tests and local
 arm64 compile passing. It also fixes the narrow expected-value diagnostic that
 carried dirty CBAR upper bits in 0093, without changing the 32-bit MMIO value.
@@ -49,7 +51,7 @@ Build 0094 (`sweetgpu=12`) in this repo's CI; verify source/kernel artifacts and
 package it. **Check fastboot before asking the user**; boot once if exactly one
 is already present and the pending test is authorized, otherwise ask for fastboot.
 Record all 29 `pre-boot GMU` values and home-screen result. Do not release CM3 in
-this experiment. Record 0093 home-screen answer when supplied.
+this experiment. 0093 home screen is confirmed; preserve the separate UI observation in NOTES.
 
 ## Next steps (each is its own measured patch; do not merge steps)
 

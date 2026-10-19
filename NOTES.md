@@ -34,7 +34,7 @@ GitHub now confirms public. Kernel builds use this repo's GitHub Actions
 | 0092 | 10 | same, logs every mismatch + reads the table first | 39171199100 | stop handshake ok; all 9 mismatches identified |
 | 0093 | 11 | 13 GMU buffer pages, mainline HFI layout, 29 ATOS checks | 39293204273 **passed** | 29/29 ATOS; inactive=1, restored=0 |
 
-The user confirmed the home screen after every boot up to 0092. Each stage runs
+The user confirmed the home screen after every boot up to 0093. Each stage runs
 inside the previous one's window (`sweetgpu=N` includes all lower modes) and undoes
 itself except: SMMU `S2CR3`/`CBAR3` (left inert: `SMR3` invalid, `SCTLR` 0), the
 GMU RCG (left at `0x602`), and the RSC/PDC configuration of 0091 (left in place).
@@ -45,8 +45,7 @@ Rendering is still CPU. The GMU processor has never been released from reset.
 ## Immediate next action
 
 0093 phone test passed the memory-map gate: all 29 ATOS checks match; final
-SMR/S2CR/SCTLR/CBAR=0/3/0/0x10000, inactive=1, restored=0, FSR/sGFSR=0. Home-screen
-confirmation is pending. Raw values and diagnostic limits are in GPU_LOG.
+SMR/S2CR/SCTLR/CBAR=0/3/0/0x10000, inactive=1, restored=0, FSR/sGFSR=0. The user confirmed the home screen. Raw values and diagnostic limits are in GPU_LOG.
 A saved CBAR value again carried dirty upper bits when logged as 64-bit; the actual
 store was 32-bit low-word 0. 0094 normalizes narrow expected diagnostics without changing their MMIO value.
 
@@ -55,6 +54,16 @@ of 29 pre-boot GMU registers, with CM3 still reset and all earlier rollbacks int
 Normal/sanitized host tests pass; arm64 compile passes. Full CI and phone pending. No GMU release or GX power
 has occurred. 0093 source/build/image identity is recorded in GPU_LOG; isolated
 source baseline is d3a6423 (validated 0093), with 0094 as its working diff.
+
+## User-visible iOS observation (2026-10-19)
+
+The user reports missing wallpaper and some white Settings/widgets in this image;
+a separate image assembled from ios-sweet patches reportedly has working wallpaper
+and widgets (still only three apps). The comparator build/root/assets have not
+been identified or reproduced here; cause and relationship to GPU experiments
+are unestablished. Home-screen arrival does not mean the UI is fully working.
+The user asked to continue GPU bring-up; no userland repair or upstream-tree
+changes are being made as part of this work.
 
 ## Hard constraints (unchanged)
 

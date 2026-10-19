@@ -31,7 +31,10 @@ action are in [NOTES.md](../NOTES.md) and [HANDOFF.md](../HANDOFF.md). Entries t
   `ios-extra-work/logs/phone-0093-gmubuffers.{pcap,txt}` and
   `phone-0093-gmubuffers-fastboot.txt`. Initial report 0 is partial; all 29 ATOS
   results and all 20 write/readbacks below are from cached report 1. No panic
-  marker observed. **Home-screen confirmation pending.**
+  marker observed. **The user confirmed the home screen.**
+  Separately reports missing wallpaper and some white Settings/widgets, compared
+  with another image made from ios-sweet patches; comparator identity and cause
+  are unverified. User requested continuing GPU bring-up.
 - **Measured:** allocation PA 0x104664000, 64 KiB; dummy/debug/log/HFI IOVAs
   0x60000000/0x60001000/0x60005000/0x60009000. All 26 mapped-page endpoints
   translate to the expected 13 physical pages; adjacent/unrelated addresses fault.
