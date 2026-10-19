@@ -5,6 +5,120 @@ CI runs, phone results and the reasoning at the time. The current state and the 
 action are in [NOTES.md](../NOTES.md) and [HANDOFF.md](../HANDOFF.md). Entries that say
 "not yet built/booted" were true when written; newer entries supersede them.
 
+## Phone result — 0094 pre-boot GMU dump, 2026-10-19 18:01 UTC
+
+- User confirmed fastboot. First check saw zero devices during USB reconnection;
+  the immediate brief retry saw exactly one (serial redacted), then the helper
+  rechecked before one temporary boot. No flash or reboot issued.
+- Boot issued 18:01:14 UTC; send 0.419s, boot 0.134s, total 0.598s. Ping succeeds;
+  **the user confirmed the home screen**. Image
+  `shim/out/shim-boot-0094-gmupreboot.img`, SHA256
+  `f1d9e4f9db5f8c468803135b591cf1b1dc9c1dc4d58512f91378746cbb2bf9c0`,
+  mode 12; source 8104c7466c39d66b3169f1c420ac630312c8eb02, CI 39297388718.
+- Capture: 462 UDP packets, 191276 decoded bytes; local/ignored files
+  `ios-extra-work/logs/phone-0094-gmupreboot.{pcap,txt}` and
+  `phone-0094-gmupreboot-fastboot.txt`. Report 0 partial; all 29 pre-boot values,
+  29 ATOS results and 20 write/readbacks below are from cached report 1.
+  No panic marker observed.
+- **Measured:** all 29 registers read successfully. After the lower-mode RSC stop,
+  ACK=1 and SEQ_BUSY=1 while REQ=0. This is a stopped-state observation, not a
+  failed wake (no wake request has been sent). Power CTRL=0x09c40406 and both
+  hysteresis words=0x000a2710; do not assume they start at zero. DTCM version=0,
+  CM3 reset=1, busy/init=0, CFG=0x52. Other HFI/log/cache/RPMH configuration=0.
+- Buffer checks remain 29/29; final SMR/S2CR/SCTLR/CBAR=0/3/0/0x10000,
+  inactive=1/restored=0, FSR/sGFSR=0. Narrow CBAR expected diagnostic is now 0
+  (normalization fixed), still reads back 0x10000. Firmware 8192/8192 bad=0;
+  RSC init remains 48 writes, 9 known differences, stop status=0x01010006;
+  CX and clock cleanup complete. No GMU processor release or GX power.
+- **Next measured question:** split step 4 further: mainline's bounded RSC wake
+  (ACK bit 1, then SEQ_BUSY=0), return to stop, retain CM3 reset. This tests wake
+  with the nine constrained RSC/PDC readbacks before attempting firmware execution.
+
+```text
+SWEET GPU: pre-boot GMU GENERAL_7 +0x14730 = 0x00000000
+SWEET GPU: pre-boot GMU RSCC_CONTROL_REQ +0x24c1c = 0x00000000
+SWEET GPU: pre-boot GMU RSCC_CONTROL_ACK +0x24c20 = 0x00000001
+SWEET GPU: pre-boot GMU RSCC_SEQ_BUSY_DRV0 +0x23404 = 0x00000001
+SWEET GPU: pre-boot GMU CM3_SYSRESET +0x14000 = 0x00000001
+SWEET GPU: pre-boot GMU CM3_BOOT_CONFIG +0x14004 = 0x00000000
+SWEET GPU: pre-boot GMU CM3_FW_INIT_RESULT +0x14070 = 0x00000000
+SWEET GPU: pre-boot GMU CM3_FW_BUSY +0x14068 = 0x00000000
+SWEET GPU: pre-boot GMU DTCM_FW_VERSION +0xafe0 = 0x00000000
+SWEET GPU: pre-boot GMU HFI_QTBL_ADDR +0x14614 = 0x00000000
+SWEET GPU: pre-boot GMU HFI_QTBL_INFO +0x14610 = 0x00000000
+SWEET GPU: pre-boot GMU AHB_FENCE_RANGE_0 +0x24c44 = 0x00000000
+SWEET GPU: pre-boot GMU CM3_CFG +0x140b4 = 0x00000052
+SWEET GPU: pre-boot GMU HFI_SFR_ADDR +0x14608 = 0x00000000
+SWEET GPU: pre-boot GMU PWR_COL_CP_MSG +0x14400 = 0x00000000
+SWEET GPU: pre-boot GMU PWR_COL_CP_RESP +0x14404 = 0x00000000
+SWEET GPU: pre-boot GMU SYS_BUS_CONFIG +0x1303c = 0x00000000
+SWEET GPU: pre-boot GMU ICACHE_CONFIG +0x13000 = 0x00000000
+SWEET GPU: pre-boot GMU DCACHE_CONFIG +0x13004 = 0x00000000
+SWEET GPU: pre-boot GMU PWR_COL_INTER_FRAME_CTRL +0x14300 = 0x09c40406
+SWEET GPU: pre-boot GMU PWR_COL_INTER_FRAME_HYST +0x14304 = 0x000a2710
+SWEET GPU: pre-boot GMU PWR_COL_SPTPRAC_HYST +0x14308 = 0x000a2710
+SWEET GPU: pre-boot GMU RPMH_CTRL +0x143a0 = 0x00000000
+SWEET GPU: pre-boot GMU GENERAL_0 +0x14714 = 0x00000000
+SWEET GPU: pre-boot GMU GENERAL_1 +0x14718 = 0x00000000
+SWEET GPU: pre-boot GMU GENERAL_6 +0x1472c = 0x00000000
+SWEET GPU: pre-boot GMU AO_HOST_INTERRUPT_STATUS +0x24c14 = 0x00000000
+SWEET GPU: pre-boot GMU HFI_CTRL_INIT +0x14618 = 0x00000000
+SWEET GPU: pre-boot GMU HFI_CTRL_STATUS +0x14600 = 0x00000000
+SWEET GPU: pre-boot GMU read=29/29 result: read-only dump complete; no start writes or CM3 release
+SWEET GPU: buffers pa=0x104664000 bytes=0x10000 stage=3 checks=29/29 passed=29 inactive=1 restored=0
+SWEET GPU: buffers IOVA dummy/debug/log/HFI=0x60000000/0x60001000/0x60005000/0x60009000 sizes=4096/16384/16384/16384 HFI-size=120
+SWEET GPU: buffers ATOS va=0x60000000 PAR=0x4000000104667b80 expect=mapped
+SWEET GPU: buffers ATOS va=0x60000fff PAR=0x104667b80 expect=mapped
+SWEET GPU: buffers ATOS va=0x60001000 PAR=0x104668b80 expect=mapped
+SWEET GPU: buffers ATOS va=0x60001fff PAR=0x104668b80 expect=mapped
+SWEET GPU: buffers ATOS va=0x60002000 PAR=0x104669b80 expect=mapped
+SWEET GPU: buffers ATOS va=0x60002fff PAR=0x104669b80 expect=mapped
+SWEET GPU: buffers ATOS va=0x60003000 PAR=0x10466ab80 expect=mapped
+SWEET GPU: buffers ATOS va=0x60003fff PAR=0x10466ab80 expect=mapped
+SWEET GPU: buffers ATOS va=0x60004000 PAR=0x10466bb80 expect=mapped
+SWEET GPU: buffers ATOS va=0x60004fff PAR=0x10466bb80 expect=mapped
+SWEET GPU: buffers ATOS va=0x60005000 PAR=0x10466cb80 expect=mapped
+SWEET GPU: buffers ATOS va=0x60005fff PAR=0x10466cb80 expect=mapped
+SWEET GPU: buffers ATOS va=0x60006000 PAR=0x400000010466db80 expect=mapped
+SWEET GPU: buffers ATOS va=0x60006fff PAR=0x10466db80 expect=mapped
+SWEET GPU: buffers ATOS va=0x60007000 PAR=0x10466eb80 expect=mapped
+SWEET GPU: buffers ATOS va=0x60007fff PAR=0x10466eb80 expect=mapped
+SWEET GPU: buffers ATOS va=0x60008000 PAR=0x10466fb80 expect=mapped
+SWEET GPU: buffers ATOS va=0x60008fff PAR=0x10466fb80 expect=mapped
+SWEET GPU: buffers ATOS va=0x60009000 PAR=0x104670b80 expect=mapped
+SWEET GPU: buffers ATOS va=0x60009fff PAR=0x104670b80 expect=mapped
+SWEET GPU: buffers ATOS va=0x6000a000 PAR=0x104671b80 expect=mapped
+SWEET GPU: buffers ATOS va=0x6000afff PAR=0x104671b80 expect=mapped
+SWEET GPU: buffers ATOS va=0x6000b000 PAR=0x104672b80 expect=mapped
+SWEET GPU: buffers ATOS va=0x6000bfff PAR=0x104672b80 expect=mapped
+SWEET GPU: buffers ATOS va=0x6000c000 PAR=0x4000000104673b80 expect=mapped
+SWEET GPU: buffers ATOS va=0x6000cfff PAR=0x104673b80 expect=mapped
+SWEET GPU: buffers ATOS va=0x5ffff000 PAR=0x204673a03 expect=fault
+SWEET GPU: buffers ATOS va=0x6000d000 PAR=0x304673a03 expect=fault
+SWEET GPU: buffers ATOS va=0x20000000 PAR=0x104673a03 expect=fault
+SWEET GPU: buffers wr +0x180c wrote=0x1 got=0x1
+SWEET GPU: buffers wr +0x100c wrote=0x10000 got=0x10000
+SWEET GPU: buffers wr +0xb010 wrote=0x1 got=0x1
+SWEET GPU: buffers wr +0xb030 wrote=0x802020 got=0x802020
+SWEET GPU: buffers wr +0xb020 wrote=0x104664000 got=0x104664000
+SWEET GPU: buffers wr +0xb038 wrote=0x44 got=0x44
+SWEET GPU: buffers wr +0xb03c wrote=0x0 got=0x0
+SWEET GPU: buffers wr +0xb000 wrote=0x27 got=0x27
+SWEET GPU: buffers wr +0xc0c wrote=0x3 got=0x3
+SWEET GPU: buffers wr +0x80c wrote=0x80000005 got=0x80000005
+SWEET GPU: buffers wr +0x80c wrote=0x0 got=0x0
+SWEET GPU: buffers wr +0xb000 wrote=0x0 got=0x0
+SWEET GPU: buffers wr +0xb020 wrote=0x0 got=0x0
+SWEET GPU: buffers wr +0xb010 wrote=0x0 got=0x0
+SWEET GPU: buffers wr +0xb030 wrote=0x0 got=0x0
+SWEET GPU: buffers wr +0xb038 wrote=0x0 got=0x0
+SWEET GPU: buffers wr +0xb03c wrote=0x0 got=0x0
+SWEET GPU: buffers wr +0x180c wrote=0x0 got=0x0
+SWEET GPU: buffers wr +0xc0c wrote=0x200ff got=0x3 MISMATCH
+SWEET GPU: buffers wr +0x100c wrote=0x0 got=0x10000 MISMATCH
+SWEET GPU: buffers final SMR/S2CR/SCTLR/CBAR=0x0/0x3/0x0/0x10000 FSR=0x0 sGFSR=0x0 result: ATOS verified; CM3 reset; mapping disabled
+```
+
 ## 0094 full build and verified image — 2026-10-19
 
 - Full [CI 39297388718](https://github.com/dipa-studio/ios-extra/actions/runs/39297388718)

@@ -234,6 +234,22 @@ Before GMU release, a separate bounded RSCC wake ACK / SEQ_BUSY check remains
 mandatory. No extra writes to the hidden addresses or arbitrary MSGID values are
 justified by this result.
 
+### 0094 pre-boot dump (phone measured)
+
+All 29 pre-boot configuration/status offsets are readable with CM3 reset held.
+After `rpmh_init`'s stop handshake and buffer rollback, REQ=0 / ACK=1 /
+SEQ_BUSY=1; the earlier read-only RSC inventory was taken *before* that stop and
+had REQ/ACK/BUSY=0. Neither snapshot is a wake result. A bounded wake/stop-only
+experiment will verify the transition before releasing CM3.
+
+Other nonzero defaults: CM3_SYSRESET=1, CM3_CFG=0x52,
+PWR_COL_INTER_FRAME_CTRL=0x09c40406 (bits 1/2 set, IFPC bit 0 clear),
+INTER_FRAME_HYST=SPTPRAC_HYST=0x000a2710. Mainline ACTIVE writes CTRL=0x09c40400
+and leaves hyst untouched; a future start rollback must restore the *measured*
+CTRL, not zero it. GENERAL_7, DTCM version +0xafe0, FW_BUSY/FW_INIT, HFI/log,
+SYS_BUS/cache config and RPMH_CTRL are all 0. Full raw table in GPU_LOG.
+The DTCM value is pre-release; it is not a running-firmware version measurement.
+
 ## Rails and clocks (0082-0085)
 
 ARC raw level tables from the command DB (hardware requests carry the table **index**,

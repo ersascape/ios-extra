@@ -40,29 +40,18 @@ has never been powered. 0093 passed its phone test at 17:43:38 UTC: all 29 ATOS 
 restored=0 with the known inert S2CR/CBAR residue, FSR/sGFSR=0; raw values in GPU_LOG.
 The user confirmed the home screen, but reports missing wallpaper and some white
 Settings/widgets (see NOTES); cause unestablished. Continue GPU as requested.
-0094 implements the separate read-only pre-boot register dump (step 3). Normal/sanitized host tests and local
-arm64 compile pass; full CI 39297388718 passed on 8104c74 and its source/firmware
-match the tested isolated files byte-for-byte. The image is packaged and verified,
-but not booted. This also normalizes the narrow expected diagnostic for CBAR;
-its low 32-bit MMIO value is unchanged.
+0094 completed at 18:01:14 UTC; all 29 pre-boot registers read, home screen
+confirmed. Post-stop REQ=0/ACK=1/SEQ_BUSY=1; power CTRL=0x09c40406, hysts=0x000a2710;
+CM3 reset=1, version/busy/init=0. Raw dump in GPU_LOG; source interpretation in
+GPU_GMU_BOOT. No CM3 release or GX power has occurred.
 
 ## Immediate next action
 
-Checked fastboot: zero devices. Asked the user to enter fastboot. When ready,
-recheck first, then run the one temporary 0094 test:
-
-```sh
-python3 tools/gpu-phone-test.py --image shim/out/shim-boot-0094-gmupreboot.img \
-  --sha256 f1d9e4f9db5f8c468803135b591cf1b1dc9c1dc4d58512f91378746cbb2bf9c0 \
-  --name phone-0094-gmupreboot
-```
-
-Record all 29 `pre-boot GMU` values from the first complete cached report, especially
-DTCM_FW_VERSION +0xafe0, CM3_BOOT_CONFIG, GENERAL_7, RPMH_CTRL and fence/HFI/log
-controls. Record buffer/rollback state and ask for home screen. No CM3 release in
-this test. Only after this measurement, design step 4 against the observed values;
-mainline's initial idle level is ACTIVE (see GPU_GMU_BOOT source clarification).
-Preserve the separate UI observation in NOTES; user asked to continue GPU work.
+Split step 4 into a smaller bounded RSC wake/stop test first (new patch 0095,
+mode 13), leaving CM3 held in reset. This checks ACK bit 1 and SEQ_BUSY=0 under
+the exact known nine constrained readbacks before a firmware start. Implement,
+test all preconditions/rollback paths, CI-build and package; no 0095 code/image yet.
+Always check fastboot before asking for it. User confirmed 0094 home screen.
 
 ## Next steps (each is its own measured patch; do not merge steps)
 
