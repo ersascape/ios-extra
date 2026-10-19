@@ -47,30 +47,29 @@ GPU_GMU_BOOT. No CM3 release or GX power has occurred.
 
 ## Immediate next action
 
-Split step 4 into a smaller bounded RSC wake/stop test first (new patch 0095,
-mode 13), leaving CM3 held in reset. This checks ACK bit 1 and SEQ_BUSY=0 under
-the exact known nine constrained readbacks before a firmware start. 0095 is implemented; all 57 precondition refusals, timeout/rollback/GX scenarios,
-normal and sanitized host suites pass; local arm64 compile passes. CI-build and
-package it next; no 0095 image/phone result yet.
-Always check fastboot before asking for it. User confirmed 0094 home screen.
+0095 completed at 18:18:46 UTC; user confirmed the home screen. Wake ACK=3,
+BUSY=0, stop STATUS=0x01010006; full six-word sampled state and retention restored,
+GX collapsed, CM3 reset held. Raw values in GPU_LOG. Implement step 4b (0096):
+first bounded CM3 firmware start with the verified buffers kept mapped through
+execution, then force reset again before SMMU/clocks/CX rollback. All new gates
+and failed-write/timeout paths must be tested. No 0096 code/image exists yet.
 
 ## Next steps (each is its own measured patch; do not merge steps)
 
-1. **Understand the 9 refused RSC/PDC writes.** Decide from 0092 whether they are
-   hardware-owned registers (ignore them, as mainline would observe the same) or
-   something the hypervisor filters (then see whether the RSC sequencer still works:
-   it did complete the stop handshake). Gate: a written explanation in
-   `docs/GPU_GMU_BOOT.md`.
-2. **GMU buffers.** Allocate (kernel contiguous memory, as `sweet_gpu.c` already does
-   for the page-table test) dummy 4 KiB, debug 16 KiB, log 16 KiB, HFI 16 KiB; build
-   the HFI queue table exactly as `a6xx_hfi_init` (layout in `docs/GPU_GMU_BOOT.md`);
-   map them in the GMU context bank at IOVA `0x60000000` (dummy) and consecutive
-   addresses from `0x60001000`; verify every page with ATOS; clean the CPU cache. Keep
-   stream-5 matching but remember S2CR3/CBAR3 are already set (SMR3 invalid). Gate:
-   ATOS returns the right physical page for every mapped page and faults elsewhere.
-3. **Read-only pre-boot dump** of all GMU registers the start sequence will write
-   (`docs/GPU_GMU_BOOT.md` table), so surprises show up before writing.
-4. **GMU start, one bounded attempt** (mainline steps 2-12 in the doc): TCM retention,
+1. **RSC/PDC readback diagnosis — 0092 measured and documented.** Three hidden
+   addresses retain existing routing values; six MSGID words lose length bit 3.
+   Ownership (fixed hardware vs secure/EL2 filtering) is unresolved, so do not
+   claim bare-metal mainline would necessarily read the same. Exact signatures
+   and limits are in `docs/GPU_GMU_BOOT.md`; stop completes. 0095 tests wake next.
+2. **GMU buffers — 0093 measured.** Dummy 4 KiB at IOVA 0x60000000, debug/log/HFI
+   16 KiB each at 0x60001000/0x60005000/0x60009000, mainline legacy HFI layout.
+   ATOS passes both ends of all 13 pages and three faults (29 checks). Map is
+   disabled before cleanup; S2CR3/CBAR3 retain only the known inert encodings.
+3. **Read-only pre-boot dump — 0094 measured.** All 29 offsets readable;
+   nonzero stopped-state ACK/BUSY and power-control/hyst defaults recorded.
+   CM3 remains reset. See GPU_LOG for raw values, GPU_GMU_BOOT for interpretation.
+4. **0095 RSC wake/stop measured and fully restored (CM3 held reset).**
+   Next, **GMU start, one bounded attempt** (mainline steps 2-12 in the doc): TCM retention,
    RSCC wake handshake (`REQ=BIT(1)`, ACK bit 1, `SEQ_BUSY`==0), fw (already done),
    boot config, HFI table address, fence range, `CM3_CFG=0x4052`, chip id, log
    address, power config, then `SYSRESET` 1 -> 0 and poll `FW_INIT_RESULT` (10 ms

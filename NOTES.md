@@ -1,6 +1,6 @@
 # ios-extra — current state
 
-Last updated 2026-10-19 after the 0094 phone test. Read [HANDOFF.md](HANDOFF.md) for how to
+Last updated 2026-10-19 after the 0095 phone test. Read [HANDOFF.md](HANDOFF.md) for how to
 continue and [AGENTS.md](AGENTS.md) for the rules. The per-step history (images,
 hashes, CI runs, raw numbers) is [docs/GPU_LOG.md](docs/GPU_LOG.md); the hardware and
 mainline reference is [docs/GPU_GMU_BOOT.md](docs/GPU_GMU_BOOT.md); the per-patch
@@ -34,8 +34,9 @@ GitHub now confirms public. Kernel builds use this repo's GitHub Actions
 | 0092 | 10 | same, logs every mismatch + reads the table first | 39171199100 | stop handshake ok; all 9 mismatches identified |
 | 0093 | 11 | 13 GMU buffer pages, mainline HFI layout, 29 ATOS checks | 39293204273 **passed** | 29/29 ATOS; inactive=1, restored=0 |
 | 0094 | 12 | read-only inventory of 29 pre-boot GMU registers | 39297388718 **passed** | 29/29 registers read; home screen confirmed |
+| 0095 | 13 | bounded TCM retention + RSC wake/stop, CM3 reset | 39300239967 **passed** | wake/stop and full sampled state restore; home screen |
 
-The user confirmed the home screen after every boot up to 0094. Each stage runs
+The user confirmed the home screen after every boot up to 0095. Each stage runs
 inside the previous one's window (`sweetgpu=N` includes all lower modes) and undoes
 itself except: SMMU `S2CR3`/`CBAR3` (left inert: `SMR3` invalid, `SCTLR` 0), the
 GMU RCG (left at `0x602`), and the RSC/PDC configuration of 0091 (left in place).
@@ -45,18 +46,16 @@ Rendering is still CPU. The GMU processor has never been released from reset.
 
 ## Immediate next action
 
-0094 read all 29 pre-boot GMU registers; user confirmed the home screen. Raw values
-are in GPU_LOG. Notable measured defaults: after RSC stop, REQ=0 / ACK=1 /
-SEQ_BUSY=1; power CTRL=0x09c40406 and both hyst words=0x000a2710. CM3 reset=1,
-firmware version=0, busy/init=0, CFG=0x52. Buffer ATOS remains 29/29 with inactive
-mapping and the known inert S2CR/CBAR residue. CX/clocks/votes rolled back.
+0095 phone test passed: RSC wake ACK=3 (bit 1 set), SEQ_BUSY=0, stop
+STATUS=0x01010006, all six sampled control/state words restored. Retention 1->0,
+CM3 reset remained 1 and GX GDSCR stayed 0x00222001. User confirmed home screen.
+Raw values in GPU_LOG. No firmware execution or GPU command yet.
 
-Split HANDOFF step 4 further: prepare a bounded RSC wake/stop experiment while CM3
-stays reset, before firmware execution. This checks ACK bit 1 then SEQ_BUSY=0 with
-the nine known constrained readbacks. 0095 (`sweetgpu=13`) now implements this bounded wake/stop, with 57 tested zero-write
-refusals, timeout/rollback coverage and GX snapshots. Normal and ASan/UBSan host
-suites pass; arm64 compile passes. Full CI and phone pending; no image yet.
-Isolated source baseline: 85017d8 (validated 0094), with 0095 as its diff.
+Prepare the first bounded GMU firmware-start patch as HANDOFF step 4b, retaining
+the verified buffer mapping through the attempt and always resetting CM3 before
+SMMU/clock/CX rollback. Use the measured 0094 defaults and 0095 wake transition;
+do not assume the power-control words are zero. No 0096 implementation/image yet.
+Isolated source baseline before 0095 is 85017d8 (validated 0094); 0095 is its diff.
 
 ## User-visible iOS observation (2026-10-19)
 

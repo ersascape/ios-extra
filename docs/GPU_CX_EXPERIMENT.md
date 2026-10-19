@@ -350,4 +350,5 @@ known readback tuples, every live register and GX predicate); exact six-write
 success ordering and state restoration; bounded ACK/busy/stop timeouts; refused
 retention set/restore; unexpected GX change; full mode-13 source execution,
 mode-12 exclusion and cached replay. Normal and ASan/UBSan suites and arm64 compile
-pass. This is local evidence; full CI and phone result are pending.
+pass. Full CI 39300239967 and the 0095 phone test subsequently passed;
+raw transition and restored state are in GPU_LOG.

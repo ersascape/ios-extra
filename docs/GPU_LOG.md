@@ -5,6 +5,66 @@ CI runs, phone results and the reasoning at the time. The current state and the 
 action are in [NOTES.md](../NOTES.md) and [HANDOFF.md](../HANDOFF.md). Entries that say
 "not yet built/booted" were true when written; newer entries supersede them.
 
+## Phone result — 0095 RSC wake/stop, 2026-10-19 18:18 UTC
+
+- Checked fastboot first: exactly one device already present, serial redacted.
+  Announced the first retention/wake request and performed one temporary boot.
+  Boot issued 18:18:46 UTC; send 0.417s, boot 0.134s, total 0.564s; ping succeeds.
+  **User confirmed the home screen.** No flash or reboot command.
+- Image `shim/out/shim-boot-0095-rscwake.img`, SHA256
+  `0e33a1a21c65f093b463c6279e60b2968c48deb47efc0e80b2ef6c1c289bb860`, mode 13;
+  source 515acba25c91c7d4bb16c82576d50efba9e869d7, green CI 39300239967.
+- Capture: 453 UDP packets, 200503 decoded bytes; local/ignored files
+  `ios-extra-work/logs/phone-0095-rscwake.{pcap,txt}` and
+  `phone-0095-rscwake-fastboot.txt`. Initial report 0 partial; raw transition below
+  is from cached report 1. No panic marker observed.
+- **Measured:** retention set/restored 1/0; wake ACK becomes **3** (bit 1 set,
+  bit 0 remains set), on poll 2; SEQ_BUSY=0 on poll 1. Stop completes on poll 2,
+  STATUS=0x01010006. Before/awake/final STATUS=0x01010006/0x0100000c/0x01010006.
+  All six sampled RSC/control words return exactly to their incoming values,
+  controls-restored=1 and state-restored=1. CM3 reset stays 1 throughout and
+  GX GDSCR stays 0x00222001 (collapsed). No firmware execution or GPU command.
+- Lower probes still pass: pre-boot 29/29, buffer ATOS 29/29, mapping inactive=1,
+  inert S2CR/CBAR residue only, FSR/sGFSR=0; firmware 8192 words bad=0;
+  same nine init differences; CX/clock/vote cleanup complete.
+- **Gate passed:** this proves RSC wake, idle completion and return to stop under
+  the observed init readbacks. It does not identify which layer owns those
+  readbacks, prove every rail vote, or prove a GMU DMA stream. Next separate patch:
+  first bounded CM3 firmware start, always reset again before existing rollback.
+
+```text
+SWEET GPU: RSC wake started=1 ack=1 polls=2 raw=0x3 busy-idle=1 polls=1 raw=0x0 stop-attempted=1 done=1 polls=2 status=0x1010006
+SWEET GPU: RSC wake GX GDSCR before/awake/final=0x00222001/0x00222001/0x00222001
+SWEET GPU: RSC wake +0x14730 before=0x00000000 awake=0x00000001 final=0x00000000
+SWEET GPU: RSC wake +0x24c1c before=0x00000000 awake=0x00000002 final=0x00000000
+SWEET GPU: RSC wake +0x24c20 before=0x00000001 awake=0x00000003 final=0x00000001
+SWEET GPU: RSC wake +0x23404 before=0x00000001 awake=0x00000000 final=0x00000001
+SWEET GPU: RSC wake +0x23010 before=0x01010006 awake=0x0100000c final=0x01010006
+SWEET GPU: RSC wake +0x14000 before=0x00000001 awake=0x00000001 final=0x00000001
+SWEET GPU: RSC wake retention on/off=0x1/0x0 controls-restored=1 state-restored=1 snapshots=7 (before=1 awake=2 final=4) result: wake/stop complete; CM3 stayed in reset
+```
+
+## 0095 full build and verified image — 2026-10-19
+
+- Full [CI 39300239967](https://github.com/dipa-studio/ios-extra/actions/runs/39300239967)
+  **passed** on `515acba25c91c7d4bb16c82576d50efba9e869d7`.
+- Kernel SHA256 `fac7e775c991dddd83fd84fdf37d44da176627039bfa874adb531451a31d7fa7`;
+  SHA256SUMS passed. `_sweet_gpu_probe` at 0xfffffe00074fa838 and
+  `_sweet_rpmh_arc_set` at 0xfffffe00074f8548.
+- CI GPU source SHA256 `6bb7118554d9baf2d62ffaff31fc10bf67fa5005c2d4ed7a1809577ae4aaa176`;
+  firmware header `2c76898351726399ac212d29c3ca7670786ad00c77e5be28da3b847af0baedf2`;
+  RPMh source `fc3669172ee14592cbee2f4312450e68ca9eac7870612d7d669fa2872bf404ca`.
+  All byte-identical to locally tested isolated files. Artifacts ignored/local
+  in `ios-extra-work/out-0095` and `ci-0095`.
+- Image `shim/out/shim-boot-0095-rscwake.img`, 17268736 bytes, SHA256
+  `0e33a1a21c65f093b463c6279e60b2968c48deb47efc0e80b2ef6c1c289bb860`,
+  `sweetgpu=13`; manifest `shim/out/manifest-0095.json`. Unpacked payload and
+  boot arguments round-trip exactly.
+- Checked fastboot first: exactly one device already present (serial redacted).
+  Announced TCM retention + RSC wake/stop, with CM3 held reset, then started the
+  authorized single temporary test. No flash or reboot command. Phone result
+  recorded separately after capture.
+
 ## Implementation — 0095 bounded RSC wake/stop (local checks pass)
 
 - Patch `0095-sweet-gpu-rsc-wake-stop.patch`, mode 13; isolated source baseline

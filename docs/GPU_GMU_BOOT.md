@@ -250,6 +250,17 @@ CTRL, not zero it. GENERAL_7, DTCM version +0xafe0, FW_BUSY/FW_INIT, HFI/log,
 SYS_BUS/cache config and RPMH_CTRL are all 0. Full raw table in GPU_LOG.
 The DTCM value is pre-release; it is not a running-firmware version measurement.
 
+### 0095 retention and RSC wake/stop (phone measured)
+
+With CM3 reset held and GX collapsed, GENERAL_7 accepts 1 and restores to 0.
+REQ=2 produces ACK=3 (bit 1 set) and SEQ_BUSY=0, within 2 / 1 poll reads at
+100 us intervals. Awake STATUS=0x0100000c. Dropping REQ then requesting stop
+(REQ=1) produces STATUS=0x01010006 on the second read. After REQ=0 and retention
+restore, ACK=1 / BUSY=1, exactly the pre-test stopped state. All six sampled words
+restore; GX GDSCR stays 0x00222001, CM3 reset stays 1. Thus the nine constrained
+init readbacks do not prevent these RSC handshakes. No CM3 execution or GMU DMA
+has been tested. Full raw transition in GPU_LOG.
+
 ## Rails and clocks (0082-0085)
 
 ARC raw level tables from the command DB (hardware requests carry the table **index**,
