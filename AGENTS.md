@@ -1,6 +1,8 @@
 # Working on ios-extra
 
-- Read `NOTES.md` before starting. This is the experimental playground for
+- Read `HANDOFF.md` (how to continue, exact commands, pitfalls) and `NOTES.md`
+  (current state) before starting; `docs/GPU_GMU_BOOT.md` is the hardware and
+  mainline reference, `docs/GPU_LOG.md` the full history. This is the experimental playground for
   `ios-sweet`, with its own Git history and GitHub remote.
 - Make experiments in `/home/dipa/ios-extra`. Treat `/home/dipa/ios-sweet` as
   a read-only reference unless the user asks to integrate changes upstream.
@@ -25,3 +27,8 @@
 - Keep device dumps, serial numbers and downloaded Apple artifacts out of git.
   Historical local artifact paths are documented in `docs/UPSTREAM_NOTES.md`;
   they refer to the original workspace, not files present in this repository.
+- Tracked helpers: `tools/gpu-package.py` (CI kernel -> temporary boot image),
+  `tools/gpu-phone-test.py` (capture, one `fastboot boot`, decode),
+  `tools/gpu-decode-pcap.py`, `tools/xnu-cc.py`. The phone is booted only after the
+  user has put it in fastboot; never reboot it unannounced. No attribution text
+  (assistant names, session links) in commits, docs or generated files.

@@ -1,183 +1,173 @@
-# Continue here — 2026-10-18, 19:21 UTC
+# Handoff — continue the Adreno 618 bring-up
 
-The user is switching AI because usage is nearly exhausted. **Stop current
-work after saving this handoff.** Their ongoing goal is a full Adreno 618
-driver for their iOS/XNU port. This repository is the independent playground;
-working changes are ported to ios-sweet only when requested.
+You are taking over an in-progress, hardware-in-the-loop driver bring-up. Read this
+file top to bottom, then `AGENTS.md`, `NOTES.md` (state), `docs/GPU_GMU_BOOT.md`
+(mainline reference + everything measured). `docs/GPU_LOG.md` is the full history.
 
-## Read first and boundaries
+## Goal and ground rules
 
-- Repo: `/home/dipa/ios-extra`, public GitHub `dipa-studio/ios-extra`, main.
-- Read `AGENTS.md` and the top of `NOTES.md`. Detailed results are already
-  recorded there and in `docs/`.
-- **Other agents work in `/home/dipa/ios-sweet`. Do not edit that checkout,
-  its source/build trees or its research outputs.** No subagents were used.
-- Temporary `fastboot boot` only. No flashing/partition changes. Never use
-  `fastboot getvar`. Suppress device serials in output and Git.
-- Preserve other agents' log receivers. Our tcpdump captures are all stopped.
-- Phone was left running validated **0081**. The user has NOT confirmed
-  fastboot availability for 0082. A pending UI question asks them to put it
-  in fastboot; elapsed time is not a response. Do not reboot unannounced.
+Goal: a real Adreno 618 GPU driver for the user's iOS/XNU port, on a phone they own.
+The work so far is a ladder of small, opt-in, fully rolled-back kernel experiments
+(`sweetgpu=N`), each built by CI, booted once with a temporary `fastboot boot`, and
+read from a UDP log. Keep that discipline: **one question per boot, measured result,
+then the next question.** The user prefers slow and careful over fast and clever.
 
-## Immediate next action
+- Never flash, never touch partitions, never `fastboot getvar`. Boot images only via
+  `fastboot boot`, only when the user has put the phone in fastboot (`fastboot
+  devices` shows exactly one). Do not reboot the phone unannounced. Other agents also
+  use the phone and `/home/dipa/ios-sweet`; do not edit that tree.
+- Confirm hardware-write steps that are new in kind (the first write to a new block)
+  with the user in one line; they have been approving by putting the phone in fastboot.
+- Keep device serials, dumps, Apple files and downloaded firmware out of Git.
+- Do not add Claude/Codex attribution to commits or docs. Commit messages describe
+  the change only. Commit completed changes; push to `main` triggers the CI build.
+- Say what you measured vs. what you only read. Do not estimate completion dates
+  beyond "N more measured steps".
+- Do not write product roadmaps or future-feature lists into NOTES/README.
 
-**0082 is implemented, fully CI-built and packaged. It has not been booted
-on the phone.** Once the user confirms fastboot availability, temporarily
-boot `shim/out/shim-boot-0082-arc.img`, capture its cached ARC reports and
-confirm UI/USB operation. No additional implementation is needed before
-that measurement.
+## State in one paragraph
 
-Image SHA256:
-`7fca248b6c8af736aee7982388cb55fedf9d4d825f279ea602007be9fe9cccba`.
-Image size 17,203,200 bytes. It uses **sweetgpu=2**, cpus=6, sweetusb=2 and
-the established UFS-root arguments. `shim/out/manifest-0082.json` holds exact
-arguments and hashes. The ADT is identical to phone-tested 0081.
+Patches 0080-0091 are built, phone-tested and documented; 0092 is built (CI
+39171199100) and its image is ready but **not booted**. On the phone we have: CX rail
+votes + CX power domain, GMU clock tree, GCC bus branches, readable GMU registers
+(CM3 held in reset), the 32 KiB GMU firmware copied into GMU TCM and verified,
+a readable GPU SMMU in which stream 5 -> context bank 3 with a hand-built 4 KiB page
+table translates correctly under the SMMU's own ATOS, readable RSC/PDC registers, and
+mainline's A618 RSC/PDC init executed (48 writes, 39 read back, RSC stop handshake
+completed). We have **not**: allocated or mapped GMU buffers (HFI/log/debug), released
+the GMU processor, powered GX, or run any GPU command. See `NOTES.md` for the table.
 
-Start these **before** fastboot boot, in separate exec sessions:
+## Immediate next action (needs the user)
 
-```sh
-sudo -n tcpdump -U -n -i any -s0 \
-  -w /run/media/dipa/android/ios-extra-work/logs/phone-0082-arc.pcap \
-  'udp and src host 192.168.7.2 and dst port 5140'
-python3 tools/phone-ecm-host.py --timeout 120
-```
-
-The helper matches the fixed ECM MAC and configures host 192.168.7.1/24.
-It retries across usb0 -> enp... renames; this exact race caused an earlier
-missed capture and the helper subsequently succeeded on a real reboot.
-Sudo -n works. Do not replace/kill the existing other-agent UDP listener.
-
-For fastboot, use Python subprocess to capture `fastboot devices`, require
-exactly one device, hold its serial only in memory, recheck the image hash,
-then `fastboot -s <serial> boot <image>`. Store sanitized output outside Git.
-Never print the captured serial. Prior examples can be reconstructed from
-the sanitized `logs/phone-0081-retry-fastboot.txt`; no flash is required.
-
-After USB comes up, wait through all three report windows (~5/15/30 seconds
-of configured logger-loop time). Decode/analyze with the prepared ignored
-scripts:
+Ask the user to put the phone in fastboot, then run the 0092 image:
 
 ```sh
-python3 research/decode-probe-0082-pcap.py
-python3 research/analyze-0082.py
-ping -c 3 -W 1 192.168.7.2
+cd /home/dipa/ios-extra
+python3 tools/gpu-phone-test.py \
+  --image shim/out/shim-boot-0092-rpmhinit.img \
+  --sha256 6fe97291353d16ac2edae5ee679599cf52c7e4e62fd1cb4ddf75408658a1f24c \
+  --name phone-0092-rpmhinit
 ```
 
-The analyzer validates complete numbered reports, each resource's declared
-entry count and identical cached ARC tables. It writes
-`logs/phone-0082-inventory.json`. It accepts explicit resource/database errors
-as observations. Report every raw level, including padding. Stop only our
-own tcpdump by matching its exact `-w` path, then decode once more. Do not
-claim home-screen confirmation solely from process-start log lines.
+It checks the hash and that exactly one fastboot device exists, starts our own
+tcpdump of the phone's UDP log (needs `sudo -n`), configures the host USB-ECM side,
+boots once, waits for ping + the replay window, stops only its own tcpdump and
+prints the `SWEET GPU:` lines (logs land in
+`/run/media/dipa/android/ios-extra-work/logs/phone-0092-rpmhinit.{pcap,txt}`).
+Look at: `RPMH table pre-write` (did the 0091 programming persist? which entries
+differ), `RPMH init bad ...` (up to 16 refused writes), `RPMH init result`. If the
+table already matches the mainline values the init is refused ("expected unprogrammed
+state") by design — that itself is the answer (persistence).
+Then ask whether the home screen came up, and record everything in `NOTES.md` +
+`docs/GPU_LOG.md` (raw values, not just conclusions).
 
-## Current commits and validation
+## Next steps (each is its own measured patch; do not merge steps)
 
-- Main implementation **6f76e4f15e0f52c65b37d8cf98e647900d5825b0**:
-  `0082-sweet-gpu-arc-inventory.patch`, tests and docs.
-- Latest pushed commit **08b2c24** records successful build/images and the
-  CX/GMU source audit. Working tree was clean at handoff preparation.
-- CI **39157726409 PASSED**, 5m02s:
-  https://github.com/dipa-studio/ios-extra/actions/runs/39157726409
-- Kernel: external `out-0082/kernel.development.sweet`, SHA256
-  `510f85c8df5a3bff369ab14db41ecc4d91547b28b897ca4c041b58e60aa1afa2`.
-  Supplied checksum verified. Both probe/replay symbols linked.
-- CI GPU/RPMh/USB sources and BSD source list byte-match the isolated tree.
-- All 3 repository unit tests passed. Harness: 14 clock/cache cases,
-  **30 ARC cases + 512 seeded malformed-header/entry mutations**. The same
-  harness passed AddressSanitizer and UndefinedBehaviorSanitizer.
-- Real arm64 object generation passed (0/1 failed). No 0082 phone test yet.
-- The optional full CI log fetch stalled with no output and was stopped
-  during handoff. `logs/ci-0082.log` may be empty/incomplete. Existing
-  `logs/ci-0081.log` is complete and already suffices for local compilation.
-  Kernel and build-tree downloads ARE complete and verified.
+1. **Understand the 9 refused RSC/PDC writes.** Decide from 0092 whether they are
+   hardware-owned registers (ignore them, as mainline would observe the same) or
+   something the hypervisor filters (then see whether the RSC sequencer still works:
+   it did complete the stop handshake). Gate: a written explanation in
+   `docs/GPU_GMU_BOOT.md`.
+2. **GMU buffers.** Allocate (kernel contiguous memory, as `sweet_gpu.c` already does
+   for the page-table test) dummy 4 KiB, debug 16 KiB, log 16 KiB, HFI 16 KiB; build
+   the HFI queue table exactly as `a6xx_hfi_init` (layout in `docs/GPU_GMU_BOOT.md`);
+   map them in the GMU context bank at IOVA `0x60000000` (dummy) and consecutive
+   addresses from `0x60001000`; verify every page with ATOS; clean the CPU cache. Keep
+   stream-5 matching but remember S2CR3/CBAR3 are already set (SMR3 invalid). Gate:
+   ATOS returns the right physical page for every mapped page and faults elsewhere.
+3. **Read-only pre-boot dump** of all GMU registers the start sequence will write
+   (`docs/GPU_GMU_BOOT.md` table), so surprises show up before writing.
+4. **GMU start, one bounded attempt** (mainline steps 2-12 in the doc): TCM retention,
+   RSCC wake handshake (`REQ=BIT(1)`, ACK bit 1, `SEQ_BUSY`==0), fw (already done),
+   boot config, HFI table address, fence range, `CM3_CFG=0x4052`, chip id, log
+   address, power config, then `SYSRESET` 1 -> 0 and poll `FW_INIT_RESULT` (10 ms
+   bound). Record `FW_INIT_RESULT`, `FW_BUSY`, `GENERAL_*`, the AO interrupt status and
+   the log buffer contents. **Always** end by writing `SYSRESET=1` again, then the
+   existing rollbacks. The ordering of reads/writes and the exact expected init word
+   (`0xbabeface` vs `(x & 0x1ff)==0x100`) depend on the firmware version word at GMU
+   `+0xAFE0`; read it and decide, do not assume.
+5. Only after the GMU boots and idles cleanly: GX power-up (GMU-driven OOB
+   `BOOT_SLUMBER` / GX vote indexes), HFI messages, SQE/CP microcode
+   (`a630_sqe.fw`, 34188 bytes, same linux-firmware commit), secure-zap question,
+   then the first CP command that writes a value to memory.
+6. Much later (not started, no code): the iOS-side Metal plugin boundary traced in
+   `docs/GPU_API_RE.md` / `docs/GPU_EXTERNAL_DRIVERS.md`.
 
-0082 modifies **only bsd/dev/sweet_gpu.c**. It introduces sweetgpu=2 to map
-the known command DB locator `0x0c3f000c` and its validated reserved-RAM DB.
-It reads gfx.lvl/cx.lvl/mx.lvl address, aux version, priority and up to 16
-raw uint16 levels. Locator, header, slave/address type, ranges, duplicate
-identities and lengths are checked. Odd auxiliary offsets are decoded using
-aligned word loads. Failure results are cached too.
+If a step hangs or faults the boot, the phone returns to fastboot after a power cycle;
+the persistent log (`tools/sweet-log-pull.sh` from recovery) and the "reading X"
+announce lines are the evidence. Make the next build smaller, not bigger.
 
-No RPMh RSC/TCS maps, voltage-helper calls, power votes, hardware writes or
-GPU/GMU/SMMU core maps. Default/mode1 behavior is preserved. The existing
-display RPMh implementation is unchanged. Metadata does not prove a valid
-future vote, current owned rail state or firmware checksum integrity.
+## How to implement a step (the loop)
 
-## Workspaces and repeatable commands
+1. Edit `bsd/dev/sweet_gpu.c` (and, if needed, `sweet_rpmh.c`) in the **isolated tree**
+   `/run/media/dipa/android/ios-extra-work/buildtree/xnu`. Its local git has one commit
+   per CI-validated baseline (latest `00095cd` = 0091; 0092 is the uncommitted diff).
+   Before starting a new step, commit the validated state there:
+   `git add -A bsd/dev/sweet_gpu.c && git -c user.name=ios-extra -c
+   user.email=ios-extra@localhost commit -m "Validated 009N baseline"`. The untracked
+   `bsd/dev/sweet_gpu_fw.h` is generated by `xnu/patches/0086-stage-gpu-firmware.sh`
+   (run it from that tree with `MACHINE_CONFIG=SWEET`).
+2. Compile for arm64 against the CI headers:
+   `W=/run/media/dipa/android/ios-extra-work; XNU_CC_OBJDIR=$W/objects python3
+   tools/xnu-cc.py $W/logs/ci-0081.log $W/buildtree bsd/dev/sweet_gpu.c` — must say
+   `0 of N files failed`.
+3. Write the patch: `git diff > xnu/patches/00NN-<name>.patch` in the isolated tree
+   (diff against the previous baseline commit; regenerate after *every* later edit —
+   the host tests apply the patch files, not your working copy; check with
+   `git diff | cmp - xnu/patches/00NN-*.patch`).
+4. Extend `tests/test_gpu_probe.py` (the C harness `#include`s the real
+   `sweet_gpu.c` built from the patches, with simulated MMIO: GCC/GPUCC arrays, GMU,
+   SMMU incl. an ATOS walker, PDC) and `tests/test_rpmh_arc.py`. Add refusal cases:
+   every precondition must have a test proving *nothing is written* when it fails.
+   Run normally and with `IOS_EXTRA_CFLAGS="-fsanitize=address,undefined
+   -fno-sanitize-recover=all -g"`.
+5. Update `docs/GPU_CX_EXPERIMENT.md` (design), commit, `git push`. CI starts
+   automatically on pushes touching `xnu/patches/**`. Watch with
+   `gh run watch RUN -R dipa-studio/ios-extra`; a green run takes ~6 min.
+6. Download: `gh run download RUN -R dipa-studio/ios-extra -n xnu-kernel -D
+   $W/out-00NN` (check `SHA256SUMS`) and `-n xnu-buildtree -D $W/ci-00NN`; extract
+   `bsd/dev/sweet_gpu.c` from `buildtree.tgz` and `cmp` it with the isolated tree
+   (proves CI built exactly what you tested); verify `llvm-nm` (`~/swift/usr/bin`)
+   shows `_sweet_gpu_probe` / `_sweet_rpmh_arc_set`.
+7. Package: `python3 tools/gpu-package.py --kernel $W/out-00NN/kernel.development.sweet
+   --patch 00NN --mode N --name label --ci-run RUN --commit $(git rev-parse HEAD)`.
+8. Boot: `tools/gpu-phone-test.py` as above. Record raw values, then prune old
+   kernels/images (`out-*`, `ci-*`, `shim/out/shim-boot-*`) keeping the latest.
 
-External scratch: `/run/media/dipa/android/ios-extra-work` (ample room).
-The home filesystem has little free space; keep generated large files external.
-`shim/out` is an ignored symlink to external `shim-out/`.
+Commit message style: describe the change; no attribution lines. Docs and notes use
+the user's words "home screen" for the boot confirmation they give.
 
-Isolated XNU: `ios-extra-work/buildtree/xnu`. Local git baseline **d818e18**
-contains validated 0081; its uncommitted GPU change is exactly patch0082.
-The baseline before0080 was 788ab36, before0081 e074f6c. Do not reset away
-this source change. Generated headers are in adjacent build/fakeroot/sdk dirs.
+## Pitfalls we hit (so you don't)
 
-```sh
-python3 -W error::ResourceWarning -m unittest discover -s tests -v
-XNU_CC_OBJDIR=/run/media/dipa/android/ios-extra-work/objects \
-  python3 tools/xnu-cc.py \
-  /run/media/dipa/android/ios-extra-work/logs/ci-0081.log \
-  /run/media/dipa/android/ios-extra-work/buildtree bsd/dev/sweet_gpu.c
-```
+- A precondition based on an assumption failed once: `ahb`/`cxo` branches are already
+  enabled by ABL (0084). **Measure first** with a read-only mode, then write.
+- All results are printed after the whole experiment, from a cached snapshot (the USB
+  logger replays it at ~5/15/30 s). A fault mid-experiment loses the cache; only the
+  "reading X ..." lines printed just before risky reads reach the console ring.
+  Whether they survive a bus fault is unverified.
+- `pkill -f <path>` from a Bash tool kills your own shell (exit 144). Match by
+  `/proc/<pid>/comm` + cmdline instead (what `gpu-phone-test.py` does).
+- `raw.githubusercontent.com` returns 429 under load; use git.kernel.org plain URLs.
+- Host test traps: the harness asserts barrier-instruction counts, so adding
+  `gpu_read64`/`gpu_write64` changed the counts; simulated MMIO arrays start with a
+  pattern (`0xa5…|index`), so tests that need "all zero" must clear the words they care
+  about; the ATOS model treats any change of the ATS1PR word as a request.
+- GR0/GR1 SMMU reads may return junk in the upper 32 bits (see the doc); mask to 32 bit.
+- Writes that read back different values are information, not failures: log them.
+- Always read the whole `SWEET GPU:` log from the *first* replay report; later
+  reports are the same cached data.
 
-Repackage with ignored `research/package-0082.py`. All three modes 0/1/2
-are already generated and unpack-verified; no need to rerun unless changed.
-The CI buildtree archive is external `ci-0082/buildtree.tgz`.
+## Prompt to paste into the new agent
 
-## Hardware knowledge for the next implementation
-
-0081's three complete cached reports measured **CX and GX GDSCR both
-0x00222001** (PWR_ON clear, SW_COLLAPSE set). All nine GPUCC branches were
-off. GCC config AHB=0x00000001, MEMNOC=0x80000220, SNOC DVM=0x80000001,
-DDRSS AXI=0. DDRSS's clear halt bit does not establish an owned enable vote.
-Full evidence: `docs/GPU_REPORT_REPLAY.md` and external phone0081 logs.
-
-Pinned Xiaomi source **758bb7ef50af360e728662a1ed3b3a1b977a2f13** is downloaded
-under ignored research/gpu-sources. A618 specifically requests a618_gmu.bin,
-a630_sqe.fw and secure subsystem a615_zap. Exact firmware bytes unverified.
-
-`docs/GPU_POWER_SEQUENCE.md` maps the dependencies. CX regulator has an MX
-parent; CX GDSC parent is VDD_CX_LEVEL. GMU 200 MHz uses GCC GPLL0 divided
-parent, selector6/HID2 at GPUCC RCG0x1120; shared GCC gate0x52004 bit16.
-Linux consumer corner constants add 1; command DB stores raw values; ARC
-requests carry a table INDEX. GMU needs SMMU-mapped HFI/log buffers before
-reset release. CPU 16KiB pages do not establish the SMMU granule.
-
-After obtaining 0082 data, design a separate opt-in, bounded CX/GMU power
-experiment. Existing sweet_rpmh_vreg_enable accepts only ldoc11 in mV;
-its VRM sender is not an ARC API. Future ARC transport must share apps-DRV
-serialization and account for MX/CX dependencies and inherited votes.
-
-## Metal / external driver research already completed
-
-See `docs/GPU_API_RE.md` and `docs/GPU_EXTERNAL_DRIVERS.md`; do not redo RE.
-Our iOS16.7.16 Metal loader enumerates IOAcceleratorES, reads MetalPluginName
-and MetalPluginClassName, loads an Extensions bundle, checks _MTLDevice
-subclassing and calls initWithAcceleratorPort:. Base implementation is
-abstract; MTLIOAccelDevice adds IOAccel contracts. Actual custom iOS plugin
-and compositor integration are not implemented.
-
-External pinned references:
-- NullMoth NVIDIA **637282334617d27bccf8aa2448497c0f19465dc8**: concrete
-  MTLIOAccelDevice plugin uses that initializer and registry properties.
-  Root license PolyForm Noncommercial; vendored translator LGPL separately.
-- metal2vulkan **720ef1ce9ae2a2068999a8675717418b9416283e**: upstream0.2 has
-  native AIR/metallib reader, SPIR-V pipeline compiler and Rust Metal-shaped
-  Vulkan runtime. It is not an Objective-C drop-in framework. Dual license
-  GPL2-or-later OR LGPL3-or-later. Needs actual iOS library/ABI coverage tests.
-- Built upstream CLI with isolated Rust1.98.0 release and warnings-as-errors.
-  **3 SPIR-V modules passed** CLI validation + spirv-val Vulkan1.2: compute
-  copy and vertex/fragment pair, using upstream-owned synthetic AIR inputs.
-  No phone GPU work/pixel comparison. vk12-floor is a reference profile,
-  not measured Adreno capabilities. Evidence external metal2vulkan-smoke/.
-  Rust toolchain `/home/dipa/.cache/ios-extra-rust/`; targets external
-  metal2vulkan-target/. No shell startup files changed.
-- Asahi contributes RE, asynchronous submission, lifetime/fence design;
-  its AGX hardware backend is distinct from Adreno. Candidate future chain:
-  iOS Metal plugin -> metal2vulkan -> Turnip/IR3 -> XNU transport -> SweetGPU.
-
-Update NOTES.md after new results, keep Apple/device artifacts out of Git,
-commit focused changes and use this repo's CI. Continue positively with
-measured milestones; do not invent completion estimates.
+> You are continuing a hardware bring-up of the Adreno 618 GPU for an XNU/iOS port on
+> a Redmi Note 10 Pro. Work in `/home/dipa/ios-extra` (public repo
+> `dipa-studio/ios-extra`). Read, in order: `AGENTS.md`, `HANDOFF.md`, `NOTES.md`,
+> `docs/GPU_GMU_BOOT.md`; `docs/GPU_LOG.md` is history. Do not touch
+> `/home/dipa/ios-sweet`. The phone is only ever booted with a temporary
+> `fastboot boot` after the user puts it in fastboot; never flash, never run
+> `fastboot getvar`, never reboot it unannounced. The next action is the pending 0092
+> test (`tools/gpu-phone-test.py`, command in `HANDOFF.md`); ask the user for
+> fastboot, run it, record the raw values, then continue with the numbered "Next
+> steps", one measured patch per phone boot. Test every precondition, keep every
+> experiment opt-in (`sweetgpu=N`) and rolled back, distinguish source reading /
+> green build / phone result, and add no attribution text to commits or docs.

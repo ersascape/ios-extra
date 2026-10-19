@@ -24,12 +24,14 @@ The workflow retains a guard that skips macOS builds if the repository is made p
 
 ## Working here
 
-- Read [NOTES.md](NOTES.md) for the current handoff and [AGENTS.md](AGENTS.md) for workspace rules.
+- Read [HANDOFF.md](HANDOFF.md) to continue the work, [NOTES.md](NOTES.md) for the current state and [AGENTS.md](AGENTS.md) for workspace rules; [docs/GPU_LOG.md](docs/GPU_LOG.md) is the step-by-step history.
 - See [the architecture review](docs/ARCHITECTURE.md) for boot, driver interfaces, dependencies and remaining gaps.
 - GPU work starts with [the Adreno 618 plan](docs/GPU_PLAN.md): hardware execution, userspace rendering and iOS integration milestones.
 - [Probe 0080](docs/GPU_BRINGUP.md) documents the first implementation, register audit and build/test results.
 - [Inventory replay 0081](docs/GPU_REPORT_REPLAY.md) preserves the boot measurements and reprints them after USB configuration to recover missing early log lines.
 - [ARC inventory 0082](docs/GPU_ARC_INVENTORY.md) adds an opt-in snapshot of GPU rail resource addresses and raw level tables, without power votes.
+- [Per-patch design 0083-0092](docs/GPU_CX_EXPERIMENT.md): CX power, GMU clocks and registers, firmware in TCM, SMMU context + ATOS, RSC/PDC init, each opt-in and rolled back.
+- [GMU boot reference](docs/GPU_GMU_BOOT.md): the mainline Linux start sequence for this GPU next to every value measured on the phone, address/offset tables and the remaining unknowns.
 - [Power and firmware audit](docs/GPU_POWER_SEQUENCE.md) maps the A618 startup dependencies and the remaining ARC, GMU and SMMU contracts.
 - [Metal loading research](docs/GPU_API_RE.md) records the traced service-to-device-plugin interface in this iOS image.
 - [Asahi, NVIDIA and metal2vulkan audit](docs/GPU_EXTERNAL_DRIVERS.md) identifies reusable API/compiler pieces and the remaining iOS/Adreno integration work.
