@@ -24,6 +24,13 @@
   Preserve bootloaders, recovery, modem, persist and partition backups.
   Confirm destructive device steps with the user before running them.
   Never run `fastboot getvar` (known device fastboot issues).
+- Always check `fastboot devices` before asking the user to enter fastboot, and
+  again immediately before each temporary boot (the test helper does the latter).
+  Redact serials from displayed/stored output. If exactly one device is already
+  in fastboot, announce and run the authorized pending test; do not ask the user
+  to put it there again. If none is present, ask the user to enter fastboot. If
+  multiple devices are present, stop until the target is unambiguous. This check
+  never authorizes rebooting a running phone, flashing or using `getvar`.
 - Keep device dumps, serial numbers and downloaded Apple artifacts out of git.
   Historical local artifact paths are documented in `docs/UPSTREAM_NOTES.md`;
   they refer to the original workspace, not files present in this repository.

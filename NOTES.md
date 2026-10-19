@@ -81,6 +81,9 @@ Do not repeat 0092 or release CM3 merely because diagnostics completed.
 
 ## Hard constraints (unchanged)
 
+- Always check `fastboot devices` (serials redacted) before asking for fastboot.
+  If exactly one device is already there, announce and run the authorized pending
+  temporary test; ask only when none is present, stop if multiple are present.
 - Temporary `fastboot boot` only. No flashing, no partition/GPT changes, keep
   bootloaders, recovery, modem, persist and the backups. Never `fastboot getvar`.
   The user must put the phone in fastboot; never reboot it unannounced.

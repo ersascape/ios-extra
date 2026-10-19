@@ -16,6 +16,10 @@ then the next question.** The user prefers slow and careful over fast and clever
   `fastboot boot`, only when the user has put the phone in fastboot (`fastboot
   devices` shows exactly one). Do not reboot the phone unannounced. Other agents also
   use the phone and `/home/dipa/ios-sweet`; do not edit that tree.
+- **Always check fastboot first:** run `fastboot devices` with serials redacted
+  before asking the user to enter fastboot. Exactly one already present means
+  announce and run the authorized pending temporary test; ask only if none is
+  present, stop if multiple are present. The test helper rechecks before boot.
 - Confirm hardware-write steps that are new in kind (the first write to a new block)
   with the user in one line; they have been approving by putting the phone in fastboot.
 - Keep device serials, dumps, Apple files and downloaded firmware out of Git.
@@ -95,7 +99,7 @@ announce lines are the evidence. Make the next build smaller, not bigger.
 
 1. Edit `bsd/dev/sweet_gpu.c` (and, if needed, `sweet_rpmh.c`) in the **isolated tree**
    `/run/media/dipa/android/ios-extra-work/buildtree/xnu`. Its local git has one commit
-   per CI-validated baseline (latest `00095cd` = 0091; 0092 is the uncommitted diff).
+   per CI-validated baseline (latest `60d4b0e` = 0092; 0093 is the uncommitted diff).
    Before starting a new step, commit the validated state there:
    `git add -A bsd/dev/sweet_gpu.c && git -c user.name=ios-extra -c
    user.email=ios-extra@localhost commit -m "Validated 009N baseline"`. The untracked
