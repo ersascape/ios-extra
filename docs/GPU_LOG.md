@@ -5,12 +5,28 @@ CI runs, phone results and the reasoning at the time. The current state and the 
 action are in [NOTES.md](../NOTES.md) and [HANDOFF.md](../HANDOFF.md). Entries that say
 "not yet built/booted" were true when written; newer entries supersede them.
 
+## Handoff — 0098 local implementation, 2026-10-19
+
+- User confirmed the 0097 home screen and requested all work documented before
+  stopping for the usage limit. No further phone boot is authorized in this session.
+- `0098-sweet-gpu-exact-ao-mask-readback.patch`, same mode 15, baseline c242eb7
+  (measured 0097), accepts only offset +0x24c18 / write 0xffffffff / read 0x3f.
+  Mainline write value stays unchanged. All other set/restore comparisons exact.
+- Normal and ASan/UBSan suites pass: exact AO tuple; all six missing AO bits,
+  unexpected AO high bits/full all-ones, every missing HFI bit and HFI=0x3f
+  refused (42 alternatives); all 20 zero-write preconditions and previous
+  set/restore/quarantine/full-chain/mode/replay cases retained.
+  Arm64 compile 0 of 1 failed; patch equals isolated diff. Full CI and phone
+  validation pending at implementation. No 0098 image exists yet.
+- Next: verify push-triggered CI and its exact source, package mode 15, always
+  check fastboot first, then measure the second mask. HANDOFF has commands and
+  full first-start draft review, including SMMU global-fault IRQ containment.
+
 ## Phone result — 0097 IRQ mask/restore, 2026-10-19 18:53 UTC
 
 - Always checked fastboot first: exactly one already present, serial redacted.
   Announced first mask writes and temporarily booted once at 18:53:52 UTC;
-  send 0.423s, boot 0.134s, total 0.563s. Ping succeeds. Home-screen confirmation
-  requested and pending; do not infer it from ping.
+  send 0.423s, boot 0.134s, total 0.563s. Ping succeeds. **User confirmed the home screen.**
 - Image `shim/out/shim-boot-0097-irqmask.img`, SHA256
   `9ae01e4289113accd0ad18fcf15e436afd4cfaecc5330e8b69b5b63760f0ca7e`, mode 15;
   source 01dbc6e5571eacdca32f7c0d60bc34ce0d77ab00, green CI 39305068882.
@@ -61,7 +77,7 @@ SWEET GPU: IRQ mask final RPMH_POWER_STATE +0x143b0 = 0x0000000f
   round-trip exactly. No first-start draft is included.
 - Always checked fastboot first: exactly one already present, serial redacted.
   Announced first interrupt-mask writes/restore with CM3 reset and performed the
-  authorized single temporary boot. Capture/result recorded separately below.
+  authorized single temporary boot. Capture/result recorded separately above.
 - Pruned reproducible 0093/0094 kernel/buildtree/image/payload/unpack artifacts;
   all phone logs/manifests retained, along with 0095/0096/0097 working artifacts.
 

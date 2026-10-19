@@ -411,3 +411,17 @@ success writes with unchanged other GMU/SMMU memory; failure of each set/restore
 all five pending/reset/idle quarantine cases; fence/power/GX changes; full-chain,
 lower-mode and replay isolation. Arm64 object compile: 0 of 1 failed. Full CI and
 phone result pending.
+
+## 0098 — exact measured AO mask tuple (still `sweetgpu=15`)
+
+0097 read AO mask=0x3f after an all-ones write, stopped and restored zero. Mode
+15 still runs the same two-mask test. Its helper now expects exactly 0x3f only
+for (+0x24c18, write=0xffffffff); all other offsets/values retain exact equality.
+No write value, ordering, precondition or cleanup changes. This is not a broad
+bit mask or permission to accept missing known source bits. HFI readback remains
+unmeasured, expected all ones for the pending diagnostic.
+
+Baseline c242eb7. Host MMIO models measured AO readback; 42 other AO/HFI readbacks
+are explicitly rejected, including any missing AO bit 0..5, unexpected high bits,
+all-ones AO, every missing HFI bit, and HFI=0x3f. Normal/sanitized suites and real
+arm64 compile pass; patch equals isolated diff. CI and phone result pending.

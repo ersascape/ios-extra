@@ -1,6 +1,6 @@
 # ios-extra — current state
 
-Last updated 2026-10-19 after the 0096 phone test. Read [HANDOFF.md](HANDOFF.md) for how to
+Last updated 2026-10-19 after the 0097 phone test and 0098 local checks. Read [HANDOFF.md](HANDOFF.md) for how to
 continue and [AGENTS.md](AGENTS.md) for the rules. The per-step history (images,
 hashes, CI runs, raw numbers) is [docs/GPU_LOG.md](docs/GPU_LOG.md); the hardware and
 mainline reference is [docs/GPU_GMU_BOOT.md](docs/GPU_GMU_BOOT.md); the per-patch
@@ -36,9 +36,9 @@ GitHub now confirms public. Kernel builds use this repo's GitHub Actions
 | 0094 | 12 | read-only inventory of 29 pre-boot GMU registers | 39297388718 **passed** | 29/29 registers read; home screen confirmed |
 | 0095 | 13 | bounded TCM retention + RSC wake/stop, CM3 reset | 39300239967 **passed** | wake/stop and full sampled state restore; home screen |
 | 0096 | 14 | read-only GMU IRQ masks/status, fence and RPMH state | 39303111412 **passed** | 6/6 reads; home screen |
-| 0097 | 15 | GMU interrupt mask/restore | 39305068882 **passed** | AO reads 0x3f; guard stops, restored; home pending |
+| 0097 | 15 | GMU interrupt mask/restore | 39305068882 **passed** | AO reads 0x3f; guard stops, restored; home screen |
 
-The user confirmed the home screen after every boot up to 0096. Each stage runs
+The user confirmed the home screen after every boot up to 0097. Each stage runs
 inside the previous one's window (`sweetgpu=N` includes all lower modes) and undoes
 itself except: SMMU `S2CR3`/`CBAR3` (left inert: `SMR3` invalid, `SCTLR` 0), the
 GMU RCG (left at `0x602`), and the RSC/PDC configuration of 0091 (left in place).
@@ -57,18 +57,24 @@ Raw values in GPU_LOG. No firmware execution or GPU command yet.
 interrupt mask words=0, both status words=0, AO fence control=0, RPMH power
 state=0x0f; raw values in GPU_LOG. All lower probes/cleanup still pass. Full CI
 39303111412 built edd2b796ed7ff02434c42942c490543c17f95456 and artifacts match the
-local source. Next prerequisite: 0097 mask/verify/restore, with CM3 still reset,
-before relying on interrupt containment during the first firmware start.
+local source. 0097 separately tested the first mask with CM3 still reset (result below).
 0097 (mode 15) reached the readback guard at 18:53:52 UTC: wrote AO mask
 0xffffffff, got 0x3f, restored 0; second mask untouched. All sampled state/lower
-cleanup restored, reset=1 and GX off. Home-screen confirmation pending. Green CI
+cleanup restored, reset=1 and GX off. User confirmed the home screen. Green CI
 39305068882 built 01dbc6e5571eacdca32f7c0d60bc34ce0d77ab00; artifacts matched.
-Next 0098: permit only that exact measured AO tuple and test GMU2HOST masking.
+0098 implements only that exact AO tuple exception, retaining mode 15 and the
+mainline all-ones write. Normal and ASan/UBSan suites pass, including 42 rejected
+alternative AO/HFI readbacks, all 20 zero-write refusals and failure/rollback tests;
+arm64 compile 0 of 1 failed. Baseline c242eb7 (measured 0097); isolated diff equals
+0098 patch. Full CI must pass and artifacts must be verified/packaged before its
+phone test. No 0098 image or phone result exists at this handoff.
 
 An unvalidated first-start draft is external only (`ios-extra-work/gmu-first-start-draft.patch`),
 based on 0095; do not apply it unchanged. It still needs IRQ-mask/clear gates,
-complete host failure tests and reconciliation with the 0096 measurement before
-full CI or phone use. No first-start image exists.
+complete host failure tests and reconciliation with 0096–0098 measurements before
+full CI or phone use. It also needs SMMU global-fault interrupt containment: measured
+sCR0=0x00200626 has GFIE/GCFGFIE set. No sCR0 write has been made. See GPU_GMU_BOOT
+and the first-start review in HANDOFF. No first-start image exists.
 
 ## User-visible iOS observation (2026-10-19)
 

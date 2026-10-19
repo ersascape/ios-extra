@@ -1,0 +1,16 @@
+diff --git a/bsd/dev/sweet_gpu.c b/bsd/dev/sweet_gpu.c
+index 05ab85d..696a1df 100644
+--- a/bsd/dev/sweet_gpu.c
++++ b/bsd/dev/sweet_gpu.c
+@@ -1258,7 +1258,10 @@ gpu_irq_mask_set(vm_offset_t gmu, struct gpu_irq_mask_probe *m, uint32_t off, ui
+ 		unsigned int n = m->nwrites++;
+ 		m->off[n] = off; m->wrote[n] = value; m->got[n] = got;
+ 	}
+-	return got == value;
++	/* 0097 measured this exact all-ones AO write as 0x3f (six XML status bits).
++	 * Keep the mainline write; never relax other offsets, values or missing bits. */
++	uint32_t expected = off == 0x24c18 && value == ~0u ? 0x3fu : value;
++	return got == expected;
+ }
+ 
+ static void

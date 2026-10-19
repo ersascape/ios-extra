@@ -55,16 +55,61 @@ AO_AHB_FENCE_CTRL=0, RPMH_POWER_STATE=0x0f. Full CI 39303111412 passed on
 edd2b796ed7ff02434c42942c490543c17f95456; verified artifacts/image in GPU_LOG.
 0097 stopped at the strict first mask guard at 18:53:52 UTC: wrote AO mask
 0xffffffff, got 0x3f, restored 0. Second mask untouched. All lower checks/cleanup
-pass; home-screen confirmation pending. Green CI 39305068882, source
-01dbc6e5571eacdca32f7c0d60bc34ce0d77ab00. Next 0098: accept only this exact
-measured AO tuple, keep writing all ones, then test the second mask. Still no CM3
+pass; user confirmed the home screen. Green CI 39305068882, source
+01dbc6e5571eacdca32f7c0d60bc34ce0d77ab00. 0098 implements only this exact
+measured AO tuple, keeps writing all ones, then tests the second mask (mode 15).
+Normal/sanitized host suites and arm64 object compile pass. Full CI/artifact
+verification/package/phone remain. No 0098 image or phone result yet. Still no CM3
 release. Read the raw report and source interpretation in GPU_LOG.
 
 The larger first-start draft is only external (`gmu-first-start-draft.patch` under
 `ios-extra-work`, based on 0095). It had an arm64 object compile, but no host tests,
 full CI or phone validation. It omits interrupt protection and must not be applied
-unchanged. Read the pending IRQ/fence values first, then revise/test the complete
-bounded CM3-start patch. No first-start image exists; CM3 has never run.
+unchanged. Use the measured IRQ/fence values and finish both mask proofs before revising the
+bounded CM3-start patch. Also resolve SMMU global-fault interrupts (see below). No first-start image exists; CM3 has never run.
+
+## Exact continuation for 0098
+
+The user is stopping for the usage limit. **Do not boot again in this session.**
+On resume, check the push-triggered XNU CI for the 0098 implementation commit
+(`gh run list -R dipa-studio/ios-extra --workflow xnu.yml --limit 5`). Do not treat
+local tests or a queued run as a green build. Once green, download `xnu-kernel`
+and `xnu-buildtree` to `ios-extra-work/{out-0098,ci-0098}`; verify SHA256SUMS,
+byte-compare GPU/firmware-header/RPMh sources with the isolated tree, and check
+both symbols. Then package using the **CI's head SHA**, not a later docs commit:
+
+```sh
+python3 tools/gpu-package.py --kernel /run/media/dipa/android/ios-extra-work/out-0098/kernel.development.sweet --patch 0098 --mode 15 --name irqmask --ci-run RUN --commit CI_HEAD_SHA
+```
+
+Only after verification/package, always check `fastboot devices` with serials
+redacted. If one is already there, announce/run the authorized temporary test;
+otherwise ask for fastboot. Use `tools/gpu-phone-test.py` with
+`shim/out/shim-boot-0098-irqmask.img`, the exact SHA from manifest-0098.json and
+log name `phone-0098-irqmask`. Read report 1, record both raw mask writes/restores,
+ask for home screen, then decide from the measured second-mask readback. Do not
+assume that it accepts all ones just because the host model does.
+
+First-start draft review (not validated or in a phone image):
+
+- External draft SHA256 028a3c1ba51a043a82cd20c9c7f8b9f6d86b497f8345df7e7e90ea0262bfd0a2,
+  based on 0095; detailed external `gmu-first-start-draft-notes.txt` preserved.
+- Add source masks before release; snapshot status, reset CM3 immediately after
+  the bounded FW_INIT poll, then clear/restore/unmask in tested order. W1C clear
+  writes are new and need source offsets and failure coverage.
+- A failed reset must not fall through normal SMMU/clock/CX cleanup while claiming
+  quiescence. Choose/test explicit containment through every cleanup layer. Keep
+  DMA backing permanent; do not copy logs or reuse RAM while the master may run.
+- Clean/invalidate before DMA, no CPU buffer access while running, reset/quiesce
+  then invalidate/copy the log. Static log storage; no 16 KiB stack allocation.
+- SMMU global sCR0 GFIE/GCFGFIE bits 2/5 are set in 0x00200626; context CFIE is
+  clear in SCTLR=0x27. GMU masks do not cover unmatched-stream global faults.
+  Preserve fault recording/translation and measure containment before first DMA.
+  pe_fiq.c does not clear inherited SPI enables; GIC Group 1 alone proves nothing
+  about individual sources. No new GIC or sCR0 write has been made.
+- All per-write failures, exact cached/live preconditions, second-map failure,
+  release/init timeout, reset failure, log validity and every unwind need host
+  tests. Single-file draft compilation is not full validation.
 
 ## Next steps (each is its own measured patch; do not merge steps)
 
@@ -72,17 +117,18 @@ bounded CM3-start patch. No first-start image exists; CM3 has never run.
    addresses retain existing routing values; six MSGID words lose length bit 3.
    Ownership (fixed hardware vs secure/EL2 filtering) is unresolved, so do not
    claim bare-metal mainline would necessarily read the same. Exact signatures
-   and limits are in `docs/GPU_GMU_BOOT.md`; stop completes. 0095 tests wake next.
+   and limits are in `docs/GPU_GMU_BOOT.md`; stop completes. 0095 subsequently proved wake/stop.
 2. **GMU buffers — 0093 measured.** Dummy 4 KiB at IOVA 0x60000000, debug/log/HFI
    16 KiB each at 0x60001000/0x60005000/0x60009000, mainline legacy HFI layout.
    ATOS passes both ends of all 13 pages and three faults (29 checks). Map is
    disabled before cleanup; S2CR3/CBAR3 retain only the known inert encodings.
-3. **Read-only pre-boot dump — 0094 and 0096 measured; 0097 tests IRQ masking.**
+3. **Read-only pre-boot dump — 0094/0096 measured; 0097/0098 test IRQ masking.**
    All 29 original offsets readable;
    nonzero stopped-state ACK/BUSY and power-control/hyst defaults recorded.
    CM3 remains reset. See GPU_LOG for raw values, GPU_GMU_BOOT for interpretation.
 4. **0095 RSC wake/stop measured and fully restored (CM3 held reset).**
-   After the 0096 read-only dump and a separate 0097 mask/restore proof, **GMU start, one bounded attempt** (mainline steps 2-12 in the doc): TCM retention,
+   After both GMU mask/restore proofs (0097 stopped; 0098 pending) and SMMU
+   global-fault containment, **GMU start, one bounded attempt** (mainline steps 2-12 in the doc): TCM retention,
    RSCC wake handshake (`REQ=BIT(1)`, ACK bit 1, `SEQ_BUSY`==0), fw (already done),
    boot config, HFI table address, fence range, `CM3_CFG=0x4052`, chip id, log
    address, power config, then `SYSRESET` 1 -> 0 and poll `FW_INIT_RESULT` (10 ms
@@ -106,7 +152,7 @@ announce lines are the evidence. Make the next build smaller, not bigger.
 
 1. Edit `bsd/dev/sweet_gpu.c` (and, if needed, `sweet_rpmh.c`) in the **isolated tree**
    `/run/media/dipa/android/ios-extra-work/buildtree/xnu`. Its local git has one commit
-   per CI-validated baseline (latest `328cafb` = 0096; 0097 is the uncommitted diff).
+   per CI-validated baseline (latest `c242eb7` = measured 0097; 0098 is the uncommitted diff).
    Before starting a new step, commit the validated state there:
    `git add -A bsd/dev/sweet_gpu.c && git -c user.name=ios-extra -c
    user.email=ios-extra@localhost commit -m "Validated 009N baseline"`. The untracked
@@ -170,7 +216,7 @@ the user's words "home screen" for the boot confirmation they give.
 > `docs/GPU_GMU_BOOT.md`; `docs/GPU_LOG.md` is history. Do not touch
 > `/home/dipa/ios-sweet`. The phone is only ever booted with a temporary
 > `fastboot boot` after the user puts it in fastboot; never flash, never run
-> `fastboot getvar`, never reboot it unannounced. The next action is to implement/build 0098 with the exact measured AO mask readback, then
+> `fastboot getvar`, never reboot it unannounced. The next action is to verify the 0098 full CI build, package its image, then
 > test it (`tools/gpu-phone-test.py`, command in `HANDOFF.md`); always check
 > fastboot first, ask only if none is present, run it, record raw values, then continue with the numbered "Next
 > steps", one measured patch per phone boot. Test every precondition, keep every

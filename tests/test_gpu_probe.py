@@ -127,7 +127,7 @@ static unsigned wake_trace_n;
 static uint32_t wake_trace_off[16], wake_trace_val[16];
 static int irq_model;
 static unsigned irq_trace_n, irq_fail_write, irq_change;
-static uint32_t irq_trace_off[8], irq_trace_value[8];
+static uint32_t irq_trace_off[8], irq_trace_value[8], irq_ao_readback, irq_hfi_readback;
 static int smmu_sticky; /* hardware that refuses to take the ABL default back in S2CR3/CBAR3 */
 static void test_store32(vm_offset_t base, uint32_t off, uint32_t value)
 {
@@ -146,6 +146,7 @@ static void test_store32(vm_offset_t base, uint32_t off, uint32_t value)
             if (irq_change == 7) gmu_mem[0x143b0/4] = 0;
             if (irq_change == 8) cc[GPU_GX_GDSCR/4] |= GPU_DOMAIN_ON;
         }
+        if (value == ~0u) value = off == 0x24c18 ? irq_ao_readback : irq_hfi_readback;
     }
     if (wake_model && base == (vm_offset_t)gmu_mem) {
         if (off == 0x14730 || off == 0x24c1c || off == 0x14000) {
@@ -465,7 +466,7 @@ static void wake_defaults(void)
 
 static void irq_defaults(void)
 {
-    wake_defaults(); mode = 15; irq_model = 1;
+    wake_defaults(); mode = 15; irq_model = 1; irq_ao_readback = 0x3f; irq_hfi_readback = ~0u;
     struct gpu_power_experiment *x = &gpu_boot_inventory.power;
     x->irq_preflight_requested = 1; x->irq_preflight_done = 6;
     /* Independent constants from 0096, not the implementation's expected array. */
@@ -1305,9 +1306,9 @@ int main(void)
                 const unsigned wo[] = {0x24c18,0x1464c,0x1464c,0x24c18};
                 for (unsigned i = 0; i < 4; i++) {
                     assert(irq_trace_off[i] == wo[i] && irq_trace_value[i] == (i < 2 ? ~0u : 0));
-                    assert(m->off[i] == wo[i] && m->wrote[i] == irq_trace_value[i] && m->got[i] == m->wrote[i]);
+                    assert(m->off[i] == wo[i] && m->wrote[i] == irq_trace_value[i] && m->got[i] == (i == 0 ? 0x3fu : m->wrote[i]));
                 }
-                assert(m->masked_value[0] == ~0u && m->masked_value[1] == ~0u);
+                assert(m->masked_value[0] == 0x3fu && m->masked_value[1] == ~0u);
                 assert(m->reset == 1 && !m->busy && !m->init && m->gx_before == m->gx_final);
             }
         }
@@ -1321,7 +1322,7 @@ int main(void)
                 assert(!gmu_mem[0x24c18/4] && !gmu_mem[0x1464c/4]);
             } else {
                 assert(!m->restored && m->masked == 2 && irq_trace_n == 4);
-                assert(gmu_mem[(fail == 3 ? 0x1464c : 0x24c18)/4] == ~0u);
+                assert(gmu_mem[(fail == 3 ? 0x1464c : 0x24c18)/4] == (fail == 3 ? ~0u : 0x3fu));
             }
         }
         /* Pending status/reset/idle changes forbid unmasking; preserve evidence. */
@@ -1330,9 +1331,25 @@ int main(void)
             gpu_gmu_irq_mask_test((vm_offset_t)gmu_mem,(vm_offset_t)cc,x); m=&x->irq_mask;
             assert(m->error && !m->restored && irq_trace_n == 4);
             if (change <= 5) {
-                assert(m->quarantined && gmu_mem[0x24c18/4] == ~0u && gmu_mem[0x1464c/4] == ~0u);
+                assert(m->quarantined && gmu_mem[0x24c18/4] == 0x3fu && gmu_mem[0x1464c/4] == ~0u);
                 for (unsigned i = 0; i < 4; i++) assert(irq_trace_value[i] == ~0u);
             } else assert(!m->quarantined && !gmu_mem[0x24c18/4] && !gmu_mem[0x1464c/4]);
+        }
+        /* 0098: only the measured AO tuple is accepted; no ignored-bit mask. */
+        for (unsigned bad = 0; bad < 9; bad++) {
+            irq_defaults(); x=&gpu_boot_inventory.power;
+            irq_ao_readback = bad < 6 ? 0x3fu & ~(1u << bad) : bad == 6 ? 0x7fu : bad == 7 ? 0x8000003fu : ~0u;
+            gpu_gmu_irq_mask_test((vm_offset_t)gmu_mem,(vm_offset_t)cc,x); m=&x->irq_mask;
+            assert(m->error && m->attempted == 1 && !m->masked && m->restored && irq_trace_n == 2);
+            assert(!gmu_mem[0x24c18/4] && !gmu_mem[0x1464c/4] && gmu_mem[0x14000/4] == 1);
+        }
+        /* The same 0x3f readback is NOT accepted for HFI; reject every missing bit. */
+        for (unsigned bad = 0; bad <= 32; bad++) {
+            irq_defaults(); x=&gpu_boot_inventory.power;
+            irq_hfi_readback = bad < 32 ? ~(1u << bad) : 0x3fu;
+            gpu_gmu_irq_mask_test((vm_offset_t)gmu_mem,(vm_offset_t)cc,x); m=&x->irq_mask;
+            assert(m->error && m->attempted == 2 && m->masked == 1 && m->restored && irq_trace_n == 4);
+            assert(!gmu_mem[0x24c18/4] && !gmu_mem[0x1464c/4] && gmu_mem[0x14000/4] == 1);
         }
         /* Full chain, mode isolation and cached replay never redo writes. */
         irq_defaults(); gmu_mem[0x24c20/4] = gmu_mem[0x23404/4] = gmu_mem[0x23010/4] = 0;
@@ -1345,7 +1362,7 @@ int main(void)
         arc_run(); assert(!gpu_boot_inventory.power.irq_mask.requested && !irq_trace_n);
         irq_defaults(); gmu_mem[0x24c20/4] = gmu_mem[0x23404/4] = gmu_mem[0x23010/4] = 0; wake_ack_stuck = 1;
         arc_run(); assert(gpu_boot_inventory.power.irq_mask.error && !irq_trace_n);
-        puts("PASS: interrupt mask/restore, 20 zero-write refusals, all four write failures, status quarantine, mode and replay");
+        puts("PASS: interrupt mask/restore, exact AO 0x3f tuple and 42 rejected alternatives, 20 zero-write refusals, all write failures, quarantine, mode and replay");
     }
 
     /* Mode 3 never runs the clock stage. */
