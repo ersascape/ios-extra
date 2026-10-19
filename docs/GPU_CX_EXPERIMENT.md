@@ -274,4 +274,5 @@ individual programming readback failures; ATOS/TLB timeouts; wrong mapped PAR /
 unexpected successful out-of-range translation; lower-mode isolation and cached
 replay without new writes or allocations. The inherited RSC SEQ_BUSY refusal
 also now has its own test. Normal and ASan/UBSan suites and local arm64 compile
-pass. Full CI and phone result are separate pending gates.
+pass. Full CI 39293204273 subsequently passed with matching source artifacts;
+0093 phone result remains pending.

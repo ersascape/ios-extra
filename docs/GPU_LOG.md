@@ -5,6 +5,30 @@ CI runs, phone results and the reasoning at the time. The current state and the 
 action are in [NOTES.md](../NOTES.md) and [HANDOFF.md](../HANDOFF.md). Entries that say
 "not yet built/booted" were true when written; newer entries supersede them.
 
+## 0093 full build and packaged image — 2026-10-19
+
+- User confirmed the repo had been made private overnight and requested public
+  visibility again. Restored it and verified `isPrivate=false` / `PUBLIC`.
+- Full [CI 39293204273](https://github.com/dipa-studio/ios-extra/actions/runs/39293204273)
+  **passed** on `ab7a61da02cb91b0f87cf1a372939fabf73e3a59` (implementation c053da3,
+  unchanged patch). This is full build/link evidence, not a phone result.
+- Kernel `ios-extra-work/out-0093/kernel.development.sweet`, SHA256
+  `1baf48029953c7d45b4ff50f3ecec5e0ff21e6bea8bc0525ef2cb6bc435243f5`;
+  `sha256sum -c SHA256SUMS` passed. Symbols `_sweet_gpu_probe` at
+  `0xfffffe00074fa838`, `_sweet_rpmh_arc_set` at `0xfffffe00074f8548`.
+- CI artifact `ios-extra-work/ci-0093/buildtree.tgz`: GPU source SHA256
+  `d824360e16362eff9a174e603acf1399e45512186b6d45ba42d425d0e5e7a0a1`,
+  firmware header SHA256 `2c76898351726399ac212d29c3ca7670786ad00c77e5be28da3b847af0baedf2`,
+  RPMh source SHA256 `fc3669172ee14592cbee2f4312450e68ca9eac7870612d7d669fa2872bf404ca`;
+  all three byte-identical to locally tested isolated files.
+- Packaged `shim/out/shim-boot-0093-gmubuffers.img` (17268736 bytes), SHA256
+  `dd4f6de48318e94e0dee5933467a998ec9ec6c90f352f9e050168b3202304f7a`,
+  `sweetgpu=11`, existing UFS-root boot arguments. Manifest
+  `shim/out/manifest-0093.json`; unpacked ramdisk equals the generated payload,
+  boot arguments round-trip exactly. Artifacts are local/ignored.
+- **Not booted yet.** Asked for a new user-controlled fastboot before the single
+  temporary test. The phone remains on 0092; no flash or reboot was issued.
+
 ## Implementation — 0093 GMU buffers (local checks pass; CI skipped)
 
 - Source commit `c053da3cfae8a4fe053499fee7ad01bb68b61cfd`, patch

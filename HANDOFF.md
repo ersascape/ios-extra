@@ -32,19 +32,28 @@ Patches 0080-0092 are built and phone-tested. 0092 was temporarily booted on
 nine constrained RSC/PDC readbacks and a successful stop handshake (0x01010006).
 The init state did not persist through this boot path. Raw report in GPU_LOG;
 step 1 interpretation and limits in GPU_GMU_BOOT. CM3 remains held in reset and GX
-has never been powered. 0093 implements the separate opt-in GMU-buffer / ATOS experiment (step 2), with
-normal and sanitized host tests and local arm64 compile passing. Source c053da3
-is pushed, but CI 39290944708 was skipped because GitHub now reports the repo as
-private. No 0093 kernel/image or phone result exists; do not repeat 0092.
+has never been powered. 0093 implements the separate opt-in GMU-buffer / ATOS experiment (step 2).
+Normal/sanitized host tests and local arm64 compile pass; full CI 39293204273
+**passed** on ab7a61d. CI GPU/RPMh source and firmware header match the isolated
+tree byte-for-byte. The first CI skipped while private overnight; the user
+requested restoring public visibility, now verified. The 0093 image is ready but
+not booted; do not repeat 0092.
 
 ## Immediate next action
 
-Resolve the pending visibility clarification: the live repo is private, while
-prior docs/user prompt call it public. Leave visibility and the public-only CI
-guard unchanged until the user answers. Once a full CI build can run, verify its
-kernel and source artifacts, package 0093 (`sweetgpu=11`) and ask for a fresh
-user-controlled fastboot before its single temporary boot. 0092 home screen is
-confirmed and recorded.
+The user has been asked for a fresh fastboot for 0093. After confirmation:
+
+```sh
+python3 tools/gpu-phone-test.py --image shim/out/shim-boot-0093-gmubuffers.img \
+  --sha256 dd4f6de48318e94e0dee5933467a998ec9ec6c90f352f9e050168b3202304f7a \
+  --name phone-0093-gmubuffers
+```
+
+Record all raw `buffers ATOS` and `buffers wr` lines from the first complete
+cached replay, `passed=29`, `inactive=1`, the final registers and result. A known
+inert S2CR/CBAR difference may give `restored=0`; it must not be confused with full
+restore. Ask for home screen, update NOTES/GPU_LOG, then step 3 (read-only pre-boot
+register inventory) as its own new measured patch. 0092 home screen is confirmed.
 
 ## Next steps (each is its own measured patch; do not merge steps)
 

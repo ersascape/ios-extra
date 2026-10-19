@@ -10,10 +10,10 @@ design is [docs/GPU_CX_EXPERIMENT.md](docs/GPU_CX_EXPERIMENT.md).
 
 Driver playground for the XNU/iOS 16 port to the Redmi Note 10 Pro (`sweet`,
 SM7150, Adreno 618). The target is a real Adreno driver; the display today is
-CPU-rendered. Repo `dipa-studio/ios-extra`, branch `main`. GitHub reports it
-**private** as of the 0093 push, despite the prior public-visibility record;
-visibility has not been changed in this session. Kernel builds use this repo's
-GitHub Actions (`.github/workflows/xnu.yml`, macOS runner, ~6 min).
+CPU-rendered. Public repo `dipa-studio/ios-extra`, branch `main`. The user made it
+private overnight, then authorized restoring public visibility on 2026-10-19;
+GitHub now confirms public. Kernel builds use this repo's GitHub Actions
+(`.github/workflows/xnu.yml`, macOS runner, ~6 min).
 `/home/dipa/ios-sweet` belongs to other agents: read-only for us.
 
 ## Where the GPU bring-up stands (all measured on the phone unless noted)
@@ -32,7 +32,7 @@ GitHub Actions (`.github/workflows/xnu.yml`, macOS runner, ~6 min).
 | 0090 | 9 | read-only RSC/PDC inventory | 39169517724 | ok |
 | 0091 | 10 | mainline A618 RSC/PDC init (48 writes, readback), RSC stop handshake | 39170396365 | handshake ok, 9/48 writes did not read back |
 | 0092 | 10 | same, logs every mismatch + reads the table first | 39171199100 | stop handshake ok; all 9 mismatches identified |
-| 0093 | 11 | 13 GMU buffer pages, mainline HFI layout, 29 ATOS checks | 39290944708 **skipped** | not booted |
+| 0093 | 11 | 13 GMU buffer pages, mainline HFI layout, 29 ATOS checks | 39293204273 **passed** | not booted |
 
 The user confirmed the home screen after every boot up to 0092. Each stage runs
 inside the previous one's window (`sweetgpu=N` includes all lower modes) and undoes
@@ -55,11 +55,28 @@ Step 1 interpretation is written in docs/GPU_GMU_BOOT.md: exact constrained
 readbacks, ownership unresolved, stop handshake proven, wake/votes not proven.
 0093 (`sweetgpu=11`) implements the separate GMU-buffer / 29-check ATOS test;
 normal and ASan/UBSan host tests pass, local arm64 compile 0 of 1 files failed.
-Source commit `c053da3cfae8a4fe053499fee7ad01bb68b61cfd` is pushed. CI run
-[39290944708](https://github.com/dipa-studio/ios-extra/actions/runs/39290944708)
-was **skipped**, with no build steps: the repo is currently private and the
-workflow gates on public visibility. User clarification is pending; neither
-visibility nor the workflow guard has been changed. No 0093 kernel/image exists. Source baseline in isolated XNU git: 60d4b0e (validated 0092).
+Source implementation commit `c053da3cfae8a4fe053499fee7ad01bb68b61cfd` is pushed.
+The first CI run 39290944708 skipped while the repo was private overnight. With
+public visibility restored at the user's request, full CI
+[39293204273](https://github.com/dipa-studio/ios-extra/actions/runs/39293204273)
+**passed** on `ab7a61da02cb91b0f87cf1a372939fabf73e3a59` (same patch/source).
+CI GPU/RPMh source and staged firmware header match the isolated tree byte-for-byte;
+kernel hash and GPU/RPMh symbols verified. Packaged/round-trip-verified image:
+`shim/out/shim-boot-0093-gmubuffers.img`, SHA256
+`dd4f6de48318e94e0dee5933467a998ec9ec6c90f352f9e050168b3202304f7a`.
+**Not booted yet.** Asked the user for a new fastboot; once confirmed run:
+
+```sh
+python3 tools/gpu-phone-test.py --image shim/out/shim-boot-0093-gmubuffers.img \
+  --sha256 dd4f6de48318e94e0dee5933467a998ec9ec6c90f352f9e050168b3202304f7a \
+  --name phone-0093-gmubuffers
+```
+
+Require `buffers` checks=29/29, passed=29, inactive=1; distinguish restored=0
+with only the known inert S2CR/CBAR difference from a rollback error. Capture every
+raw PAR and write/readback from the first complete replay. Ask for home screen.
+
+Source baseline in isolated XNU git: 60d4b0e (validated 0092).
 Do not repeat 0092 or release CM3 merely because diagnostics completed.
 
 ## Hard constraints (unchanged)
