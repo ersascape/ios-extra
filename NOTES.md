@@ -58,6 +58,8 @@ state=0x0f; raw values in GPU_LOG. All lower probes/cleanup still pass. Full CI
 39303111412 built edd2b796ed7ff02434c42942c490543c17f95456 and artifacts match the
 local source. Next prerequisite: 0097 mask/verify/restore, with CM3 still reset,
 before relying on interrupt containment during the first firmware start.
+0097 is implemented locally (mode 15), normal/sanitized suites and arm64 compile
+pass; full CI/phone pending. Design and failure behavior in GPU_CX_EXPERIMENT.
 
 An unvalidated first-start draft is external only (`ios-extra-work/gmu-first-start-draft.patch`),
 based on 0095; do not apply it unchanged. It still needs IRQ-mask/clear gates,
@@ -73,6 +75,13 @@ been identified or reproduced here; cause and relationship to GPU experiments
 are unestablished. Home-screen arrival does not mean the UI is fully working.
 The user asked to continue GPU bring-up; no userland repair or upstream-tree
 changes are being made as part of this work.
+
+## Additional source reference
+
+The user supplied apple-silicon-anyos-project. Pinned source review at
+59fd73aac4ae386939bc69dc58dffbce1b2167b2 is in GPU_EXTERNAL_DRIVERS: candidate
+AIR/SPIR-V/Vulkan reuse for later integration, but a QEMU/macOS paravirtual
+transport and no demonstrated sweet/Adreno path. No code imported or executed.
 
 ## Hard constraints (unchanged)
 

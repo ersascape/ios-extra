@@ -78,6 +78,7 @@ class GPUProbeTests(unittest.TestCase):
             self.assertEqual(build.returncode, 0, build.stderr)
             result = subprocess.run([str(work / 'test')], capture_output=True, text=True)
             self.assertEqual(result.returncode, 0, result.stderr)
+            self.assertIn('PASS: interrupt mask/restore', result.stdout)
             self.assertIn('PASS: six IRQ/fence reads', result.stdout)
             self.assertIn('PASS: RSC wake/stop', result.stdout)
             self.assertIn('PASS: 29 pre-boot registers', result.stdout)
@@ -124,10 +125,28 @@ static int wake_model, wake_seen, wake_ack_stuck, wake_busy_stuck, wake_stop_stu
 static int retention_stuck, retention_restore_stuck, wake_gx_on;
 static unsigned wake_trace_n;
 static uint32_t wake_trace_off[16], wake_trace_val[16];
+static int irq_model;
+static unsigned irq_trace_n, irq_fail_write, irq_change;
+static uint32_t irq_trace_off[8], irq_trace_value[8];
 static int smmu_sticky; /* hardware that refuses to take the ABL default back in S2CR3/CBAR3 */
 static void test_store32(vm_offset_t base, uint32_t off, uint32_t value)
 {
     all_mmio_writes++;
+    if (irq_model && base == (vm_offset_t)gmu_mem && (off == 0x24c18 || off == 0x1464c)) {
+        assert(irq_trace_n < 8);
+        irq_trace_off[irq_trace_n] = off; irq_trace_value[irq_trace_n++] = value;
+        if (irq_trace_n == irq_fail_write) return;
+        if (irq_trace_n == 2) {
+            if (irq_change == 1) gmu_mem[0x14648/4] = 1u << 15;
+            if (irq_change == 2) gmu_mem[0x24c14/4] = 1;
+            if (irq_change == 3) gmu_mem[0x14000/4] = 0;
+            if (irq_change == 4) gmu_mem[0x14068/4] = 1;
+            if (irq_change == 5) gmu_mem[0x14070/4] = 0xbabeface;
+            if (irq_change == 6) gmu_mem[0x24c40/4] = 1;
+            if (irq_change == 7) gmu_mem[0x143b0/4] = 0;
+            if (irq_change == 8) cc[GPU_GX_GDSCR/4] |= GPU_DOMAIN_ON;
+        }
+    }
     if (wake_model && base == (vm_offset_t)gmu_mem) {
         if (off == 0x14730 || off == 0x24c1c || off == 0x14000) {
             assert(wake_trace_n < 16);
@@ -378,6 +397,7 @@ static void arc_reset(void)
     refuse_smmu_off = refused_writes = clean_bytes = 0; all_mmio_writes = 0;
     wake_model = wake_seen = wake_ack_stuck = wake_busy_stuck = wake_stop_stuck = 0;
     retention_stuck = retention_restore_stuck = wake_gx_on = 0; wake_trace_n = 0;
+    irq_model = 0; irq_trace_n = irq_fail_write = irq_change = 0;
     last_ats = smmu_rd64(GPU_SMMU_CB0 + 3 * 0x1000 + GPU_SMMU_CB_ATS1PR); /* not a pending request */
     memset(dma_block, 0, sizeof(dma_block));
     for (unsigned i = 0; i < GPU_GMU_SIZE / 4; i++) gmu_mem[i] = 0xa5000000u | i;
@@ -443,12 +463,22 @@ static void wake_defaults(void)
     gmu_mem[0x23010/4] = 0x01010006;
 }
 
+static void irq_defaults(void)
+{
+    wake_defaults(); mode = 15; irq_model = 1;
+    struct gpu_power_experiment *x = &gpu_boot_inventory.power;
+    x->irq_preflight_requested = 1; x->irq_preflight_done = 6;
+    /* Independent constants from 0096, not the implementation's expected array. */
+    const unsigned off[] = {0x24c18,0x1464c,0x14648,0x24c14,0x24c40,0x143b0};
+    for (unsigned i = 0; i < 6; i++) x->irq_preflight_value[i] = gmu_mem[off[i]/4] = i == 5 ? 15u : 0u;
+}
+
 int main(void)
 {
     reset(); present = 0; sweet_gpu_probe();
     assert(map_calls == 0 && output[0] == 0);
     reset(); mode = 0; sweet_gpu_probe(); assert(map_calls == 0);
-    reset(); mode = 15; sweet_gpu_probe(); assert(map_calls == 0);
+    reset(); mode = 16; sweet_gpu_probe(); assert(map_calls == 0);
     reset(); mode = -1; sweet_gpu_probe(); assert(map_calls == 0);
     reset(); fail_gcc = 1; sweet_gpu_probe();
     assert(map_calls == 1 && strstr(output, "GCC mapping failed"));
@@ -1245,6 +1275,77 @@ int main(void)
         wake_defaults(); mode = 14; gmu_mem[0x24c20/4] = gmu_mem[0x23404/4] = 0; wake_ack_stuck = 1;
         arc_run(); assert(gpu_boot_inventory.power.irq_preflight_requested && !gpu_boot_inventory.power.irq_preflight_done);
         puts("PASS: six IRQ/fence reads, 13 zero-write refusals, mode isolation, reset and replay");
+    }
+
+    /* 0097: exact four writes, independent refusal gates, partial-write cleanup. */
+    {
+        struct gpu_power_experiment *x;
+        struct gpu_irq_mask_probe *m;
+        uint32_t before[GPU_GMU_SIZE/4], sb[GPU_SMMU_SIZE/4];
+        const unsigned off[] = {0x24c18,0x1464c,0x14648,0x24c14,0x24c40,0x143b0};
+        for (unsigned bad = 0; bad <= 20; bad++) {
+            irq_defaults(); x = &gpu_boot_inventory.power;
+            if (bad == 1) x->irq_preflight_error = "test error";
+            if (bad == 2) x->irq_preflight_done--;
+            if (bad >= 3 && bad <= 8) x->irq_preflight_value[bad-3] ^= 1;
+            if (bad >= 9 && bad <= 14) gmu_mem[off[bad-9]/4] ^= 1;
+            if (bad == 15) gmu_mem[0x14000/4] = 0;
+            if (bad == 16) gmu_mem[0x14068/4] = 1;
+            if (bad == 17) gmu_mem[0x14070/4] = 1;
+            if (bad == 18) cc[GPU_GX_GDSCR/4] = ~0u;
+            if (bad == 19) cc[GPU_GX_GDSCR/4] |= GPU_DOMAIN_ON;
+            if (bad == 20) cc[GPU_GX_GDSCR/4] &= ~GPU_GDSC_SW_COLLAPSE;
+            memcpy(before,gmu_mem,sizeof(before)); memcpy(sb,smmu_mem,sizeof(sb));
+            gpu_gmu_irq_mask_test((vm_offset_t)gmu_mem,(vm_offset_t)cc,x); m=&x->irq_mask;
+            assert(m->requested && !memcmp(before,gmu_mem,sizeof(before)) && !memcmp(sb,smmu_mem,sizeof(sb)));
+            if (bad) assert(m->error && !m->attempted && !all_mmio_writes && !irq_trace_n);
+            else {
+                assert(!m->error && m->attempted == 2 && m->masked == 2 && m->restored && !m->quarantined);
+                assert(irq_trace_n == 4 && all_mmio_writes == 4 && m->nwrites == 4);
+                const unsigned wo[] = {0x24c18,0x1464c,0x1464c,0x24c18};
+                for (unsigned i = 0; i < 4; i++) {
+                    assert(irq_trace_off[i] == wo[i] && irq_trace_value[i] == (i < 2 ? ~0u : 0));
+                    assert(m->off[i] == wo[i] && m->wrote[i] == irq_trace_value[i] && m->got[i] == m->wrote[i]);
+                }
+                assert(m->masked_value[0] == ~0u && m->masked_value[1] == ~0u);
+                assert(m->reset == 1 && !m->busy && !m->init && m->gx_before == m->gx_final);
+            }
+        }
+        /* Each write can fail, including either restore; no later mask/start on failure. */
+        for (unsigned fail = 1; fail <= 4; fail++) {
+            irq_defaults(); x=&gpu_boot_inventory.power; irq_fail_write = fail;
+            gpu_gmu_irq_mask_test((vm_offset_t)gmu_mem,(vm_offset_t)cc,x); m=&x->irq_mask;
+            assert(m->error && gmu_mem[0x14000/4] == 1 && !m->quarantined);
+            if (fail <= 2) {
+                assert(m->restored && m->masked == fail-1 && m->attempted == fail && irq_trace_n == 2*fail);
+                assert(!gmu_mem[0x24c18/4] && !gmu_mem[0x1464c/4]);
+            } else {
+                assert(!m->restored && m->masked == 2 && irq_trace_n == 4);
+                assert(gmu_mem[(fail == 3 ? 0x1464c : 0x24c18)/4] == ~0u);
+            }
+        }
+        /* Pending status/reset/idle changes forbid unmasking; preserve evidence. */
+        for (unsigned change = 1; change <= 8; change++) {
+            irq_defaults(); x=&gpu_boot_inventory.power; irq_change = change;
+            gpu_gmu_irq_mask_test((vm_offset_t)gmu_mem,(vm_offset_t)cc,x); m=&x->irq_mask;
+            assert(m->error && !m->restored && irq_trace_n == 4);
+            if (change <= 5) {
+                assert(m->quarantined && gmu_mem[0x24c18/4] == ~0u && gmu_mem[0x1464c/4] == ~0u);
+                for (unsigned i = 0; i < 4; i++) assert(irq_trace_value[i] == ~0u);
+            } else assert(!m->quarantined && !gmu_mem[0x24c18/4] && !gmu_mem[0x1464c/4]);
+        }
+        /* Full chain, mode isolation and cached replay never redo writes. */
+        irq_defaults(); gmu_mem[0x24c20/4] = gmu_mem[0x23404/4] = gmu_mem[0x23010/4] = 0;
+        arc_run(); x=&gpu_boot_inventory.power; m=&x->irq_mask;
+        assert(!m->error && m->masked == 2 && m->restored && irq_trace_n == 4);
+        assert(x->irq_preflight_done == 6 && !x->irq_preflight_error && x->wake.state_restored && x->buf.inactive && x->clk_restored);
+        assert(gmu_mem[0x14000/4] == 1 && strstr(output,"both sources masked and restored; CM3 stayed reset"));
+        int writes = all_mmio_writes; sweet_gpu_replay(); assert(writes == all_mmio_writes);
+        irq_defaults(); mode = 14; gmu_mem[0x24c20/4] = gmu_mem[0x23404/4] = gmu_mem[0x23010/4] = 0;
+        arc_run(); assert(!gpu_boot_inventory.power.irq_mask.requested && !irq_trace_n);
+        irq_defaults(); gmu_mem[0x24c20/4] = gmu_mem[0x23404/4] = gmu_mem[0x23010/4] = 0; wake_ack_stuck = 1;
+        arc_run(); assert(gpu_boot_inventory.power.irq_mask.error && !irq_trace_n);
+        puts("PASS: interrupt mask/restore, 20 zero-write refusals, all four write failures, status quarantine, mode and replay");
     }
 
     /* Mode 3 never runs the clock stage. */

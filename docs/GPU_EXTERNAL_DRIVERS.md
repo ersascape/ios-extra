@@ -156,3 +156,39 @@ Evidence: `logs/metal2vulkan-build.txt`, `logs/metal2vulkan-Cargo.lock`,
 the ignored `research/metal2vulkan-smoke.py` runner. All are under the
 isolated ios-extra workspace. The built CLI SHA-256 is
 `d7ab8295f3617e831540b6ccb1ebe504606a33d16c2aa8cec4fa0824cad45bfb`.
+
+## apple-silicon-anyos-project (source review, 2026-10-19)
+
+User-supplied [repository](https://github.com/medfa12/apple-silicon-anyos-project),
+pinned at `59fd73aac4ae386939bc69dc58dffbce1b2167b2`. Selected files inspected via
+GitHub API; external copies under `ios-extra-work/anyos-review`. No code imported,
+compiled or run here.
+
+Its [README](https://github.com/medfa12/apple-silicon-anyos-project/blob/59fd73aac4ae386939bc69dc58dffbce1b2167b2/README.md)
+reports macOS 26 Welcome/Language screens on an Axion ARM Linux KVM host, using
+the guest's built-in AppleParavirtGPU driver, a QEMU device and a Metal-to-Vulkan
+renderer. The reported Vulkan implementation is CPU lavapipe/llvmpipe, so that
+result does not establish Adreno acceleration. These are the project's claims,
+not a reproduced result on sweet or evidence about our missing wallpaper.
+
+Concrete reusable candidates from inspected source:
+
+- Vendored [metal2vulkan API](https://github.com/medfa12/apple-silicon-anyos-project/blob/59fd73aac4ae386939bc69dc58dffbce1b2167b2/vendor/metal2vulkan/src/lib.rs)
+  exposes translate/translate_reflected and native LLVM-IR-to-SPIR-V paths.
+  This revision uses external llvm-dis/spirv-val tooling; its pipeline comment
+  targets Vulkan 1.3 validation. It differs from the separately pinned upstream
+  translator above. Actual A618 feature requirements and iOS metallib coverage
+  need offline tests, not an assumption of compatibility.
+- The [shader cache](https://github.com/medfa12/apple-silicon-anyos-project/blob/59fd73aac4ae386939bc69dc58dffbce1b2167b2/vendor/pvg-vulkan/crates/pvg-vulkan/src/runtime/m2v_cache.rs)
+  calls that translator and couples SPIR-V with reflection/resource bindings.
+  Useful design/code candidates for a later Vulkan-backed Metal layer.
+- The [graphics host](https://github.com/medfa12/apple-silicon-anyos-project/blob/59fd73aac4ae386939bc69dc58dffbce1b2167b2/vendor/pvg-vulkan/crates/pvg-vulkan/src/lib.rs)
+  has explicit macOS/Linux target gates and a QEMU ABI. Its Cargo manifest uses
+  ash for Vulkan and a local translator dependency. It is not currently an iOS
+  Metal plugin or an Adreno kernel driver.
+
+Assessment: useful later shader/Metal interoperability research, with a different
+Apple-facing paravirtual transport to evaluate. It supplies no measured shortcut
+for sweet's current GMU/GX/SQE bring-up. Our iOS image's paravirtual-driver presence
+and ABI are unverified; do not infer macOS 26 guest support transfers to iOS 16.
+Continue the measured hardware ladder before selecting a userspace integration.

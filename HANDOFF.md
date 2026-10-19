@@ -54,7 +54,8 @@ AO_HOST_INTERRUPT_MASK=0, GMU2HOST_INTR_MASK=0, both pending statuses=0,
 AO_AHB_FENCE_CTRL=0, RPMH_POWER_STATE=0x0f. Full CI 39303111412 passed on
 edd2b796ed7ff02434c42942c490543c17f95456; verified artifacts/image in GPU_LOG.
 Next is 0097: separately prove both interrupt masks accept all ones and restore,
-with CM3 still reset. No 0097 patch/image/phone result yet.
+with CM3 still reset. 0097 is implemented; normal/sanitized host suites and
+arm64 compile pass. Full CI/package/phone next; no 0097 phone result yet.
 
 The larger first-start draft is only external (`gmu-first-start-draft.patch` under
 `ios-extra-work`, based on 0095). It had an arm64 object compile, but no host tests,
@@ -102,7 +103,7 @@ announce lines are the evidence. Make the next build smaller, not bigger.
 
 1. Edit `bsd/dev/sweet_gpu.c` (and, if needed, `sweet_rpmh.c`) in the **isolated tree**
    `/run/media/dipa/android/ios-extra-work/buildtree/xnu`. Its local git has one commit
-   per CI-validated baseline (latest `328cafb` = 0096; next patch starts from this baseline).
+   per CI-validated baseline (latest `328cafb` = 0096; 0097 is the uncommitted diff).
    Before starting a new step, commit the validated state there:
    `git add -A bsd/dev/sweet_gpu.c && git -c user.name=ios-extra -c
    user.email=ios-extra@localhost commit -m "Validated 009N baseline"`. The untracked
@@ -166,7 +167,7 @@ the user's words "home screen" for the boot confirmation they give.
 > `docs/GPU_GMU_BOOT.md`; `docs/GPU_LOG.md` is history. Do not touch
 > `/home/dipa/ios-sweet`. The phone is only ever booted with a temporary
 > `fastboot boot` after the user puts it in fastboot; never flash, never run
-> `fastboot getvar`, never reboot it unannounced. The next action is to implement/build 0097 interrupt mask/restore, then
+> `fastboot getvar`, never reboot it unannounced. The next action is to complete full CI/package for 0097 interrupt mask/restore, then
 > test it (`tools/gpu-phone-test.py`, command in `HANDOFF.md`); always check
 > fastboot first, ask only if none is present, run it, record raw values, then continue with the numbered "Next
 > steps", one measured patch per phone boot. Test every precondition, keep every

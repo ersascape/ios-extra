@@ -1,0 +1,147 @@
+diff --git a/bsd/dev/sweet_gpu.c b/bsd/dev/sweet_gpu.c
+index 7f7e85c..05ab85d 100644
+--- a/bsd/dev/sweet_gpu.c
++++ b/bsd/dev/sweet_gpu.c
+@@ -46,6 +46,8 @@
+  * the exact measured 0094 stopped state; CM3 remains reset and no firmware runs.
+  * sweetgpu=14 additionally reads GMU interrupt masks/status, AO fence control and
+  * RPMH power state after the successful wake/stop; no new writes or CM3 release.
++ * sweetgpu=15 proves both interrupt masks accept all ones and restore, with CM3
++ * still reset; no interrupt clear, firmware release, HFI request or GX write.
+  * Register provenance and limitations: ios-extra/docs/GPU_BRINGUP.md.
+  */
+ #if defined(ARM64_BOARD_CONFIG_SWEET)
+@@ -245,8 +247,17 @@ static const struct { const char *name; uint32_t off; } gpu_irq_preflight_regs[]
+ };
+ #define GPU_IRQ_PREFLIGHT_READS (sizeof(gpu_irq_preflight_regs) / sizeof(gpu_irq_preflight_regs[0]))
+ 
++static const uint32_t gpu_irq_expected[GPU_IRQ_PREFLIGHT_READS] = { 0,0,0,0,0,0xf };
++struct gpu_irq_mask_probe {
++	unsigned int requested, attempted, masked, restored, quarantined, nwrites;
++	uint32_t off[6], wrote[6], got[6], masked_value[2], final[GPU_IRQ_PREFLIGHT_READS];
++	uint32_t reset, busy, init, gx_before, gx_final;
++	const char *error;
++};
++
+ /* Cached outcome of the sweetgpu=3 CX experiment (0 = step not reached). */
+ struct gpu_power_experiment {
++	struct gpu_irq_mask_probe irq_mask;
+ 	unsigned int irq_preflight_requested, irq_preflight_done;
+ 	const char *irq_preflight_error;
+ 	uint32_t irq_preflight_value[GPU_IRQ_PREFLIGHT_READS];
+@@ -1237,6 +1248,77 @@ gpu_gmu_irq_preflight(vm_offset_t gmu, struct gpu_power_experiment *x)
+ 	}
+ }
+ 
++/* All-ones masks match mainline a6xx_gmu_irq_disable(); never enable an IRQ. */
++static int
++gpu_irq_mask_set(vm_offset_t gmu, struct gpu_irq_mask_probe *m, uint32_t off, uint32_t value)
++{
++	gpu_write32(gmu, off, value);
++	uint32_t got = gpu_read32(gmu, off);
++	if (m->nwrites < 6) {
++		unsigned int n = m->nwrites++;
++		m->off[n] = off; m->wrote[n] = value; m->got[n] = got;
++	}
++	return got == value;
++}
++
++static void
++gpu_gmu_irq_mask_test(vm_offset_t gmu, vm_offset_t cc, struct gpu_power_experiment *x)
++{
++	struct gpu_irq_mask_probe *m = &x->irq_mask;
++	m->requested = 1;
++	if (x->irq_preflight_error || x->irq_preflight_done != GPU_IRQ_PREFLIGHT_READS) {
++		m->error = "IRQ preflight incomplete; no mask writes";
++		return;
++	}
++	for (unsigned int i = 0; i < GPU_IRQ_PREFLIGHT_READS; i++) {
++		if (x->irq_preflight_value[i] != gpu_irq_expected[i] ||
++		    gpu_read32(gmu, gpu_irq_preflight_regs[i].off) != gpu_irq_expected[i]) {
++			m->error = "live/cached IRQ state differs from measured 0096; no mask writes";
++			return;
++		}
++	}
++	if (gpu_read32(gmu, 0x14000) != 1 || gpu_read32(gmu, 0x14068) != 0 || gpu_read32(gmu, 0x14070) != 0) {
++		m->error = "CM3 not held reset/idle/uninitialized; no mask writes";
++		return;
++	}
++	m->gx_before = gpu_read32(cc, GPU_GX_GDSCR);
++	if (m->gx_before == ~0u || (m->gx_before & GPU_DOMAIN_ON) || !(m->gx_before & GPU_GDSC_SW_COLLAPSE)) {
++		m->error = "GX not off/collapsed; no mask writes";
++		return;
++	}
++	printf("SWEET GPU: testing both GMU interrupt masks; CM3 held reset\n");
++	for (unsigned int i = 0; i < 2; i++) {
++		m->attempted = i + 1;
++		if (!gpu_irq_mask_set(gmu, m, gpu_irq_preflight_regs[i].off, ~0u)) {
++			m->error = "interrupt mask write did not read back";
++			break;
++		}
++		m->masked++;
++	}
++	for (unsigned int i = 0; i < 2; i++) m->masked_value[i] = gpu_read32(gmu, gpu_irq_preflight_regs[i].off);
++	m->reset = gpu_read32(gmu, 0x14000); m->busy = gpu_read32(gmu, 0x14068); m->init = gpu_read32(gmu, 0x14070);
++	/* Never restore unmasked defaults over an unexpected pending source or reset loss.
++	 * No clear register is written: preserve evidence and leave both sources masked. */
++	if (m->reset != 1 || m->busy != 0 || m->init != 0 ||
++	    gpu_read32(gmu, 0x14648) != 0 || gpu_read32(gmu, 0x24c14) != 0) {
++		m->quarantined = 1;
++		m->error = "reset/idle/status changed; masking requested, rollback incomplete";
++		for (unsigned int i = 0; i < 2; i++) (void)gpu_irq_mask_set(gmu, m, gpu_irq_preflight_regs[i].off, ~0u);
++	} else {
++		m->restored = 1;
++		for (unsigned int i = m->attempted; i > 0; i--)
++			if (!gpu_irq_mask_set(gmu, m, gpu_irq_preflight_regs[i-1].off, 0)) m->restored = 0;
++	}
++	for (unsigned int i = 0; i < GPU_IRQ_PREFLIGHT_READS; i++) {
++		m->final[i] = gpu_read32(gmu, gpu_irq_preflight_regs[i].off);
++		if (m->final[i] != gpu_irq_expected[i]) m->restored = 0;
++	}
++	m->gx_final = gpu_read32(cc, GPU_GX_GDSCR);
++	if (m->gx_final != m->gx_before || gpu_read32(gmu, 0x14000) != 1 ||
++	    gpu_read32(gmu, 0x14068) != 0 || gpu_read32(gmu, 0x14070) != 0) m->restored = 0;
++	if (!m->restored && !m->quarantined) m->error = "IRQ/reset/GX state not fully restored";
++}
++
+ static void
+ gpu_gmu_read(vm_offset_t cc, struct gpu_power_experiment *x, int mode)
+ {
+@@ -1269,6 +1351,7 @@ gpu_gmu_read(vm_offset_t cc, struct gpu_power_experiment *x, int mode)
+ 				gpu_gmu_preboot_read(gmu, x);
+ 				if (mode >= 13) gpu_rsc_wake_run(gmu, cc, x);
+ 				if (mode >= 14) gpu_gmu_irq_preflight(gmu, x);
++				if (mode >= 15) gpu_gmu_irq_mask_test(gmu, cc, x);
+ 			}
+ 		} else if (smmu && mode >= 8) {
+ 			gpu_smmu_gmu_context(smmu, x);
+@@ -1505,6 +1588,18 @@ gpu_power_log(const struct gpu_power_experiment *x)
+ 		}
+ 		printf("SWEET GPU: SMMU micro-mmu +0x6000 = 0x%08x (read-only inventory)\n", x->smmu_micro);
+ 	}
++	if (x->irq_mask.requested) {
++		const struct gpu_irq_mask_probe *m = &x->irq_mask;
++		printf("SWEET GPU: IRQ mask attempted=%u masked=%u restored=%u quarantined=%u masks=0x%08x/0x%08x reset/busy/init=0x%x/0x%x/0x%x GX=0x%08x/0x%08x result: %s\n",
++		    m->attempted, m->masked, m->restored, m->quarantined, m->masked_value[0], m->masked_value[1],
++		    m->reset, m->busy, m->init, m->gx_before, m->gx_final,
++		    m->error ? m->error : "both sources masked and restored; CM3 stayed reset");
++		for (unsigned int i = 0; i < m->nwrites; i++)
++			printf("SWEET GPU: IRQ mask wr +0x%x wrote=0x%08x got=0x%08x\n", m->off[i], m->wrote[i], m->got[i]);
++		if (m->attempted) for (unsigned int i = 0; i < GPU_IRQ_PREFLIGHT_READS; i++)
++			printf("SWEET GPU: IRQ mask final %s +0x%x = 0x%08x\n", gpu_irq_preflight_regs[i].name,
++			    gpu_irq_preflight_regs[i].off, m->final[i]);
++	}
+ 	if (x->irq_preflight_requested) {
+ 		for (unsigned int i = 0; i < x->irq_preflight_done; i++)
+ 			printf("SWEET GPU: IRQ preflight %s +0x%x = 0x%08x\n",
+@@ -1813,8 +1908,8 @@ sweet_gpu_probe(void)
+ 	if (!PE_parse_boot_argn("sweetgpu", &mode, sizeof(mode)) || mode == 0) {
+ 		return;
+ 	}
+-	if (mode < 1 || mode > 14) {
+-		printf("SWEET GPU: unsupported sweetgpu=%d (0=off, 1=clocks, 2=+ARC, 3=+CX, 4=+GMU clocks, 5=+GMU reads, 6=+GMU firmware to TCM, 7=+SMMU read, 8=+GMU SMMU context test, 9=+RSC/PDC read, 10=+RSC/PDC init, 11=GMU buffers/ATOS, 12=+pre-boot GMU reads, 13=+RSC wake/stop, 14=+IRQ/fence read-only preflight)\n", mode);
++	if (mode < 1 || mode > 15) {
++		printf("SWEET GPU: unsupported sweetgpu=%d (0=off, 1=clocks, 2=+ARC, 3=+CX, 4=+GMU clocks, 5=+GMU reads, 6=+GMU firmware to TCM, 7=+SMMU read, 8=+GMU SMMU context test, 9=+RSC/PDC read, 10=+RSC/PDC init, 11=GMU buffers/ATOS, 12=+pre-boot GMU reads, 13=+RSC wake/stop, 14=+IRQ/fence read-only preflight, 15=+IRQ mask/restore)\n", mode);
+ 		return;
+ 	}
+ 	if (mode >= 2) {

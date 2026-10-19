@@ -381,3 +381,33 @@ unchanged and skip this dump. There is no CM3 release in 0096.
 Normal and ASan/UBSan suites and local arm64 compile pass. CI and phone result
 remain separate pending gates. The larger first-start draft is saved only in the
 external workspace and is unvalidated; it is not part of this patch or image.
+
+## 0097 — interrupt mask/restore proof (`sweetgpu=15`)
+
+Separate from CM3 execution: 0096 measured both masks=0, both status words=0,
+fence control=0, RPMH state=0x0f. Before using masks to contain the first running
+firmware, prove the two writes from mainline `a6xx_gmu_irq_disable()` independently.
+Baseline: isolated 328cafb (validated 0096). Default and modes 1–14 unchanged.
+
+Require the complete error-free 0096 preflight; compare all six cached and fresh
+words with its measured values; freshly require reset=1, busy/init=0 and GX
+powered off/collapsed. Refuse before any new write on every failed predicate.
+Write AO mask (+0x24c18)=0xffffffff, read back, then GMU2HOST mask
+(+0x1464c)=0xffffffff, read back. Stop on the first mismatch. Restore every
+attempted mask in reverse order, including a failed write. Cache each write and
+readback, both masked values, all six final words and reset/busy/init/GX state.
+
+Before restoring zero masks, require CM3 still reset/idle/uninitialized and both
+pending words still zero. If these change, request all-ones masks on both sources,
+retain the raw status without clearing, and report quarantine/incomplete rollback.
+The final raw mask reads show whether containment actually took effect; do not
+infer it from an attempted write. Restore failures and fence/power/GX changes also
+report incomplete state restore. No interrupt-clear register, reset register,
+GX control, HFI message, or firmware execution is added. Existing clock/CX cleanup
+still runs. This proves mask writability/rollback, not interrupt delivery or DMA.
+
+Normal and ASan/UBSan suites pass: 20 independent zero-write refusals; exact four
+success writes with unchanged other GMU/SMMU memory; failure of each set/restore;
+all five pending/reset/idle quarantine cases; fence/power/GX changes; full-chain,
+lower-mode and replay isolation. Arm64 object compile: 0 of 1 failed. Full CI and
+phone result pending.

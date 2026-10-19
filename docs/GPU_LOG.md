@@ -5,6 +5,20 @@ CI runs, phone results and the reasoning at the time. The current state and the 
 action are in [NOTES.md](../NOTES.md) and [HANDOFF.md](../HANDOFF.md). Entries that say
 "not yet built/booted" were true when written; newer entries supersede them.
 
+## Implementation — 0097 interrupt mask/restore (local checks pass)
+
+- `0097-sweet-gpu-irq-mask-restore.patch`, mode 15, baseline 328cafb (0096).
+  Separately tests all-ones AO and GMU2HOST masks and restores both zero defaults,
+  with CM3 still held reset. Exact six-word 0096 cached/live state and fresh
+  reset/busy/init/GX gates precede all new writes. No clears or CM3/GX controls.
+- Normal/ASan/UBSan host suites pass: all 20 zero-write refusals, exact success
+  order, either set/restore failing, status/reset/idle quarantine, other state
+  changes, full chain, mode isolation and cached replay. Arm64 0 of 1 failed.
+  Patch equals isolated diff; full CI/phone pending.
+- Unexpected pending status or reset/idle change triggers best-effort all-ones
+  masks and explicit incomplete rollback, without clearing the evidence. Raw final
+  reads establish actual mask state. No firmware release is present.
+
 ## Phone result — 0096 read-only IRQ/fence preflight, 2026-10-19 18:39 UTC
 
 - Checked fastboot first: exactly one already present, serial redacted. Announced
