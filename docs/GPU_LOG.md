@@ -5,6 +5,23 @@ CI runs, phone results and the reasoning at the time. The current state and the 
 action are in [NOTES.md](../NOTES.md) and [HANDOFF.md](../HANDOFF.md). Entries that say
 "not yet built/booted" were true when written; newer entries supersede them.
 
+## Implementation — 0093 GMU buffers (local checks pass; CI skipped)
+
+- Source commit `c053da3cfae8a4fe053499fee7ad01bb68b61cfd`, patch
+  `0093-sweet-gpu-gmu-buffers.patch`, mode 11. Design and preconditions in
+  `GPU_CX_EXPERIMENT.md`. Isolated source baseline `60d4b0e` is validated 0092;
+  its working diff matches the patch byte-for-byte.
+- Local arm64 object compile: 0 of 1 files failed. All four Python test suites
+  pass normally and with ASan/UBSan. GPU harness checks complete HFI contents at
+  cache clean, 29 translations/faults, 38 precondition refusals issuing zero SMMU
+  writes, readback failures, TLB/ATOS timeout bounds, incorrect translation/fault,
+  rollback and replay. These are host results, not phone observations.
+- [CI 39290944708](https://github.com/dipa-studio/ios-extra/actions/runs/39290944708)
+  **skipped without building**: GitHub reports `isPrivate=true`; `.github/workflows/xnu.yml`
+  builds only public repositories. Prior public status in the docs does not match
+  the live setting. User clarification requested; visibility and the guard have
+  not been changed. No 0093 kernel/image or phone result exists.
+
 ## Phone result — 0092 RSC/PDC diagnostics, 2026-10-19 16:55 UTC
 
 - Temporary boot only, issued 16:55:16 UTC after the user confirmed fastboot;

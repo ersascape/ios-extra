@@ -32,14 +32,19 @@ Patches 0080-0092 are built and phone-tested. 0092 was temporarily booted on
 nine constrained RSC/PDC readbacks and a successful stop handshake (0x01010006).
 The init state did not persist through this boot path. Raw report in GPU_LOG;
 step 1 interpretation and limits in GPU_GMU_BOOT. CM3 remains held in reset and GX
-has never been powered. The next implementation is the separate opt-in GMU-buffer
-and ATOS experiment (step 2 below); do not repeat the 0092 boot.
+has never been powered. 0093 implements the separate opt-in GMU-buffer / ATOS experiment (step 2), with
+normal and sanitized host tests and local arm64 compile passing. Source c053da3
+is pushed, but CI 39290944708 was skipped because GitHub now reports the repo as
+private. No 0093 kernel/image or phone result exists; do not repeat 0092.
 
 ## Immediate next action
 
-Record the user's home-screen answer for 0092 when available. Complete and validate
-0093 GMU-buffer mapping, then build/package it and ask for a new user-controlled
-fastboot before its single temporary boot. No new image is ready yet.
+Resolve the pending visibility clarification: the live repo is private, while
+prior docs/user prompt call it public. Leave visibility and the public-only CI
+guard unchanged until the user answers. Once a full CI build can run, verify its
+kernel and source artifacts, package 0093 (`sweetgpu=11`) and ask for a fresh
+user-controlled fastboot before its single temporary boot. 0092 home screen is
+confirmed and recorded.
 
 ## Next steps (each is its own measured patch; do not merge steps)
 

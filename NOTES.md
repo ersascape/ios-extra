@@ -1,6 +1,6 @@
 # ios-extra — current state
 
-Last updated 2026-10-19 after the 0092 phone test. Read [HANDOFF.md](HANDOFF.md) for how to
+Last updated 2026-10-19 after 0092 phone result and 0093 local validation. Read [HANDOFF.md](HANDOFF.md) for how to
 continue and [AGENTS.md](AGENTS.md) for the rules. The per-step history (images,
 hashes, CI runs, raw numbers) is [docs/GPU_LOG.md](docs/GPU_LOG.md); the hardware and
 mainline reference is [docs/GPU_GMU_BOOT.md](docs/GPU_GMU_BOOT.md); the per-patch
@@ -10,8 +10,10 @@ design is [docs/GPU_CX_EXPERIMENT.md](docs/GPU_CX_EXPERIMENT.md).
 
 Driver playground for the XNU/iOS 16 port to the Redmi Note 10 Pro (`sweet`,
 SM7150, Adreno 618). The target is a real Adreno driver; the display today is
-CPU-rendered. Public repo `dipa-studio/ios-extra`, branch `main`, kernel built by
-this repo's GitHub Actions (`.github/workflows/xnu.yml`, macOS runner, ~6 min).
+CPU-rendered. Repo `dipa-studio/ios-extra`, branch `main`. GitHub reports it
+**private** as of the 0093 push, despite the prior public-visibility record;
+visibility has not been changed in this session. Kernel builds use this repo's
+GitHub Actions (`.github/workflows/xnu.yml`, macOS runner, ~6 min).
 `/home/dipa/ios-sweet` belongs to other agents: read-only for us.
 
 ## Where the GPU bring-up stands (all measured on the phone unless noted)
@@ -30,8 +32,9 @@ this repo's GitHub Actions (`.github/workflows/xnu.yml`, macOS runner, ~6 min).
 | 0090 | 9 | read-only RSC/PDC inventory | 39169517724 | ok |
 | 0091 | 10 | mainline A618 RSC/PDC init (48 writes, readback), RSC stop handshake | 39170396365 | handshake ok, 9/48 writes did not read back |
 | 0092 | 10 | same, logs every mismatch + reads the table first | 39171199100 | stop handshake ok; all 9 mismatches identified |
+| 0093 | 11 | 13 GMU buffer pages, mainline HFI layout, 29 ATOS checks | 39290944708 **skipped** | not booted |
 
-The user confirmed the home screen after every boot up to 0091. Each stage runs
+The user confirmed the home screen after every boot up to 0092. Each stage runs
 inside the previous one's window (`sweetgpu=N` includes all lower modes) and undoes
 itself except: SMMU `S2CR3`/`CBAR3` (left inert: `SMR3` invalid, `SCTLR` 0), the
 GMU RCG (left at `0x602`), and the RSC/PDC configuration of 0091 (left in place).
@@ -51,8 +54,12 @@ read 0x10100 after 0x10108 writes. Stop handshake succeeds (0x01010006).
 Step 1 interpretation is written in docs/GPU_GMU_BOOT.md: exact constrained
 readbacks, ownership unresolved, stop handshake proven, wake/votes not proven.
 0093 (`sweetgpu=11`) implements the separate GMU-buffer / 29-check ATOS test;
-normal and ASan/UBSan host tests pass, local arm64 compile 0/1 failed. CI and phone
-are not yet tested. Source baseline in isolated XNU git: 60d4b0e (validated 0092).
+normal and ASan/UBSan host tests pass, local arm64 compile 0 of 1 files failed.
+Source commit `c053da3cfae8a4fe053499fee7ad01bb68b61cfd` is pushed. CI run
+[39290944708](https://github.com/dipa-studio/ios-extra/actions/runs/39290944708)
+was **skipped**, with no build steps: the repo is currently private and the
+workflow gates on public visibility. User clarification is pending; neither
+visibility nor the workflow guard has been changed. No 0093 kernel/image exists. Source baseline in isolated XNU git: 60d4b0e (validated 0092).
 Do not repeat 0092 or release CM3 merely because diagnostics completed.
 
 ## Hard constraints (unchanged)
