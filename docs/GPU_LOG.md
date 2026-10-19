@@ -18,7 +18,7 @@ action are in [NOTES.md](../NOTES.md) and [HANDOFF.md](../HANDOFF.md). Entries t
   `phone-0092-rpmhinit-fastboot.txt`. Initial live report 0 was partial; the first
   complete cached report is **report 1**, copied below. Later cached reports are
   not independent measurements. No panic marker in the decoded capture.
-- **Home-screen confirmation pending.**
+- **The user confirmed the home screen.**
 - **Measured:** pre-write table differs in 34/48 entries; RSC/PDC sequencer
   memory and PDC enable/TCS entries are back to zero, including registers that
   accepted 0091 writes. Thus the 0091 configuration did not persist through this

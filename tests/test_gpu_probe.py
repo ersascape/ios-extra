@@ -32,6 +32,12 @@ class GPUProbeTests(unittest.TestCase):
             store32 = '*(volatile uint32_t *)(base + off) = value;'
             self.assertEqual(source.count(store32), 1)
             source = source.replace(store32, 'test_store32(base, off, value);')
+            mask = '__asm__ volatile("and %0, %0, #0xffffffff" : "+r" (got));'
+            self.assertEqual(source.count(mask), 1)
+            source = source.replace(mask, 'got &= 0xffffffffULL;')
+            store64 = '*(volatile uint64_t *)(base + off) = value;'
+            self.assertEqual(source.count(store64), 1)
+            source = source.replace(store64, 'test_store64(base, off, value);')
             (work / 'sweet_gpu.c').write_text(source)
             headers = {
                 'sys/param.h': '#include <stdint.h>\ntypedef uintptr_t vm_offset_t;\n'
@@ -68,6 +74,7 @@ class GPUProbeTests(unittest.TestCase):
             self.assertEqual(build.returncode, 0, build.stderr)
             result = subprocess.run([str(work / 'test')], capture_output=True, text=True)
             self.assertEqual(result.returncode, 0, result.stderr)
+            self.assertIn('PASS: GMU buffers 29 ATOS checks', result.stdout)
             self.assertIn('PASS: 14 clock/cache cases, 30 ARC cases + 512 mutations, 61 CX experiment cases', result.stdout)
 
 
@@ -80,6 +87,7 @@ HARNESS = r'''
 
 #include <sys/param.h>
 static void test_store32(vm_offset_t base, uint32_t off, uint32_t value);
+static void test_store64(vm_offset_t base, uint32_t off, uint64_t value);
 static int probe_printf(const char *, ...);
 #define printf probe_printf
 #define ARM64_BOARD_CONFIG_SWEET 1
@@ -92,10 +100,14 @@ static uint32_t locator[2], database[1024];
 static uint32_t gmu_mem[GPU_GMU_SIZE / 4];
 static int gmu_maps, fail_gmu_map;
 /* Fake DMA page, SMMU ATOS model and cache-clean counters (sweetgpu=8). */
-static unsigned char dma_block[0x4000] __attribute__((aligned(16384)));
+static unsigned char dma_block[0x10000] __attribute__((aligned(16384)));
 static unsigned long long fake_pa_base;
 static int fail_alloc, alloc_calls, clean_calls, ats_stuck, tlb_stuck;
 static uint64_t last_ats;
+static int alloc_null, alloc_unaligned, phys_discontig, bad_atos, smmu_write_calls;
+static uint32_t refuse_smmu_off;
+static unsigned refused_writes;
+static unsigned clean_bytes;
 pmap_t kernel_pmap; vm_map_t kernel_map;
 static uint32_t smmu_mem[GPU_SMMU_SIZE / 4];
 static uint32_t pdc_mem[GPU_PDC_SIZE / 4], pdcseq_mem[GPU_PDC_SIZE / 4];
@@ -104,12 +116,26 @@ static uint32_t hw_ro_off; /* one GMU-block register that ignores writes */ /* P
 static int smmu_sticky; /* hardware that refuses to take the ABL default back in S2CR3/CBAR3 */
 static void test_store32(vm_offset_t base, uint32_t off, uint32_t value)
 {
+    if (base == (vm_offset_t)smmu_mem) {
+        smmu_write_calls++;
+        if (off == GPU_SMMU_CB0 + 3 * 0x1000 + GPU_SMMU_CB_TLBSYNC)
+            smmu_mem[(GPU_SMMU_CB0 + 3 * 0x1000 + GPU_SMMU_CB_TLBSTATUS)/4] = tlb_stuck ? 1 : 0;
+        if (off == refuse_smmu_off && value && !refused_writes++) return;
+    }
     if (smmu_sticky && base == (vm_offset_t)smmu_mem &&
         ((off == GPU_SMMU_S2CR + 12 && value == GPU_SMMU_S2CR_FAULT) ||
          (off == GPU_SMMU_CBAR + 12 && value == 0))) return;
     if (hw_ro_off && base == (vm_offset_t)gmu_mem && off == hw_ro_off) return;
     if (pdc_ro && (base == (vm_offset_t)pdc_mem || base == (vm_offset_t)pdcseq_mem)) return;
     *(volatile uint32_t *)(base + off) = value;
+}
+static void test_store64(vm_offset_t base, uint32_t off, uint64_t value)
+{
+    if (base == (vm_offset_t)smmu_mem) {
+        smmu_write_calls++;
+        if (off == refuse_smmu_off && value && !refused_writes++) return;
+    }
+    *(volatile uint64_t *)(base + off) = value;
 }
 static int smmu_maps, fail_smmu_map;
 static int pdc_maps, seq_maps, fail_pdc_map, fail_seq_map;
@@ -146,14 +172,31 @@ static void smmu_sim(void)
             }
         }
     }
+    if (bad_atos == 1 && cur == 0x60006000u) par ^= 0x1000;
+    if (bad_atos == 2 && cur == 0x6000d000u) par = fake_pa_base;
     smmu_mem[(cb + GPU_SMMU_CB_PAR) / 4] = (uint32_t)par;
     smmu_mem[(cb + GPU_SMMU_CB_PAR) / 4 + 1] = (uint32_t)(par >> 32);
 }
 
-void clean_dcache64(addr64_t addr, unsigned count, int phys) { (void)addr; (void)count; (void)phys; clean_calls++; }
+void clean_dcache64(addr64_t addr, unsigned count, int phys) {
+    assert(addr == fake_pa_base && phys == TRUE);
+    clean_bytes = count; clean_calls++;
+    if (count == GPU_BUF_BYTES) {
+        assert(smmu_mem[(GPU_SMMU_CB0 + 3 * 0x1000) / 4] == 0);
+        const uint32_t *h = (uint32_t *)(dma_block + GPU_BUF_HFI_OFF);
+        const uint32_t expected[] = {0,120,6,12,2,2,
+            1,0x6000a000,0xa00,1024,0,0,1,1,1,0,0,0,
+            1,0x6000b000,0xa04,1024,0,0,1,1,1,0,0,0};
+        assert(!memcmp(h, expected, sizeof(expected)));
+        for (unsigned off = 0x3000; off < GPU_BUF_BYTES; off++)
+            if (off < GPU_BUF_HFI_OFF || off >= GPU_BUF_HFI_OFF + sizeof(expected)) assert(dma_block[off] == 0);
+    }
+}
 ppnum_t pmap_find_phys(pmap_t p, addr64_t va)
 {
-    (void)p; return (ppnum_t)((fake_pa_base + (va - (addr64_t)(uintptr_t)dma_block)) >> 14);
+    (void)p;
+    uint64_t offset = va - (addr64_t)(uintptr_t)dma_block;
+    return (ppnum_t)((fake_pa_base + offset + (phys_discontig && offset >= 0x4000 ? 0x4000 : 0)) >> 14);
 }
 kern_return_t kmem_alloc_contig(vm_map_t m, vm_offset_t *a, vm_size_t size, vm_offset_t mask,
     unsigned x1, unsigned x2, unsigned flags, int tag)
@@ -163,7 +206,7 @@ kern_return_t kmem_alloc_contig(vm_map_t m, vm_offset_t *a, vm_size_t size, vm_o
     assert(size <= sizeof(dma_block) && (flags & 2));
     if (fail_alloc) return 1;
     memset(dma_block, 0, sizeof(dma_block));
-    *a = (vm_offset_t)dma_block;
+    *a = alloc_null ? 0 : (vm_offset_t)dma_block + (alloc_unaligned ? 4 : 0);
     return KERN_SUCCESS;
 }
 
@@ -294,6 +337,8 @@ static void arc_reset(void)
     smmu_mem[0x24 / 4] = 3;    /* IDR1: NUMCB = 3 */
     fake_pa_base = 0x90000000ull; fail_alloc = alloc_calls = clean_calls = 0;
     ats_stuck = tlb_stuck = smmu_sticky = 0;
+    alloc_null = alloc_unaligned = phys_discontig = bad_atos = smmu_write_calls = 0;
+    refuse_smmu_off = refused_writes = clean_bytes = 0;
     last_ats = smmu_rd64(GPU_SMMU_CB0 + 3 * 0x1000 + GPU_SMMU_CB_ATS1PR); /* not a pending request */
     memset(dma_block, 0, sizeof(dma_block));
     for (unsigned i = 0; i < GPU_GMU_SIZE / 4; i++) gmu_mem[i] = 0xa5000000u | i;
@@ -322,12 +367,28 @@ static struct gpu_arc_inventory *arc_run(void)
     return &gpu_boot_inventory.arc;
 }
 
+static void buffer_defaults(void)
+{
+    arc_reset(); mode = 11;
+    cc[GPU_CX_GDSCR / 4] = GPU_CX_IDLE_GDSCR;
+    memset(gmu_mem, 0, sizeof(gmu_mem)); gmu_mem[0x14000/4] = 1;
+    memset(pdc_mem, 0, sizeof(pdc_mem)); memset(pdcseq_mem, 0, sizeof(pdcseq_mem));
+    memset(smmu_mem, 0, sizeof(smmu_mem));
+    smmu_mem[0] = 0x00200626; smmu_mem[0x20/4] = 0x48016605;
+    smmu_mem[0x24/4] = 0x20008005; smmu_mem[0x28/4] = 0x7511;
+    for (unsigned i = 0; i < 5; i++) smmu_mem[GPU_SMMU_S2CR/4+i] = GPU_SMMU_S2CR_FAULT;
+    last_ats = 0;
+    struct gpu_power_experiment *x = &gpu_boot_inventory.power;
+    gpu_smmu_read(x);
+    x->fw_checked = x->fw_written = 8192; x->fw_size = 32768;
+}
+
 int main(void)
 {
     reset(); present = 0; sweet_gpu_probe();
     assert(map_calls == 0 && output[0] == 0);
     reset(); mode = 0; sweet_gpu_probe(); assert(map_calls == 0);
-    reset(); mode = 11; sweet_gpu_probe(); assert(map_calls == 0);
+    reset(); mode = 12; sweet_gpu_probe(); assert(map_calls == 0);
     reset(); mode = -1; sweet_gpu_probe(); assert(map_calls == 0);
     reset(); fail_gcc = 1; sweet_gpu_probe();
     assert(map_calls == 1 && strstr(output, "GCC mapping failed"));
@@ -770,12 +831,13 @@ int main(void)
         assert(strstr(output, "RPMH init result: all writes read back"));
         output[0] = 0; sweet_gpu_replay(); assert(strstr(output, "RPMH init writes=") && pdc_maps == 1);
         /* Unexpected pre-state: nothing written anywhere. */
-        for (unsigned bad = 0; bad < 4; bad++) {
+        for (unsigned bad = 0; bad < 5; bad++) {
             arc_reset(); mode = 10; cc[GPU_CX_GDSCR / 4] = GPU_CX_IDLE_GDSCR; RPMH_DEFAULTS();
             if (bad == 0) pdc_mem[0x4500 / 4] = 1;
             if (bad == 1) pdcseq_mem[0] = 5;
             if (bad == 2) gmu_mem[(0x23000 + 0x180 * 4) / 4] = 9;
             if (bad == 3) gmu_mem[0x24c1c / 4] = 2;
+            if (bad == 4) gmu_mem[(0x23000 + 0x101 * 4) / 4] = 1;
             memcpy(gb, gmu_mem, sizeof(gb)); memcpy(pb, pdc_mem, sizeof(pb)); memcpy(sb, pdcseq_mem, sizeof(sb));
             arc_run(); x = &gpu_boot_inventory.power;
             assert(x->init_requested && x->init_error && x->init_nwrites == 0);
@@ -820,6 +882,112 @@ int main(void)
         memcpy(pb, pdc_mem, sizeof(pb)); arc_run();
         assert(!gpu_boot_inventory.power.init_requested && !memcmp(pb, pdc_mem, sizeof(pb)));
     }
+    /* 0093: full memory layout, every refusal before SMMU writes, and rollback. */
+    {
+        const unsigned cb = GPU_SMMU_CB0 + 3 * 0x1000;
+        struct gpu_buffer_probe *b;
+        struct gpu_power_experiment *x;
+        uint32_t before[GPU_SMMU_SIZE / 4], gb[GPU_GMU_SIZE / 4];
+        buffer_defaults(); x = &gpu_boot_inventory.power;
+        gpu_gmu_buffers((vm_offset_t)gmu_mem, (vm_offset_t)smmu_mem, x); b = &x->buf;
+        assert(!b->error && b->stage == 3 && b->passed == 29 && b->checks == 29 && b->inactive && b->restored);
+        assert(clean_calls == 1 && clean_bytes == 0x10000 && alloc_calls == 1);
+        assert(b->va[0] == 0x60000000 && b->va[25] == 0x6000cfff && b->va[26] == 0x5ffff000 &&
+               b->va[27] == 0x6000d000 && b->va[28] == 0x20000000);
+        assert(b->nwrites == 20 && b->wrote[4] == fake_pa_base && b->got[9] == 0x80000005u);
+        for (unsigned i = 0; i < 13; i++)
+            assert(*(uint64_t *)(dma_block + 0x2000 + 8*i) == ((fake_pa_base+0x3000+0x1000*i) | GPU_PTE_PAGE));
+        assert(*(uint64_t *)(dma_block + 0x2000 + 13*8) == 0);
+        /* One independent mutation for every term of the precondition. */
+        for (unsigned bad = 0; bad < 33; bad++) {
+            buffer_defaults(); x = &gpu_boot_inventory.power;
+            switch (bad) {
+            case 0: gmu_mem[0x14000/4] = 0; break;
+            case 1: gmu_mem[0x14068/4] = 1; break;
+            case 2: x->fw_checked--; break;
+            case 3: x->fw_written--; break;
+            case 4: x->fw_size--; break;
+            case 5: x->fw_bad = 1; break;
+            case 6: x->fw_error = "firmware test failure"; break;
+            case 7: x->smmu_gr0_done--; break;
+            case 8: x->smmu_gr0[0] ^= 1; break;
+            case 9: x->smmu_gr0[4] ^= 1; break;
+            case 10: x->smmu_gr0[5] ^= 1; break;
+            case 11: x->smmu_gr0[6] ^= 1; break;
+            case 12: x->smmu_nsmr = 4; break;
+            case 13: x->smmu_ncb = 3; break;
+            case 14: smmu_mem[(GPU_SMMU_SMR+12)/4] = 5; break;
+            case 15: smmu_mem[GPU_SMMU_SMR/4] = 0x80000005; break;
+            case 16: smmu_mem[(GPU_SMMU_SMR+4)/4] = 0x80000009; break;
+            case 17: smmu_mem[(GPU_SMMU_S2CR+12)/4] = 4; break;
+            case 18: smmu_mem[(GPU_SMMU_CBAR+12)/4] = 0x20000; break;
+            case 19: smmu_mem[(GPU_SMMU_CBA2R+12)/4] = 1; break;
+            case 20: smmu_mem[(cb+GPU_SMMU_CB_TTBR0)/4] = 1; break;
+            case 21: smmu_mem[cb/4] = 1; break;
+            case 22: smmu_mem[(cb+GPU_SMMU_CB_TCR2)/4] = 1; break;
+            case 23: smmu_mem[(cb+GPU_SMMU_CB_TCR)/4] = 1; break;
+            case 24: smmu_mem[(cb+GPU_SMMU_CB_MAIR0)/4] = 1; break;
+            case 25: smmu_mem[(cb+GPU_SMMU_CB_MAIR1)/4] = 1; break;
+            case 26: fail_alloc = 1; break;
+            case 27: alloc_null = 1; break;
+            case 28: alloc_unaligned = 1; break;
+            case 29: fake_pa_base = 0; break;
+            case 30: fake_pa_base = 1ull << 36; break;
+            case 31: fake_pa_base = (1ull << 36) - 0x4000; break;
+            case 32: phys_discontig = 1; break;
+            }
+            memcpy(before, smmu_mem, sizeof(before)); memcpy(gb, gmu_mem, sizeof(gb));
+            gpu_gmu_buffers((vm_offset_t)gmu_mem, (vm_offset_t)smmu_mem, x); b = &x->buf;
+            assert(b->requested && b->error && b->stage == 0 && b->nwrites == 0 && smmu_write_calls == 0);
+            assert(!memcmp(before, smmu_mem, sizeof(before)) && !memcmp(gb, gmu_mem, sizeof(gb)));
+            assert(!clean_calls && !b->checks);
+        }
+        /* Every group must be inactive, including invalid nonzero SMRs. */
+        for (unsigned i = 0; i < 5; i++) {
+            buffer_defaults(); x = &gpu_boot_inventory.power;
+            smmu_mem[GPU_SMMU_SMR/4 + i] = 1;
+            gpu_gmu_buffers((vm_offset_t)gmu_mem, (vm_offset_t)smmu_mem, x);
+            assert(x->buf.error && !smmu_write_calls && !alloc_calls);
+        }
+        /* Both measured inert incoming encodings, and refused ABL restores. */
+        for (unsigned prior = 0; prior < 3; prior++) {
+            buffer_defaults(); x = &gpu_boot_inventory.power;
+            if (prior == 1) { smmu_mem[(GPU_SMMU_S2CR+12)/4] = 3; smmu_mem[(GPU_SMMU_CBAR+12)/4] = 0x10000; }
+            if (prior == 2) smmu_sticky = 1;
+            gpu_gmu_buffers((vm_offset_t)gmu_mem, (vm_offset_t)smmu_mem, x); b = &x->buf;
+            assert(!b->error && b->passed == 29 && b->inactive && b->restored == (prior != 2));
+        }
+        /* Any programming mismatch stops before ATOS and rolls back. */
+        const unsigned refuse[] = {GPU_SMMU_CBA2R+12, GPU_SMMU_CBAR+12,
+            cb+GPU_SMMU_CB_TCR2, cb+GPU_SMMU_CB_TCR, cb+GPU_SMMU_CB_TTBR0,
+            cb+GPU_SMMU_CB_MAIR0, cb+GPU_SMMU_CB_SCTLR, GPU_SMMU_S2CR+12, GPU_SMMU_SMR+12};
+        for (unsigned i = 0; i < sizeof(refuse)/sizeof(refuse[0]); i++) {
+            buffer_defaults(); x = &gpu_boot_inventory.power; refuse_smmu_off = refuse[i];
+            gpu_gmu_buffers((vm_offset_t)gmu_mem, (vm_offset_t)smmu_mem, x); b = &x->buf;
+            assert(b->error && !b->checks && b->inactive && b->restored && gmu_mem[0x14000/4] == 1);
+        }
+        for (unsigned failure = 0; failure < 4; failure++) {
+            buffer_defaults(); x = &gpu_boot_inventory.power;
+            if (failure == 0) ats_stuck = 1;
+            if (failure == 1) tlb_stuck = 1;
+            if (failure == 2) bad_atos = 1;
+            if (failure == 3) bad_atos = 2;
+            gpu_gmu_buffers((vm_offset_t)gmu_mem, (vm_offset_t)smmu_mem, x); b = &x->buf;
+            assert(b->error && b->passed < 29 && !smmu_mem[(GPU_SMMU_SMR+12)/4] && !smmu_mem[cb/4]);
+            assert(b->inactive == (failure != 1));
+            if (failure == 1) assert(b->stage == 1); /* Never enabled before TLB sync. */
+        }
+        /* Full mode-11 path, default-off isolation and cached replay. */
+        buffer_defaults(); mode = 11;
+        arc_run(); x = &gpu_boot_inventory.power; b = &x->buf;
+        assert(b->passed == 29 && b->inactive && !x->ctx_requested && x->clk_restored);
+        assert(strstr(output, "buffers final SMR/S2CR/SCTLR/CBAR="));
+        unsigned writes = smmu_write_calls, allocations = alloc_calls;
+        sweet_gpu_replay(); assert(smmu_write_calls == (int)writes && alloc_calls == (int)allocations);
+        buffer_defaults(); mode = 10; arc_run(); assert(!gpu_boot_inventory.power.buf.requested);
+        puts("PASS: GMU buffers 29 ATOS checks, 38 refusal cases, readback/timeout/mapping failures, rollback and replay");
+    }
+
     /* Mode 3 never runs the clock stage. */
     arc_reset(); mode = 3; cc[GPU_CX_GDSCR / 4] = GPU_CX_IDLE_GDSCR; arc_run();
     assert(!gpu_boot_inventory.power.clk_requested);

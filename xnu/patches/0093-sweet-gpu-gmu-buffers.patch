@@ -1,0 +1,259 @@
+diff --git a/bsd/dev/sweet_gpu.c b/bsd/dev/sweet_gpu.c
+index 20a0d3d..6b3a436 100644
+--- a/bsd/dev/sweet_gpu.c
++++ b/bsd/dev/sweet_gpu.c
+@@ -37,6 +37,9 @@
+  * sweetgpu=10 performs mainline's a6xx_gmu_rpmh_init for A618: RSCC, RSC sequencer
+  * microcode, PDC sequence memory and PDC TCS commands, then the RSC "stop" handshake,
+  * with an immediate readback of every write. It leaves that configuration in place.
++ * sweetgpu=11 replaces the single-page SMMU test with dummy/debug/log/HFI buffers,
++ * mainline legacy HFI headers, 13 page mappings and bounded ATOS checks. No master
++ * runs; stream/context controls are restored (known inert S2CR/CBAR exception).
+  * Register provenance and limitations: ios-extra/docs/GPU_BRINGUP.md.
+  */
+ #if defined(ARM64_BOARD_CONFIG_SWEET)
+@@ -164,8 +167,23 @@ struct gpu_arc_inventory {
+ 	struct gpu_arc_resource resource[GPU_ARC_RESOURCES];
+ };
+ 
++/* 0093: memory and ATOS only. CM3 remains held in reset throughout. */
++#define GPU_BUF_BYTES    0x10000u /* 3 table pages + 13 mapped 4 KiB pages */
++#define GPU_BUF_PAGES    13u
++#define GPU_BUF_CHECKS   (2u * GPU_BUF_PAGES + 3u)
++#define GPU_BUF_HFI_OFF  0xc000u
++
++struct gpu_buffer_probe {
++	unsigned int requested, stage, checks, passed, inactive, restored, nwrites;
++	const char *error;
++	uint64_t pa, par[GPU_BUF_CHECKS], wrote[24], got[24];
++	uint32_t va[GPU_BUF_CHECKS], off[24], final[4], fsr, gfsr;
++};
++
++
+ /* Cached outcome of the sweetgpu=3 CX experiment (0 = step not reached). */
+ struct gpu_power_experiment {
++	struct gpu_buffer_probe buf;
+ 	unsigned int requested;
+ 	const char *error;
+ 	int mx_vote, cx_vote, mx_release, cx_release;
+@@ -654,6 +672,174 @@ gpu_smmu_gmu_context(vm_offset_t smmu, struct gpu_power_experiment *x)
+ 	    x->ctx_final[2] == 0 && x->ctx_final[3] == 0;
+ }
+ 
++/* Log masked 32-bit readbacks explicitly: GR0/GR1 may have dirty upper bits. */
++static int
++gpu_buffer_set(vm_offset_t smmu, struct gpu_buffer_probe *b, uint32_t off, uint64_t value, int wide)
++{
++	uint64_t got;
++	unsigned int n = b->nwrites;
++	if (wide) {
++		gpu_write64(smmu, off, value);
++		got = gpu_read64(smmu, off);
++	} else {
++		gpu_write32(smmu, off, (uint32_t)value);
++		got = gpu_read32(smmu, off);
++		/* Force a real 64-bit mask even if EL2 left upper bits dirty after LDR W. */
++		__asm__ volatile("and %0, %0, #0xffffffff" : "+r" (got));
++	}
++	if (n < 24) {
++		b->off[n] = off;
++		b->wrote[n] = value;
++		b->got[n] = got;
++		b->nwrites++;
++	}
++	return got == value;
++}
++
++static void
++gpu_gmu_buffers(vm_offset_t gmu, vm_offset_t smmu, struct gpu_power_experiment *x)
++{
++	struct gpu_buffer_probe *b = &x->buf;
++	const uint32_t cb = GPU_SMMU_CB0 + GPU_SMMU_GMU_CB * 0x1000u;
++	const uint32_t n = GPU_SMMU_GMU_CB;
++	const uint32_t clear[] = { GPU_SMMU_CB_SCTLR, GPU_SMMU_CB_TCR2,
++	    GPU_SMMU_CB_TCR, GPU_SMMU_CB_MAIR0, GPU_SMMU_CB_MAIR1 };
++	vm_offset_t kva = 0;
++	uint64_t pa;
++	uint32_t s2cr, cbar, *hfi;
++	int restore_ok = 1;
++
++	b->requested = 1;
++	if (gpu_read32(gmu, 0x14000) != 1 || gpu_read32(gmu, 0x14068) != 0 ||
++	    x->fw_checked != GPU_GMU_FW_MAX / 4 || x->fw_written != GPU_GMU_FW_MAX / 4 ||
++	    x->fw_size != GPU_GMU_FW_MAX || x->fw_bad || x->fw_error) {
++		b->error = "CM3 reset/idle or verified firmware precondition failed; nothing programmed";
++		return;
++	}
++	/* Require the exact observed SMMUv2 revision/geometry and enabled translation. */
++	if (x->smmu_gr0_done != GPU_SMMU_GR0 || x->smmu_gr0[0] != 0x00200626u ||
++	    x->smmu_gr0[4] != 0x48016605u || x->smmu_gr0[5] != 0x20008005u ||
++	    x->smmu_gr0[6] != 0x7511u || x->smmu_nsmr != 5 || x->smmu_ncb <= n) {
++		b->error = "SMMU identity/state differs from measured hardware; nothing programmed";
++		return;
++	}
++	for (unsigned int i = 0; i < x->smmu_nsmr; i++) {
++		uint32_t smr = gpu_read32(smmu, GPU_SMMU_SMR + 4 * i);
++		/* No other stream may target CB3 while we temporarily reconfigure it. */
++		if (smr != 0) {
++			b->error = "stream group differs from measured inactive inventory; nothing programmed";
++			return;
++		}
++	}
++	s2cr = gpu_read32(smmu, GPU_SMMU_S2CR + 4 * n);
++	cbar = gpu_read32(smmu, GPU_SMMU_CBAR + 4 * n);
++	if ((s2cr != GPU_SMMU_S2CR_FAULT && s2cr != n) ||
++	    (cbar != 0 && cbar != (1u << 16)) ||
++	    gpu_read32(smmu, GPU_SMMU_CBA2R + 4 * n) != 0 ||
++	    gpu_read64(smmu, cb + GPU_SMMU_CB_TTBR0) != 0) {
++		b->error = "target group/context is not in a measured inert state; nothing programmed";
++		return;
++	}
++	for (unsigned int i = 0; i < sizeof(clear) / sizeof(clear[0]); i++) {
++		if (gpu_read32(smmu, cb + clear[i]) != 0) {
++			b->error = "context control/attributes not zero; nothing programmed";
++			return;
++		}
++	}
++	if (kmem_alloc_contig(kernel_map, &kva, GPU_BUF_BYTES, PAGE_MASK, 0, 0,
++	    KMA_DATA | KMA_ZERO | KMA_PERMANENT, VM_KERN_MEMORY_IOKIT) != KERN_SUCCESS || !kva) {
++		b->error = "no contiguous buffer/table memory; nothing programmed";
++		return;
++	}
++	pa = ptoa_64(pmap_find_phys(kernel_pmap, (addr64_t)kva));
++	if ((kva & PAGE_MASK) || !pa || (pa & PAGE_MASK) || pa > (1ull << 36) - GPU_BUF_BYTES) {
++		b->error = "buffer memory alignment/range invalid; nothing programmed";
++		return;
++	}
++	for (unsigned int off = 0; off < GPU_BUF_BYTES; off += PAGE_MASK + 1) {
++		if (ptoa_64(pmap_find_phys(kernel_pmap, (addr64_t)(kva + off))) != pa + off) {
++			b->error = "buffer memory not physically contiguous; nothing programmed";
++			return;
++		}
++	}
++	b->pa = pa;
++	/* L1 @0, L2 @0x1000, L3 @0x2000; dummy/debug/log/HFI @0x3000/4000/8000/c000. */
++	((uint64_t *)kva)[1] = (pa + 0x1000) | GPU_PTE_TABLE;
++	((uint64_t *)(kva + 0x1000))[256] = (pa + 0x2000) | GPU_PTE_TABLE;
++	for (unsigned int i = 0; i < GPU_BUF_PAGES; i++) {
++		((uint64_t *)(kva + 0x2000))[i] = (pa + 0x3000 + 0x1000 * i) | GPU_PTE_PAGE;
++	}
++	/* Match a6xx_hfi_init literally: table.size is BYTES despite the header comment. */
++	hfi = (uint32_t *)(kva + GPU_BUF_HFI_OFF);
++	hfi[0] = 0; hfi[1] = 120; hfi[2] = 6; hfi[3] = 12; hfi[4] = 2; hfi[5] = 2;
++	for (unsigned int i = 0; i < 2; i++) {
++		uint32_t *q = hfi + 6 + 12 * i;
++		q[0] = 1; q[1] = 0x6000a000u + 0x1000 * i;
++		q[2] = (10u << 8) | (i ? 4 : 0); q[3] = 1024;
++		q[6] = 1; q[7] = 1; q[8] = 1;
++	}
++	clean_dcache64((addr64_t)pa, GPU_BUF_BYTES, TRUE);
++	b->stage = 1;
++#define BSET(off, val, wide) do { if (!gpu_buffer_set(smmu, b, (off), (val), (wide))) { \
++	b->error = "SMMU programming readback mismatch"; goto restore; } } while (0)
++	BSET(GPU_SMMU_CBA2R + 4 * n, 1, 0);
++	BSET(GPU_SMMU_CBAR + 4 * n, 1u << 16, 0);
++	BSET(cb + GPU_SMMU_CB_TCR2, 1, 0);
++	BSET(cb + GPU_SMMU_CB_TCR, 0x802020u, 0);
++	BSET(cb + GPU_SMMU_CB_TTBR0, pa, 1);
++	BSET(cb + GPU_SMMU_CB_MAIR0, 0x44, 0);
++	BSET(cb + GPU_SMMU_CB_MAIR1, 0, 0);
++	if (gpu_smmu_tlb_flush(smmu, cb)) {
++		b->error = "initial TLB sync timed out"; goto restore;
++	}
++	BSET(cb + GPU_SMMU_CB_SCTLR, 0x27, 0);
++	BSET(GPU_SMMU_S2CR + 4 * n, n, 0);
++	BSET(GPU_SMMU_SMR + 4 * n, (1u << 31) | GPU_SMMU_GMU_SID, 0);
++	b->stage = 2;
++	/* Verify both ends of every mapped page, then adjacent and unrelated faults. */
++	for (unsigned int i = 0; i < GPU_BUF_CHECKS; i++) {
++		uint32_t va = i < 26 ? GPU_SMMU_GMU_IOVA + (i / 2) * 0x1000 + (i % 2 ? 0xfff : 0) :
++		    i == 26 ? 0x5ffff000u : i == 27 ? 0x6000d000u : 0x20000000u;
++		uint64_t expected = pa + 0x3000 + (i / 2) * 0x1000;
++		b->va[i] = va;
++		if (gpu_smmu_atos(smmu, cb, va, &b->par[i])) {
++			b->error = "ATOS timed out"; break;
++		}
++		b->checks++;
++		if (i < 26 ? ((b->par[i] & 1u) || (b->par[i] & 0x0000000ffffff000ull) != expected) :
++		    !(b->par[i] & 1u)) {
++			b->error = "ATOS mapping/fault differs from expected"; break;
++		}
++		b->passed++;
++	}
++	if (b->passed == GPU_BUF_CHECKS) b->stage = 3;
++restore:
++	/* No GMU master has run. Disable matching first; keep allocated RAM for this boot. */
++	restore_ok &= gpu_buffer_set(smmu, b, GPU_SMMU_SMR + 4 * n, 0, 0);
++	restore_ok &= gpu_buffer_set(smmu, b, cb + GPU_SMMU_CB_SCTLR, 0, 0);
++	if (gpu_smmu_tlb_flush(smmu, cb)) restore_ok = 0;
++	restore_ok &= gpu_buffer_set(smmu, b, cb + GPU_SMMU_CB_TTBR0, 0, 1);
++	for (unsigned int i = 1; i < sizeof(clear) / sizeof(clear[0]); i++) {
++		restore_ok &= gpu_buffer_set(smmu, b, cb + clear[i], 0, 0);
++	}
++	restore_ok &= gpu_buffer_set(smmu, b, GPU_SMMU_CBA2R + 4 * n, 0, 0);
++	/* Restore incoming encodings; the two known ABL encodings can be refused. */
++	(void)gpu_buffer_set(smmu, b, GPU_SMMU_S2CR + 4 * n, s2cr, 0);
++	(void)gpu_buffer_set(smmu, b, GPU_SMMU_CBAR + 4 * n, cbar, 0);
++	b->final[0] = gpu_read32(smmu, GPU_SMMU_SMR + 4 * n);
++	b->final[1] = gpu_read32(smmu, GPU_SMMU_S2CR + 4 * n);
++	b->final[2] = gpu_read32(smmu, cb + GPU_SMMU_CB_SCTLR);
++	b->final[3] = gpu_read32(smmu, GPU_SMMU_CBAR + 4 * n);
++	b->inactive = restore_ok && b->final[0] == 0 && b->final[2] == 0 &&
++	    (b->final[1] == s2cr || b->final[1] == n) &&
++	    (b->final[3] == cbar || b->final[3] == (1u << 16));
++	b->restored = b->inactive && b->final[1] == s2cr && b->final[3] == cbar;
++	b->fsr = gpu_read32(smmu, cb + 0x58);
++	b->gfsr = gpu_read32(smmu, 0x48);
++	if (!b->inactive) b->error = "SMMU rollback did not reach the measured inert state";
++#undef BSET
++}
++
+ /* One write of mainline's A618 a6xx_gmu_rpmh_init. region 0 = GMU block (RSCC base
+  * 0x23000 applied by the table), 1 = gmu_pdc, 2 = gmu_pdc_seq. off is a byte offset. */
+ static const struct { unsigned char region; uint32_t off; uint32_t value; } gpu_rpmh_init[] = {
+@@ -844,7 +1030,9 @@ gpu_gmu_read(struct gpu_power_experiment *x, int mode)
+ 	}
+ 	if (mode >= 7) {
+ 		vm_offset_t smmu = gpu_smmu_read(x);
+-		if (smmu && mode >= 8) {
++		if (smmu && mode >= 11) {
++			gpu_gmu_buffers(gmu, smmu, x);
++		} else if (smmu && mode >= 8) {
+ 			gpu_smmu_gmu_context(smmu, x);
+ 		}
+ 	}
+@@ -1079,6 +1267,23 @@ gpu_power_log(const struct gpu_power_experiment *x)
+ 		}
+ 		printf("SWEET GPU: SMMU micro-mmu +0x6000 = 0x%08x (read-only inventory)\n", x->smmu_micro);
+ 	}
++	if (x->buf.requested) {
++		const struct gpu_buffer_probe *b = &x->buf;
++		printf("SWEET GPU: buffers pa=0x%llx bytes=0x%x stage=%u checks=%u/%u passed=%u inactive=%u restored=%u\n",
++		    b->pa, GPU_BUF_BYTES, b->stage, b->checks, GPU_BUF_CHECKS, b->passed, b->inactive, b->restored);
++		printf("SWEET GPU: buffers IOVA dummy/debug/log/HFI=0x60000000/0x60001000/0x60005000/0x60009000 sizes=4096/16384/16384/16384 HFI-size=120\n");
++		for (unsigned int i = 0; i < b->checks; i++) {
++			printf("SWEET GPU: buffers ATOS va=0x%08x PAR=0x%llx expect=%s\n",
++			    b->va[i], b->par[i], i < 26 ? "mapped" : "fault");
++		}
++		for (unsigned int i = 0; i < b->nwrites; i++) {
++			printf("SWEET GPU: buffers wr +0x%x wrote=0x%llx got=0x%llx%s\n",
++			    b->off[i], b->wrote[i], b->got[i], b->wrote[i] == b->got[i] ? "" : " MISMATCH");
++		}
++		printf("SWEET GPU: buffers final SMR/S2CR/SCTLR/CBAR=0x%x/0x%x/0x%x/0x%x FSR=0x%x sGFSR=0x%x result: %s\n",
++		    b->final[0], b->final[1], b->final[2], b->final[3], b->fsr, b->gfsr,
++		    b->error ? b->error : "ATOS verified; CM3 reset; mapping disabled");
++	}
+ 	if (x->init_requested) {
+ 		printf("SWEET GPU: RPMH init writes=%u/%u bad=%u stop-handshake=%u RSC_STATUS0=0x%08x\n",
+ 		    x->init_nwrites, (unsigned int)GPU_RPMH_INIT_COUNT, x->init_bad, x->init_stop_done,
+@@ -1339,8 +1544,8 @@ sweet_gpu_probe(void)
+ 	if (!PE_parse_boot_argn("sweetgpu", &mode, sizeof(mode)) || mode == 0) {
+ 		return;
+ 	}
+-	if (mode < 1 || mode > 10) {
+-		printf("SWEET GPU: unsupported sweetgpu=%d (0=off, 1=clocks, 2=+ARC, 3=+CX, 4=+GMU clocks, 5=+GMU reads, 6=+GMU firmware to TCM, 7=+SMMU read, 8=+GMU SMMU context test, 9=+RSC/PDC read, 10=+RSC/PDC init)\n", mode);
++	if (mode < 1 || mode > 11) {
++		printf("SWEET GPU: unsupported sweetgpu=%d (0=off, 1=clocks, 2=+ARC, 3=+CX, 4=+GMU clocks, 5=+GMU reads, 6=+GMU firmware to TCM, 7=+SMMU read, 8=+GMU SMMU context test, 9=+RSC/PDC read, 10=+RSC/PDC init, 11=GMU buffers/ATOS)\n", mode);
+ 		return;
+ 	}
+ 	if (mode >= 2) {

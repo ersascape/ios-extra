@@ -211,3 +211,67 @@ SEQ_BUSY 0). The configuration is deliberately **left in place** (Android's driv
 rewrites it at its next probe). 0x30000/0x30010 are the cx.lvl/mx.lvl ARC addresses:
 the PDC TCS commands apply only on GPU RSC sleep/wake events, in the sleep/wake sets.
 Report: `SWEET GPU: RPMH init ...`.
+
+## 0093 — GMU buffers and per-page ATOS (`sweetgpu=11`)
+
+Separate from GMU execution: keep CM3 in reset, replace the old single-page SMMU
+probe in mode 11 with the full legacy GMU memory layout. Lower modes retain their
+previous behavior; modes 0 and absent remain off. RSC/PDC init is still the
+mainline sequence, including the nine diagnosed readback differences from 0092.
+
+One 64 KiB contiguous, zeroed, permanent kernel allocation contains three 4 KiB
+page-table pages followed by the 13 pages for dummy/debug/log/HFI. Physical
+addresses must be 16 KiB aligned and the entire allocation fit below 2^36; every
+16 KiB XNU page's physical address is checked for contiguity before SMMU writes.
+Memory stays allocated for the temporary kernel's lifetime; no active mapping
+survives the experiment. This bounds allocation to 64 KiB once per opted-in boot.
+
+| Buffer | Allocation byte offset | GMU IOVA | Size |
+| --- | --- | --- | --- |
+| dummy | 0x3000 | 0x60000000 | 4 KiB |
+| debug | 0x4000 | 0x60001000 | 16 KiB |
+| log | 0x8000 | 0x60005000 | 16 KiB |
+| HFI | 0xc000 | 0x60009000 | 16 KiB |
+
+HFI header matches v6.12 `a6xx_hfi_init()` / `a6xx_hfi_queue_init()`: six table
+words `{0,120,6,12,2,2}` (size is **bytes** in the actual initializer, despite the
+header's dword comment), followed by two 12-word queue headers. Data queues are
+at IOVA 0x6000a000 / 0x6000b000; type 0xa00 / 0xa04, capacity 1024 dwords,
+status=1, rx/tx watermarks=1, rx_request=1, all other words zero. All tables and
+buffers are cache-cleaned before enabling the context; no CPU accesses them while
+ATOS uses the tables, and no GMU master ever runs. The SMMU mapping uses attr0
+normal non-cacheable as in the previously measured single-page test.
+
+Preconditions, each tested to issue zero SMMU writes on failure: CM3 reset=1 and
+busy=0, full verified 32 KiB firmware; exact measured SMMU sCR0/IDR0/1/2 and
+complete inventory/geometry; all five SMRs zero (so no other stream can use CB3);
+S2CR3 either ABL fault 0x200ff or our previously measured inert 3, CBAR3 either 0
+or 0x10000, CBA2R3=0, TTBR0=0, and all touched context control/attribute registers
+zero. Allocation failure/null/alignment/range/discontinuity also refuse before
+SMMU writes. Inert residual S2CR3/CBAR3 are accepted explicitly; their values alone
+do not imply an active mapping.
+
+Configure CB3 and exact SID5 match, with immediate readback of every programming
+write; on mismatch restore immediately. Each 32-bit write readback is explicitly
+masked with an ARM64 AND before promotion/comparison, because earlier GR0/GR1
+read transcripts had dirty upper bits. Invalidate/sync the TLB with a 500 us bound
+before enabling the context. Stop before enabling it if that sync fails. ATOS
+checks both ends of all 13 pages, followed by faults at 0x5ffff000, 0x6000d000 and
+0x20000000 (29 checks, each bounded by the existing 500 us ATOS helper).
+
+Every exit after a SMMU write disables SMR3 first, disables SCTLR, invalidates /
+syncs the TLB, clears TTBR/TCR/TCR2/MAIR/CBA2R and attempts the incoming
+S2CR3/CBAR3 encodings. Log every write/readback plus final SMR/S2CR/SCTLR/CBAR,
+FSR/sGFSR. Report `restored=1` only if incoming encodings were restored; separately
+report `inactive=1` if all controls were cleared and the only differences are the
+known inert S2CR3=3 / CBAR3=0x10000. A rollback TLB timeout is an error, even with
+matching disabled. Then the existing clock/CX/ARC cleanup executes.
+
+Host harness validates the complete HFI header and zeroed payload at the cache
+clean, all 13 PTEs and 29 translations/faults; 38 refusal cases with write counting
+and unchanged-MMIO checks; both inert starting states; refused ABL restore;
+individual programming readback failures; ATOS/TLB timeouts; wrong mapped PAR /
+unexpected successful out-of-range translation; lower-mode isolation and cached
+replay without new writes or allocations. The inherited RSC SEQ_BUSY refusal
+also now has its own test. Normal and ASan/UBSan suites and local arm64 compile
+pass. Full CI and phone result are separate pending gates.

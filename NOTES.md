@@ -42,15 +42,18 @@ Rendering is still CPU. The GMU processor has never been released from reset.
 ## Immediate next action
 
 0092 was temporarily booted at 16:55:16 UTC; ping and complete cached GPU report
-received. Home-screen confirmation is pending. Raw values are in
+received. The user confirmed the home screen. Raw values are in
 [docs/GPU_LOG.md](docs/GPU_LOG.md). The 34/48 pre-write differences show the 0091
 RSC/PDC configuration did not persist through this boot path. Nine mismatches:
 RSCC hidden addresses +0x23034/3c/44 retain 0x82204514/10/20; six PDC MSGID words
 read 0x10100 after 0x10108 writes. Stop handshake succeeds (0x01010006).
 
-Continue HANDOFF next step 1: explain the mismatch signatures and the limits of
-what they prove before the separate GMU-buffer experiment. Do not repeat 0092
-or release CM3 merely because its diagnostics completed.
+Step 1 interpretation is written in docs/GPU_GMU_BOOT.md: exact constrained
+readbacks, ownership unresolved, stop handshake proven, wake/votes not proven.
+0093 (`sweetgpu=11`) implements the separate GMU-buffer / 29-check ATOS test;
+normal and ASan/UBSan host tests pass, local arm64 compile 0/1 failed. CI and phone
+are not yet tested. Source baseline in isolated XNU git: 60d4b0e (validated 0092).
+Do not repeat 0092 or release CM3 merely because diagnostics completed.
 
 ## Hard constraints (unchanged)
 

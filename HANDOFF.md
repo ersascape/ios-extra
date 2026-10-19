@@ -28,7 +28,7 @@ then the next question.** The user prefers slow and careful over fast and clever
 ## State in one paragraph
 
 Patches 0080-0092 are built and phone-tested. 0092 was temporarily booted on
-2026-10-19 at 16:55:16 UTC; home-screen confirmation is pending. It reproduced all
+2026-10-19 at 16:55:16 UTC; the user confirmed the home screen. It reproduced all
 nine constrained RSC/PDC readbacks and a successful stop handshake (0x01010006).
 The init state did not persist through this boot path. Raw report in GPU_LOG;
 step 1 interpretation and limits in GPU_GMU_BOOT. CM3 remains held in reset and GX

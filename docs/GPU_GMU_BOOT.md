@@ -116,7 +116,7 @@ levels and the OPP table), GMU-side GX power-up, the `a6xx_gpu` CP/SQE startup.
 One GMU address space (`msm_iommu_new(gmu->dev)`, IOVA `0x0 .. 0x80000000`):
 dummy page 4 KiB at fixed IOVA `0x60000000`; then, allocated from `0x60001000`
 upwards: debug 16 KiB (legacy only), log 16 KiB, HFI 16 KiB. All write-combined
-(non-cacheable). HFI buffer layout (`a6xx_hfi_init`): queue table header (6 dwords:
+(non-cacheable). HFI buffer layout (`a6xx_hfi_init`): queue table header (`size=120` bytes, other offsets/sizes in dwords; 6 dwords:
 version, size, qhdr0_offset, qhdr_size, num_queues=2, active_queues=2) at offset 0,
 queue headers (12 dwords each: status, iova, type, size, msg_size, dropped,
 rx/tx watermark, rx/tx request, read_index, write_index) right after it; command
