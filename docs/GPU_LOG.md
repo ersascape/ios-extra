@@ -5,6 +5,66 @@ CI runs, phone results and the reasoning at the time. The current state and the 
 action are in [NOTES.md](../NOTES.md) and [HANDOFF.md](../HANDOFF.md). Entries that say
 "not yet built/booted" were true when written; newer entries supersede them.
 
+## Phone result — 0097 IRQ mask/restore, 2026-10-19 18:53 UTC
+
+- Always checked fastboot first: exactly one already present, serial redacted.
+  Announced first mask writes and temporarily booted once at 18:53:52 UTC;
+  send 0.423s, boot 0.134s, total 0.563s. Ping succeeds. Home-screen confirmation
+  requested and pending; do not infer it from ping.
+- Image `shim/out/shim-boot-0097-irqmask.img`, SHA256
+  `9ae01e4289113accd0ad18fcf15e436afd4cfaecc5330e8b69b5b63760f0ca7e`, mode 15;
+  source 01dbc6e5571eacdca32f7c0d60bc34ce0d77ab00, green CI 39305068882.
+- Capture: 462 UDP packets, 206191 decoded bytes; local/ignored
+  `ios-extra-work/logs/phone-0097-irqmask.{pcap,txt}` plus sanitized fastboot log.
+  Initial report 0 partial; raw values below from complete cached report 1.
+- **Stopped at the intended readback guard:** AO mask +0x24c18, wrote all ones,
+  read 0x3f. Restored it to 0. attempted=1, masked=0 (strict full-word match
+  failed), restored=1, quarantined=0. GMU2HOST mask was never written.
+  All six final preflight values match 0096, reset/busy/init=1/0/0 and
+  GX unchanged 0x00222001. No CM3 execution or GX power.
+- Lower checks pass: RSC wake ACK=3/BUSY=0, stop=0x01010006 and state restored;
+  buffer ATOS 29/29, inactive=1 and known inert S2CR/CBAR residue, FSR/sGFSR=0;
+  firmware bad=0, same nine init differences, clock/CX/votes rolled back.
+- Mainline XML declares AO status bits 0..5, consistent with the six retained mask
+  bits. It does not define a mask writable-width field. Next patch accepts only
+  the specific measured tuple (+0x24c18, wrote=0xffffffff, got=0x3f), still writes
+  the mainline all-ones value, and proceeds to test GMU2HOST masking. No broad
+  ignored-bit policy or hardware-vs-filtering ownership claim is justified.
+
+```text
+SWEET GPU: IRQ mask attempted=1 masked=0 restored=1 quarantined=0 masks=0x0000003f/0x00000000 reset/busy/init=0x1/0x0/0x0 GX=0x00222001/0x00222001 result: interrupt mask write did not read back
+SWEET GPU: IRQ mask wr +0x24c18 wrote=0xffffffff got=0x0000003f
+SWEET GPU: IRQ mask wr +0x24c18 wrote=0x00000000 got=0x00000000
+SWEET GPU: IRQ mask final AO_HOST_INTERRUPT_MASK +0x24c18 = 0x00000000
+SWEET GPU: IRQ mask final GMU2HOST_INTR_MASK +0x1464c = 0x00000000
+SWEET GPU: IRQ mask final GMU2HOST_INTR_INFO +0x14648 = 0x00000000
+SWEET GPU: IRQ mask final AO_HOST_INTERRUPT_STATUS +0x24c14 = 0x00000000
+SWEET GPU: IRQ mask final AO_AHB_FENCE_CTRL +0x24c40 = 0x00000000
+SWEET GPU: IRQ mask final RPMH_POWER_STATE +0x143b0 = 0x0000000f
+```
+
+## 0097 full build and verified image — 2026-10-19
+
+- Full [CI 39305068882](https://github.com/dipa-studio/ios-extra/actions/runs/39305068882)
+  **passed** on `01dbc6e5571eacdca32f7c0d60bc34ce0d77ab00`.
+- Kernel SHA256 `61d48b8d440b3f03ceb0c7370019aa5a7210971bbea75281fed40ea2353d19bc`;
+  SHA256SUMS passed. `_sweet_gpu_probe` at 0xfffffe00074fa838 and
+  `_sweet_rpmh_arc_set` at 0xfffffe00074f8548.
+- CI GPU source SHA256 `b6040548e42217a8071ae8dff01b8b5ccbdce797c269c08d90cede698ba14b2b`;
+  firmware header `2c76898351726399ac212d29c3ca7670786ad00c77e5be28da3b847af0baedf2`;
+  RPMh source `fc3669172ee14592cbee2f4312450e68ca9eac7870612d7d669fa2872bf404ca`.
+  All byte-identical to locally tested files. Artifacts local/ignored in
+  `ios-extra-work/out-0097` and `ci-0097`.
+- Image `shim/out/shim-boot-0097-irqmask.img`, 17268736 bytes, SHA256
+  `9ae01e4289113accd0ad18fcf15e436afd4cfaecc5330e8b69b5b63760f0ca7e`,
+  `sweetgpu=15`; manifest `shim/out/manifest-0097.json`. Payload/boot arguments
+  round-trip exactly. No first-start draft is included.
+- Always checked fastboot first: exactly one already present, serial redacted.
+  Announced first interrupt-mask writes/restore with CM3 reset and performed the
+  authorized single temporary boot. Capture/result recorded separately below.
+- Pruned reproducible 0093/0094 kernel/buildtree/image/payload/unpack artifacts;
+  all phone logs/manifests retained, along with 0095/0096/0097 working artifacts.
+
 ## Implementation — 0097 interrupt mask/restore (local checks pass)
 
 - `0097-sweet-gpu-irq-mask-restore.patch`, mode 15, baseline 328cafb (0096).

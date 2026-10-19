@@ -36,6 +36,7 @@ GitHub now confirms public. Kernel builds use this repo's GitHub Actions
 | 0094 | 12 | read-only inventory of 29 pre-boot GMU registers | 39297388718 **passed** | 29/29 registers read; home screen confirmed |
 | 0095 | 13 | bounded TCM retention + RSC wake/stop, CM3 reset | 39300239967 **passed** | wake/stop and full sampled state restore; home screen |
 | 0096 | 14 | read-only GMU IRQ masks/status, fence and RPMH state | 39303111412 **passed** | 6/6 reads; home screen |
+| 0097 | 15 | GMU interrupt mask/restore | 39305068882 **passed** | AO reads 0x3f; guard stops, restored; home pending |
 
 The user confirmed the home screen after every boot up to 0096. Each stage runs
 inside the previous one's window (`sweetgpu=N` includes all lower modes) and undoes
@@ -58,8 +59,11 @@ state=0x0f; raw values in GPU_LOG. All lower probes/cleanup still pass. Full CI
 39303111412 built edd2b796ed7ff02434c42942c490543c17f95456 and artifacts match the
 local source. Next prerequisite: 0097 mask/verify/restore, with CM3 still reset,
 before relying on interrupt containment during the first firmware start.
-0097 is implemented locally (mode 15), normal/sanitized suites and arm64 compile
-pass; full CI/phone pending. Design and failure behavior in GPU_CX_EXPERIMENT.
+0097 (mode 15) reached the readback guard at 18:53:52 UTC: wrote AO mask
+0xffffffff, got 0x3f, restored 0; second mask untouched. All sampled state/lower
+cleanup restored, reset=1 and GX off. Home-screen confirmation pending. Green CI
+39305068882 built 01dbc6e5571eacdca32f7c0d60bc34ce0d77ab00; artifacts matched.
+Next 0098: permit only that exact measured AO tuple and test GMU2HOST masking.
 
 An unvalidated first-start draft is external only (`ios-extra-work/gmu-first-start-draft.patch`),
 based on 0095; do not apply it unchanged. It still needs IRQ-mask/clear gates,

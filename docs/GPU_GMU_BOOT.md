@@ -273,6 +273,27 @@ containment. A separate mask/verify/restore measurement is required before
 CM3 execution. It will not prove interrupt routing/delivery to XNU. Raw values
 and artifacts in GPU_LOG.
 
+### 0097 AO mask readback (phone measured)
+
+Writing AO_HOST_INTERRUPT_MASK all ones reads back 0x3f. The strict equality
+guard stops there, restores 0, and leaves GMU2HOST_INTR_MASK untouched. Both
+status words stay zero; fence=0, RPMH state=0x0f, reset/busy/init=1/0/0, GX
+unchanged. All lower checks and cleanup pass. XML declares AO interrupt status
+bits 0..5; six retained mask bits are consistent with those sources. No mask
+writable-width field is declared, so ownership/reserved-bit behavior remains an
+inference. Accept only this exact observed offset/write/read tuple in 0098,
+not a blanket ignored-bit comparison; keep the mainline write value. Interrupt
+delivery is still unproved, and the second mask has not been programmed yet.
+
+Additional source gate before the first GMU master: Linux v6.12
+[arm-smmu.h](https://github.com/torvalds/linux/blob/v6.12/drivers/iommu/arm/arm-smmu/arm-smmu.h)
+defines global fault interrupt enables sCR0.GFIE=bit2 and GCFGFIE=bit5. Both are
+set in measured sCR0=0x00200626. CB3 SCTLR=0x27 leaves CFIE (bit6) clear, but
+that does not disable global interrupts for an unmatched stream. GMU AO/HFI
+masks do not cover SMMU faults. Resolve/test global-fault containment before
+first DMA; preserve fault recording and translation, never assume exact SID5
+ATOS proves real master routing. No sCR0 write has been made.
+
 ## Rails and clocks (0082-0085)
 
 ARC raw level tables from the command DB (hardware requests carry the table **index**,

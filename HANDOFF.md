@@ -53,9 +53,12 @@ BUSY=0, stop STATUS=0x01010006, full sampled state restored, GX off and CM3 rese
 AO_HOST_INTERRUPT_MASK=0, GMU2HOST_INTR_MASK=0, both pending statuses=0,
 AO_AHB_FENCE_CTRL=0, RPMH_POWER_STATE=0x0f. Full CI 39303111412 passed on
 edd2b796ed7ff02434c42942c490543c17f95456; verified artifacts/image in GPU_LOG.
-Next is 0097: separately prove both interrupt masks accept all ones and restore,
-with CM3 still reset. 0097 is implemented; normal/sanitized host suites and
-arm64 compile pass. Full CI/package/phone next; no 0097 phone result yet.
+0097 stopped at the strict first mask guard at 18:53:52 UTC: wrote AO mask
+0xffffffff, got 0x3f, restored 0. Second mask untouched. All lower checks/cleanup
+pass; home-screen confirmation pending. Green CI 39305068882, source
+01dbc6e5571eacdca32f7c0d60bc34ce0d77ab00. Next 0098: accept only this exact
+measured AO tuple, keep writing all ones, then test the second mask. Still no CM3
+release. Read the raw report and source interpretation in GPU_LOG.
 
 The larger first-start draft is only external (`gmu-first-start-draft.patch` under
 `ios-extra-work`, based on 0095). It had an arm64 object compile, but no host tests,
@@ -167,7 +170,7 @@ the user's words "home screen" for the boot confirmation they give.
 > `docs/GPU_GMU_BOOT.md`; `docs/GPU_LOG.md` is history. Do not touch
 > `/home/dipa/ios-sweet`. The phone is only ever booted with a temporary
 > `fastboot boot` after the user puts it in fastboot; never flash, never run
-> `fastboot getvar`, never reboot it unannounced. The next action is to complete full CI/package for 0097 interrupt mask/restore, then
+> `fastboot getvar`, never reboot it unannounced. The next action is to implement/build 0098 with the exact measured AO mask readback, then
 > test it (`tools/gpu-phone-test.py`, command in `HANDOFF.md`); always check
 > fastboot first, ask only if none is present, run it, record raw values, then continue with the numbered "Next
 > steps", one measured patch per phone boot. Test every precondition, keep every
