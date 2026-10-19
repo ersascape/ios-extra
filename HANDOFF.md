@@ -1,7 +1,7 @@
 # Handoff — continue the Adreno 618 bring-up
 
-You are taking over an in-progress, hardware-in-the-loop driver bring-up. Read this
-file top to bottom, then `AGENTS.md`, `NOTES.md` (state), `docs/GPU_GMU_BOOT.md`
+You are taking over an in-progress, hardware-in-the-loop driver bring-up. Read `AGENTS.md`, this
+file top to bottom, `NOTES.md` (state), then `docs/GPU_GMU_BOOT.md`
 (mainline reference + everything measured). `docs/GPU_LOG.md` is the full history.
 
 ## Goal and ground rules
@@ -71,15 +71,16 @@ bounded CM3-start patch. Also resolve SMMU global-fault interrupts (see below). 
 ## Exact continuation for 0098
 
 The user is stopping for the usage limit. **Do not boot again in this session.**
-On resume, check the push-triggered XNU CI for the 0098 implementation commit
-(`gh run list -R dipa-studio/ios-extra --workflow xnu.yml --limit 5`). Do not treat
+On resume, check **CI 39307039113**, source **edab65c998a917d5e450b730aa4d0ff2e8e6032e**:
+`gh run view 39307039113 -R dipa-studio/ios-extra --json status,conclusion,headSha`.
+It was in progress when documented; no green result is claimed. Do not treat
 local tests or a queued run as a green build. Once green, download `xnu-kernel`
 and `xnu-buildtree` to `ios-extra-work/{out-0098,ci-0098}`; verify SHA256SUMS,
 byte-compare GPU/firmware-header/RPMh sources with the isolated tree, and check
 both symbols. Then package using the **CI's head SHA**, not a later docs commit:
 
 ```sh
-python3 tools/gpu-package.py --kernel /run/media/dipa/android/ios-extra-work/out-0098/kernel.development.sweet --patch 0098 --mode 15 --name irqmask --ci-run RUN --commit CI_HEAD_SHA
+python3 tools/gpu-package.py --kernel /run/media/dipa/android/ios-extra-work/out-0098/kernel.development.sweet --patch 0098 --mode 15 --name irqmask --ci-run 39307039113 --commit edab65c998a917d5e450b730aa4d0ff2e8e6032e
 ```
 
 Only after verification/package, always check `fastboot devices` with serials
@@ -152,7 +153,8 @@ announce lines are the evidence. Make the next build smaller, not bigger.
 
 1. Edit `bsd/dev/sweet_gpu.c` (and, if needed, `sweet_rpmh.c`) in the **isolated tree**
    `/run/media/dipa/android/ios-extra-work/buildtree/xnu`. Its local git has one commit
-   per CI-validated baseline (latest `c242eb7` = measured 0097; 0098 is the uncommitted diff).
+   per CI-validated baseline (latest `c242eb7` = measured 0097; isolated source has the 0098 diff,
+   committed as a patch in main at `edab65c`).
    Before starting a new step, commit the validated state there:
    `git add -A bsd/dev/sweet_gpu.c && git -c user.name=ios-extra -c
    user.email=ios-extra@localhost commit -m "Validated 009N baseline"`. The untracked

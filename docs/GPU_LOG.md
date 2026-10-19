@@ -5,6 +5,17 @@ CI runs, phone results and the reasoning at the time. The current state and the 
 action are in [NOTES.md](../NOTES.md) and [HANDOFF.md](../HANDOFF.md). Entries that say
 "not yet built/booted" were true when written; newer entries supersede them.
 
+## 0098 CI started at handoff — 2026-10-19
+
+- Implementation/checks/handoff commit `edab65c998a917d5e450b730aa4d0ff2e8e6032e` pushed.
+- [CI 39307039113](https://github.com/dipa-studio/ios-extra/actions/runs/39307039113)
+  is **in progress**, not yet verified green. No 0098 download, package, image
+  hash or phone result exists. HANDOFF pins this exact run/head and package command.
+- User confirmed 0097 home screen and requested documentation before stopping
+  for the usage limit. No further phone test was started. All run evidence and
+  first-start blockers are preserved; repository working tree is clean after
+  the documentation commit.
+
 ## Handoff — 0098 local implementation, 2026-10-19
 
 - User confirmed the 0097 home screen and requested all work documented before

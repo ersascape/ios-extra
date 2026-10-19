@@ -37,6 +37,7 @@ GitHub now confirms public. Kernel builds use this repo's GitHub Actions
 | 0095 | 13 | bounded TCM retention + RSC wake/stop, CM3 reset | 39300239967 **passed** | wake/stop and full sampled state restore; home screen |
 | 0096 | 14 | read-only GMU IRQ masks/status, fence and RPMH state | 39303111412 **passed** | 6/6 reads; home screen |
 | 0097 | 15 | GMU interrupt mask/restore | 39305068882 **passed** | AO reads 0x3f; guard stops, restored; home screen |
+| 0098 | 15 | exact measured AO readback; continue mask test | 39307039113 in progress | not tested; no image yet |
 
 The user confirmed the home screen after every boot up to 0097. Each stage runs
 inside the previous one's window (`sweetgpu=N` includes all lower modes) and undoes
@@ -66,8 +67,9 @@ cleanup restored, reset=1 and GX off. User confirmed the home screen. Green CI
 mainline all-ones write. Normal and ASan/UBSan suites pass, including 42 rejected
 alternative AO/HFI readbacks, all 20 zero-write refusals and failure/rollback tests;
 arm64 compile 0 of 1 failed. Baseline c242eb7 (measured 0097); isolated diff equals
-0098 patch. Full CI must pass and artifacts must be verified/packaged before its
-phone test. No 0098 image or phone result exists at this handoff.
+0098 patch, committed/pushed at edab65c998a917d5e450b730aa4d0ff2e8e6032e. CI 39307039113
+is in progress at handoff; verify it succeeds and verify/package its artifacts before
+the phone test. No 0098 image or phone result exists at this handoff.
 
 An unvalidated first-start draft is external only (`ios-extra-work/gmu-first-start-draft.patch`),
 based on 0095; do not apply it unchanged. It still needs IRQ-mask/clear gates,
