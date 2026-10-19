@@ -5,6 +5,22 @@ CI runs, phone results and the reasoning at the time. The current state and the 
 action are in [NOTES.md](../NOTES.md) and [HANDOFF.md](../HANDOFF.md). Entries that say
 "not yet built/booted" were true when written; newer entries supersede them.
 
+## Implementation — 0096 read-only IRQ/fence preflight (local checks pass)
+
+- Patch `0096-sweet-gpu-irq-fence-preflight.patch`, mode 14, baseline 4be318c
+  (validated 0095). Source audit of `a6xx_gmu_resume()` found interrupt setup
+  outside the narrower fw_start sequence used for the 0094 dump; mask defaults
+  have not been measured. Read six IRQ/fence/power-state words before first release.
+- Normal and ASan/UBSan suites pass, including all 13 zero-write refusals,
+  byte-for-byte unchanged MMIO, exact offsets/values (including a legitimate
+  all-ones mask), lower-mode exclusion, reset preservation and cached replay.
+  Arm64 compile 0 of 1 failed. Isolated diff equals the patch. CI/phone pending.
+- No new writes or CM3 release. The larger first-start draft was saved outside Git
+  as `ios-extra-work/gmu-first-start-draft.patch`, based on 0095. Local arm64 object
+  compilation alone passed for that draft; it has no host/full-CI/phone validation
+  and omits interrupt protection. It is not in the repository patch chain or a
+  boot image. Rework only after the IRQ/fence measurement.
+
 ## Phone result — 0095 RSC wake/stop, 2026-10-19 18:18 UTC
 
 - Checked fastboot first: exactly one device already present, serial redacted.

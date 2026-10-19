@@ -51,11 +51,16 @@ STATUS=0x01010006, all six sampled control/state words restored. Retention 1->0,
 CM3 reset remained 1 and GX GDSCR stayed 0x00222001. User confirmed home screen.
 Raw values in GPU_LOG. No firmware execution or GPU command yet.
 
-Prepare the first bounded GMU firmware-start patch as HANDOFF step 4b, retaining
-the verified buffer mapping through the attempt and always resetting CM3 before
-SMMU/clock/CX rollback. Use the measured 0094 defaults and 0095 wake transition;
-do not assume the power-control words are zero. No 0096 implementation/image yet.
-Isolated source baseline before 0095 is 85017d8 (validated 0094); 0095 is its diff.
+Source review for the first CM3 release found that the pre-boot dump omitted
+GMU interrupt masks (Linux configures AO interrupts in a6xx_gmu_resume). 0096
+(`sweetgpu=14`) adds a separate read-only six-register IRQ/fence/power-state dump.
+Normal/sanitized host suites and arm64 compile pass; CI/phone pending. No CM3
+release in this patch. Source baseline is 4be318c (validated 0095), with 0096 diff.
+
+An unvalidated first-start draft is external only (`ios-extra-work/gmu-first-start-draft.patch`),
+based on 0095; do not apply it unchanged. It still needs IRQ-mask/clear gates,
+complete host failure tests and reconciliation with the 0096 measurement before
+full CI or phone use. No first-start image exists.
 
 ## User-visible iOS observation (2026-10-19)
 

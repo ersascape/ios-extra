@@ -352,3 +352,32 @@ retention set/restore; unexpected GX change; full mode-13 source execution,
 mode-12 exclusion and cached replay. Normal and ASan/UBSan suites and arm64 compile
 pass. Full CI 39300239967 and the 0095 phone test subsequently passed;
 raw transition and restored state are in GPU_LOG.
+
+## 0096 — read-only interrupt/fence preflight (`sweetgpu=14`)
+
+Source review before the first CM3 release found that `a6xx_gmu_resume()` configures
+AO interrupts, but the 0094 pre-boot table omitted interrupt-mask registers. Do not
+start the firmware assuming those masks or host interrupt routing are safe. This
+additional measurement reads six known XML-defined registers, after 0095's fully
+restored wake/stop, with CM3 still held reset:
+
+| Register | XML dword | GMU byte offset |
+| --- | --- | --- |
+| AO_HOST_INTERRUPT_MASK | 0x9306 | 0x24c18 |
+| GMU2HOST_INTR_MASK | 0x5193 | 0x1464c |
+| GMU2HOST_INTR_INFO | 0x5192 | 0x14648 |
+| AO_HOST_INTERRUPT_STATUS | 0x9305 | 0x24c14 |
+| AO_AHB_FENCE_CTRL | 0x9310 | 0x24c40 |
+| RPMH_POWER_STATE | 0x50ec | 0x143b0 |
+
+Require no wake error, ACK/idle/stop complete, controls and sampled state restored,
+complete error-free pre-boot dump, successful inactive buffer map, and live CM3
+reset=1/busy=0. Each of the 13 predicate terms has its own refusal test proving no
+MMIO writes and unchanged GMU/SMMU memory. The dump announces each read, caches the
+values and replays without new MMIO. Unknown mask values are printed without
+writing them; all-ones can be a legitimate interrupt mask. Lower modes are
+unchanged and skip this dump. There is no CM3 release in 0096.
+
+Normal and ASan/UBSan suites and local arm64 compile pass. CI and phone result
+remain separate pending gates. The larger first-start draft is saved only in the
+external workspace and is unvalidated; it is not part of this patch or image.

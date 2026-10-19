@@ -78,6 +78,7 @@ class GPUProbeTests(unittest.TestCase):
             self.assertEqual(build.returncode, 0, build.stderr)
             result = subprocess.run([str(work / 'test')], capture_output=True, text=True)
             self.assertEqual(result.returncode, 0, result.stderr)
+            self.assertIn('PASS: six IRQ/fence reads', result.stdout)
             self.assertIn('PASS: RSC wake/stop', result.stdout)
             self.assertIn('PASS: 29 pre-boot registers', result.stdout)
             self.assertIn('PASS: GMU buffers 29 ATOS checks', result.stdout)
@@ -447,7 +448,7 @@ int main(void)
     reset(); present = 0; sweet_gpu_probe();
     assert(map_calls == 0 && output[0] == 0);
     reset(); mode = 0; sweet_gpu_probe(); assert(map_calls == 0);
-    reset(); mode = 14; sweet_gpu_probe(); assert(map_calls == 0);
+    reset(); mode = 15; sweet_gpu_probe(); assert(map_calls == 0);
     reset(); mode = -1; sweet_gpu_probe(); assert(map_calls == 0);
     reset(); fail_gcc = 1; sweet_gpu_probe();
     assert(map_calls == 1 && strstr(output, "GCC mapping failed"));
@@ -1191,6 +1192,59 @@ int main(void)
         wake_defaults(); mode = 12; gmu_mem[0x24c20/4] = gmu_mem[0x23404/4] = 0;
         arc_run(); assert(!gpu_boot_inventory.power.wake.requested && !wake_seen);
         puts("PASS: RSC wake/stop, 57 zero-write refusal cases, bounded failures and reset preservation");
+    }
+
+    /* 0096: IRQ/fence preflight is read-only, every gate independently refused. */
+    {
+        struct gpu_power_experiment *x;
+        uint32_t before[GPU_GMU_SIZE/4], sb[GPU_SMMU_SIZE/4];
+        const uint32_t off[] = {0x24c18,0x1464c,0x14648,0x24c14,0x24c40,0x143b0};
+        for (unsigned bad = 0; bad <= 13; bad++) {
+            wake_defaults(); x = &gpu_boot_inventory.power;
+            x->wake.ack_done = x->wake.busy_done = x->wake.stop_done = 1;
+            x->wake.controls_restored = x->wake.state_restored = 1;
+            for (unsigned i = 0; i < 6; i++) {
+                assert(gpu_irq_preflight_regs[i].off == off[i] && off[i] < GPU_GMU_SIZE && !(off[i] & 3));
+                gmu_mem[off[i]/4] = 0x9a000000u+i;
+            }
+            /* All-ones is a legitimate interrupt mask; preserve, never "fix" it. */
+            gmu_mem[off[0]/4] = ~0u;
+            switch (bad) {
+            case 0: break;
+            case 1: x->wake.error = "test error"; break;
+            case 2: x->wake.ack_done = 0; break;
+            case 3: x->wake.busy_done = 0; break;
+            case 4: x->wake.stop_done = 0; break;
+            case 5: x->wake.controls_restored = 0; break;
+            case 6: x->wake.state_restored = 0; break;
+            case 7: x->preboot_error = "test error"; break;
+            case 8: x->preboot_done--; break;
+            case 9: x->buf.error = "test error"; break;
+            case 10: x->buf.inactive = 0; break;
+            case 11: x->buf.passed--; break;
+            case 12: gmu_mem[0x14000/4] = 0; break;
+            case 13: gmu_mem[0x14068/4] = 1; break;
+            }
+            memcpy(before,gmu_mem,sizeof(before)); memcpy(sb,smmu_mem,sizeof(sb));
+            gpu_gmu_irq_preflight((vm_offset_t)gmu_mem,x);
+            assert(x->irq_preflight_requested && !all_mmio_writes);
+            assert(!memcmp(before,gmu_mem,sizeof(before)) && !memcmp(sb,smmu_mem,sizeof(sb)));
+            if (bad) assert(x->irq_preflight_error && !x->irq_preflight_done);
+            else {
+                assert(!x->irq_preflight_error && x->irq_preflight_done == 6);
+                for (unsigned i = 0; i < 6; i++) assert(x->irq_preflight_value[i] == before[off[i]/4]);
+            }
+        }
+        wake_defaults(); mode = 14; gmu_mem[0x24c20/4] = gmu_mem[0x23404/4] = gmu_mem[0x23010/4] = 0;
+        arc_run(); x = &gpu_boot_inventory.power;
+        assert(x->irq_preflight_done == 6 && !x->irq_preflight_error && x->clk_restored && x->buf.inactive);
+        assert(gmu_mem[0x14000/4] == 1 && strstr(output,"masks/fence unchanged; CM3 held reset"));
+        int writes = all_mmio_writes; sweet_gpu_replay(); assert(writes == all_mmio_writes);
+        wake_defaults(); mode = 13; gmu_mem[0x24c20/4] = gmu_mem[0x23404/4] = 0;
+        arc_run(); assert(!gpu_boot_inventory.power.irq_preflight_requested);
+        wake_defaults(); mode = 14; gmu_mem[0x24c20/4] = gmu_mem[0x23404/4] = 0; wake_ack_stuck = 1;
+        arc_run(); assert(gpu_boot_inventory.power.irq_preflight_requested && !gpu_boot_inventory.power.irq_preflight_done);
+        puts("PASS: six IRQ/fence reads, 13 zero-write refusals, mode isolation, reset and replay");
     }
 
     /* Mode 3 never runs the clock stage. */

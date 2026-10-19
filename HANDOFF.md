@@ -47,12 +47,18 @@ GPU_GMU_BOOT. No CM3 release or GX power has occurred.
 
 ## Immediate next action
 
-0095 completed at 18:18:46 UTC; user confirmed the home screen. Wake ACK=3,
-BUSY=0, stop STATUS=0x01010006; full six-word sampled state and retention restored,
-GX collapsed, CM3 reset held. Raw values in GPU_LOG. Implement step 4b (0096):
-first bounded CM3 firmware start with the verified buffers kept mapped through
-execution, then force reset again before SMMU/clocks/CX rollback. All new gates
-and failed-write/timeout paths must be tested. No 0096 code/image exists yet.
+0095 completed at 18:18:46 UTC; user confirmed home screen. RSC wake ACK=3,
+BUSY=0, stop STATUS=0x01010006, full sampled state restored, GX off and CM3 reset.
+0096 adds a **read-only** six-register IRQ/fence/power-state preflight (mode 14),
+because source review found interrupt masks missing from the 0094 dump.
+Normal/sanitized host tests and local arm64 compile pass; CI-build/package next,
+then always check fastboot before asking for it. No 0096 phone result yet.
+
+The larger first-start draft is only external (`gmu-first-start-draft.patch` under
+`ios-extra-work`, based on 0095). It had an arm64 object compile, but no host tests,
+full CI or phone validation. It omits interrupt protection and must not be applied
+unchanged. Read the pending IRQ/fence values first, then revise/test the complete
+bounded CM3-start patch. No first-start image exists; CM3 has never run.
 
 ## Next steps (each is its own measured patch; do not merge steps)
 
@@ -65,11 +71,12 @@ and failed-write/timeout paths must be tested. No 0096 code/image exists yet.
    16 KiB each at 0x60001000/0x60005000/0x60009000, mainline legacy HFI layout.
    ATOS passes both ends of all 13 pages and three faults (29 checks). Map is
    disabled before cleanup; S2CR3/CBAR3 retain only the known inert encodings.
-3. **Read-only pre-boot dump — 0094 measured.** All 29 offsets readable;
+3. **Read-only pre-boot dump — 0094 measured; 0096 adds missing IRQ masks.**
+   All 29 original offsets readable;
    nonzero stopped-state ACK/BUSY and power-control/hyst defaults recorded.
    CM3 remains reset. See GPU_LOG for raw values, GPU_GMU_BOOT for interpretation.
 4. **0095 RSC wake/stop measured and fully restored (CM3 held reset).**
-   Next, **GMU start, one bounded attempt** (mainline steps 2-12 in the doc): TCM retention,
+   After the additional 0096 IRQ/fence measurement, **GMU start, one bounded attempt** (mainline steps 2-12 in the doc): TCM retention,
    RSCC wake handshake (`REQ=BIT(1)`, ACK bit 1, `SEQ_BUSY`==0), fw (already done),
    boot config, HFI table address, fence range, `CM3_CFG=0x4052`, chip id, log
    address, power config, then `SYSRESET` 1 -> 0 and poll `FW_INIT_RESULT` (10 ms
@@ -93,7 +100,7 @@ announce lines are the evidence. Make the next build smaller, not bigger.
 
 1. Edit `bsd/dev/sweet_gpu.c` (and, if needed, `sweet_rpmh.c`) in the **isolated tree**
    `/run/media/dipa/android/ios-extra-work/buildtree/xnu`. Its local git has one commit
-   per CI-validated baseline (latest `85017d8` = 0094; 0095 is the uncommitted diff).
+   per CI-validated baseline (latest `4be318c` = 0095; 0096 is the uncommitted diff).
    Before starting a new step, commit the validated state there:
    `git add -A bsd/dev/sweet_gpu.c && git -c user.name=ios-extra -c
    user.email=ios-extra@localhost commit -m "Validated 009N baseline"`. The untracked
