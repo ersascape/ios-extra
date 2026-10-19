@@ -5,6 +5,94 @@ CI runs, phone results and the reasoning at the time. The current state and the 
 action are in [NOTES.md](../NOTES.md) and [HANDOFF.md](../HANDOFF.md). Entries that say
 "not yet built/booted" were true when written; newer entries supersede them.
 
+## Phone result — 0093 GMU buffers and ATOS, 2026-10-19 17:43 UTC
+
+- Checked `fastboot devices` first (serial redacted): exactly one device already
+  in fastboot. Announced and ran the authorized pending test. The helper rechecked
+  before the single temporary boot; no flash or reboot command was issued.
+- Boot issued 17:43:38 UTC; send 0.418s, boot 0.138s, total 0.564s; ping succeeds.
+  `shim/out/shim-boot-0093-gmubuffers.img`, SHA256
+  `dd4f6de48318e94e0dee5933467a998ec9ec6c90f352f9e050168b3202304f7a`,
+  mode 11; CI 39293204273, built source ab7a61d (implementation c053da3).
+- Capture: 452 UDP packets, 187544 decoded bytes. Local/ignored files:
+  `ios-extra-work/logs/phone-0093-gmubuffers.{pcap,txt}` and
+  `phone-0093-gmubuffers-fastboot.txt`. Initial report 0 is partial; all 29 ATOS
+  results and all 20 write/readbacks below are from cached report 1. No panic
+  marker observed. **Home-screen confirmation pending.**
+- **Measured:** allocation PA 0x104664000, 64 KiB; dummy/debug/log/HFI IOVAs
+  0x60000000/0x60001000/0x60005000/0x60009000. All 26 mapped-page endpoints
+  translate to the expected 13 physical pages; adjacent/unrelated addresses fault.
+  `stage=3 checks=29/29 passed=29 inactive=1 restored=0`. FSR=0, sGFSR=0.
+  Final SMR/S2CR/SCTLR/CBAR=0/3/0/0x10000: no active mapping, the known two inert
+  restore differences remain. Firmware 8192/8192 words, bad=0; CM3 reset=1.
+  CX complete/rolled back; clock stage=8 restored=1. RSC init still has the same
+  nine constrained readbacks and successful stop status 0x01010006.
+- **Diagnostic limitation measured:** the saved incoming CBAR value promotes to
+  `0xfffffe8f00000000` in one `buffers wr` line, although its low 32 bits are 0.
+  This is the earlier dirty-upper-bit anomaly now on a *saved expected value*;
+  the 0093 explicit AND only normalizes the readback. This is a 32-bit MMIO store
+  (low word 0), not a 64-bit write of that displayed value. Preserve the raw line;
+  normalize the diagnostic's narrow expected value before comparing/logging in the
+  next patch. No change to the known final CBAR=0x10000 observation.
+- **Gate passed:** SMMU ATOS verifies the full buffer map. This still does not prove
+  GMU-master traffic through stream 5; CM3/GX have never run. Next is the separate
+  read-only pre-boot register inventory, before any GMU release.
+
+```text
+SWEET GPU: buffers pa=0x104664000 bytes=0x10000 stage=3 checks=29/29 passed=29 inactive=1 restored=0
+SWEET GPU: buffers IOVA dummy/debug/log/HFI=0x60000000/0x60001000/0x60005000/0x60009000 sizes=4096/16384/16384/16384 HFI-size=120
+SWEET GPU: buffers ATOS va=0x60000000 PAR=0x4000000104667b80 expect=mapped
+SWEET GPU: buffers ATOS va=0x60000fff PAR=0x104667b80 expect=mapped
+SWEET GPU: buffers ATOS va=0x60001000 PAR=0x104668b80 expect=mapped
+SWEET GPU: buffers ATOS va=0x60001fff PAR=0x104668b80 expect=mapped
+SWEET GPU: buffers ATOS va=0x60002000 PAR=0x104669b80 expect=mapped
+SWEET GPU: buffers ATOS va=0x60002fff PAR=0x104669b80 expect=mapped
+SWEET GPU: buffers ATOS va=0x60003000 PAR=0x10466ab80 expect=mapped
+SWEET GPU: buffers ATOS va=0x60003fff PAR=0x10466ab80 expect=mapped
+SWEET GPU: buffers ATOS va=0x60004000 PAR=0x10466bb80 expect=mapped
+SWEET GPU: buffers ATOS va=0x60004fff PAR=0x10466bb80 expect=mapped
+SWEET GPU: buffers ATOS va=0x60005000 PAR=0x10466cb80 expect=mapped
+SWEET GPU: buffers ATOS va=0x60005fff PAR=0x10466cb80 expect=mapped
+SWEET GPU: buffers ATOS va=0x60006000 PAR=0x400000010466db80 expect=mapped
+SWEET GPU: buffers ATOS va=0x60006fff PAR=0x10466db80 expect=mapped
+SWEET GPU: buffers ATOS va=0x60007000 PAR=0x10466eb80 expect=mapped
+SWEET GPU: buffers ATOS va=0x60007fff PAR=0x10466eb80 expect=mapped
+SWEET GPU: buffers ATOS va=0x60008000 PAR=0x10466fb80 expect=mapped
+SWEET GPU: buffers ATOS va=0x60008fff PAR=0x10466fb80 expect=mapped
+SWEET GPU: buffers ATOS va=0x60009000 PAR=0x104670b80 expect=mapped
+SWEET GPU: buffers ATOS va=0x60009fff PAR=0x104670b80 expect=mapped
+SWEET GPU: buffers ATOS va=0x6000a000 PAR=0x104671b80 expect=mapped
+SWEET GPU: buffers ATOS va=0x6000afff PAR=0x104671b80 expect=mapped
+SWEET GPU: buffers ATOS va=0x6000b000 PAR=0x104672b80 expect=mapped
+SWEET GPU: buffers ATOS va=0x6000bfff PAR=0x104672b80 expect=mapped
+SWEET GPU: buffers ATOS va=0x6000c000 PAR=0x4000000104673b80 expect=mapped
+SWEET GPU: buffers ATOS va=0x6000cfff PAR=0x104673b80 expect=mapped
+SWEET GPU: buffers ATOS va=0x5ffff000 PAR=0x204673a03 expect=fault
+SWEET GPU: buffers ATOS va=0x6000d000 PAR=0x304673a03 expect=fault
+SWEET GPU: buffers ATOS va=0x20000000 PAR=0x104673a03 expect=fault
+SWEET GPU: buffers wr +0x180c wrote=0x1 got=0x1
+SWEET GPU: buffers wr +0x100c wrote=0x10000 got=0x10000
+SWEET GPU: buffers wr +0xb010 wrote=0x1 got=0x1
+SWEET GPU: buffers wr +0xb030 wrote=0x802020 got=0x802020
+SWEET GPU: buffers wr +0xb020 wrote=0x104664000 got=0x104664000
+SWEET GPU: buffers wr +0xb038 wrote=0x44 got=0x44
+SWEET GPU: buffers wr +0xb03c wrote=0x0 got=0x0
+SWEET GPU: buffers wr +0xb000 wrote=0x27 got=0x27
+SWEET GPU: buffers wr +0xc0c wrote=0x3 got=0x3
+SWEET GPU: buffers wr +0x80c wrote=0x80000005 got=0x80000005
+SWEET GPU: buffers wr +0x80c wrote=0x0 got=0x0
+SWEET GPU: buffers wr +0xb000 wrote=0x0 got=0x0
+SWEET GPU: buffers wr +0xb020 wrote=0x0 got=0x0
+SWEET GPU: buffers wr +0xb010 wrote=0x0 got=0x0
+SWEET GPU: buffers wr +0xb030 wrote=0x0 got=0x0
+SWEET GPU: buffers wr +0xb038 wrote=0x0 got=0x0
+SWEET GPU: buffers wr +0xb03c wrote=0x0 got=0x0
+SWEET GPU: buffers wr +0x180c wrote=0x0 got=0x0
+SWEET GPU: buffers wr +0xc0c wrote=0x200ff got=0x3 MISMATCH
+SWEET GPU: buffers wr +0x100c wrote=0xfffffe8f00000000 got=0x10000 MISMATCH
+SWEET GPU: buffers final SMR/S2CR/SCTLR/CBAR=0x0/0x3/0x0/0x10000 FSR=0x0 sGFSR=0x0 result: ATOS verified; CM3 reset; mapping disabled
+```
+
 ## 0093 full build and packaged image — 2026-10-19
 
 - User confirmed the repo had been made private overnight and requested public

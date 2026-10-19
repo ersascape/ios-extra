@@ -126,6 +126,18 @@ in this session), `iommus = <&adreno_smmu 5 0x400>` (stream 5, mask `0x400`); th
 Xiaomi DT lists GMU user/kernel streams 4/5. Our tests matched stream 5 exactly (SMR mask 0) and
 never ran a master through it.
 
+### 0093 buffer-map measurement
+
+**Phone measured (2026-10-19):** 64 KiB allocation at PA 0x104664000, containing
+3 table pages then the 13 pages for dummy/debug/log/HFI. IOVAs
+0x60000000 / 0x60001000 / 0x60005000 / 0x60009000, sizes 4/16/16/16 KiB.
+ATOS returns the right physical page for both ends of each page (26 checks),
+faults at 0x5ffff000 / 0x6000d000 / 0x20000000 (3 checks); passed=29.
+Mapping disabled at end: SMR3=0, SCTLR=0; S2CR3=3 / CBAR3=0x10000 retain the known
+inert encodings (inactive=1, restored=0). FSR/sGFSR both 0. CM3 stays in reset;
+this is still ATOS proof, not GMU-master proof. HFI initialization is source/host
+validated, not firmware-consumed. Full raw PARs/write transcript in GPU_LOG.
+
 ## GPU SMMU facts (0087-0089)
 
 **Measured, before any programming:** `sCR0 0x00200626`, `sCR1/sCR2/sACR 0`,

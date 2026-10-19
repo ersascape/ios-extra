@@ -1,6 +1,6 @@
 # ios-extra — current state
 
-Last updated 2026-10-19 after 0092 phone result and 0093 local validation. Read [HANDOFF.md](HANDOFF.md) for how to
+Last updated 2026-10-19 after the 0093 phone test. Read [HANDOFF.md](HANDOFF.md) for how to
 continue and [AGENTS.md](AGENTS.md) for the rules. The per-step history (images,
 hashes, CI runs, raw numbers) is [docs/GPU_LOG.md](docs/GPU_LOG.md); the hardware and
 mainline reference is [docs/GPU_GMU_BOOT.md](docs/GPU_GMU_BOOT.md); the per-patch
@@ -32,7 +32,7 @@ GitHub now confirms public. Kernel builds use this repo's GitHub Actions
 | 0090 | 9 | read-only RSC/PDC inventory | 39169517724 | ok |
 | 0091 | 10 | mainline A618 RSC/PDC init (48 writes, readback), RSC stop handshake | 39170396365 | handshake ok, 9/48 writes did not read back |
 | 0092 | 10 | same, logs every mismatch + reads the table first | 39171199100 | stop handshake ok; all 9 mismatches identified |
-| 0093 | 11 | 13 GMU buffer pages, mainline HFI layout, 29 ATOS checks | 39293204273 **passed** | not booted |
+| 0093 | 11 | 13 GMU buffer pages, mainline HFI layout, 29 ATOS checks | 39293204273 **passed** | 29/29 ATOS; inactive=1, restored=0 |
 
 The user confirmed the home screen after every boot up to 0092. Each stage runs
 inside the previous one's window (`sweetgpu=N` includes all lower modes) and undoes
@@ -44,40 +44,16 @@ Rendering is still CPU. The GMU processor has never been released from reset.
 
 ## Immediate next action
 
-0092 was temporarily booted at 16:55:16 UTC; ping and complete cached GPU report
-received. The user confirmed the home screen. Raw values are in
-[docs/GPU_LOG.md](docs/GPU_LOG.md). The 34/48 pre-write differences show the 0091
-RSC/PDC configuration did not persist through this boot path. Nine mismatches:
-RSCC hidden addresses +0x23034/3c/44 retain 0x82204514/10/20; six PDC MSGID words
-read 0x10100 after 0x10108 writes. Stop handshake succeeds (0x01010006).
+0093 phone test passed the memory-map gate: all 29 ATOS checks match; final
+SMR/S2CR/SCTLR/CBAR=0/3/0/0x10000, inactive=1, restored=0, FSR/sGFSR=0. Home-screen
+confirmation is pending. Raw values and diagnostic limits are in GPU_LOG.
+A saved CBAR value again carried dirty upper bits when logged as 64-bit; the actual
+store was 32-bit low-word 0. Normalize narrow expected diagnostics next.
 
-Step 1 interpretation is written in docs/GPU_GMU_BOOT.md: exact constrained
-readbacks, ownership unresolved, stop handshake proven, wake/votes not proven.
-0093 (`sweetgpu=11`) implements the separate GMU-buffer / 29-check ATOS test;
-normal and ASan/UBSan host tests pass, local arm64 compile 0 of 1 files failed.
-Source implementation commit `c053da3cfae8a4fe053499fee7ad01bb68b61cfd` is pushed.
-The first CI run 39290944708 skipped while the repo was private overnight. With
-public visibility restored at the user's request, full CI
-[39293204273](https://github.com/dipa-studio/ios-extra/actions/runs/39293204273)
-**passed** on `ab7a61da02cb91b0f87cf1a372939fabf73e3a59` (same patch/source).
-CI GPU/RPMh source and staged firmware header match the isolated tree byte-for-byte;
-kernel hash and GPU/RPMh symbols verified. Packaged/round-trip-verified image:
-`shim/out/shim-boot-0093-gmubuffers.img`, SHA256
-`dd4f6de48318e94e0dee5933467a998ec9ec6c90f352f9e050168b3202304f7a`.
-**Not booted yet.** Asked the user for a new fastboot; once confirmed run:
-
-```sh
-python3 tools/gpu-phone-test.py --image shim/out/shim-boot-0093-gmubuffers.img \
-  --sha256 dd4f6de48318e94e0dee5933467a998ec9ec6c90f352f9e050168b3202304f7a \
-  --name phone-0093-gmubuffers
-```
-
-Require `buffers` checks=29/29, passed=29, inactive=1; distinguish restored=0
-with only the known inert S2CR/CBAR difference from a rollback error. Capture every
-raw PAR and write/readback from the first complete replay. Ask for home screen.
-
-Source baseline in isolated XNU git: 60d4b0e (validated 0092).
-Do not repeat 0092 or release CM3 merely because diagnostics completed.
+Continue HANDOFF step 3: a separate opt-in read-only pre-boot GMU register dump,
+with CM3 still reset and all earlier rollbacks intact. No GMU release or GX power
+has occurred. 0093 source/build/image identity is recorded in GPU_LOG; isolated
+source baseline before 0093 is 60d4b0e (validated 0092), with 0093 as its diff.
 
 ## Hard constraints (unchanged)
 
