@@ -308,4 +308,5 @@ Host checks compare all 29 offsets and snapshot values, prove no GMU/SMMU memory
 changes or MMIO stores in the dump and every refusal, and cover mode-11 exclusion,
 missing GMU/SMMU map, failed buffer gate, full mode-12 rollback and replay without
 new allocations/writes. Normal and ASan/UBSan suites pass; local arm64 compile
-passes. These are source/host results; full CI and phone inventory remain pending.
+passes. Full CI 39297388718 subsequently passed with matching source artifacts;
+0094 phone inventory remains pending.

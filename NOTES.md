@@ -1,6 +1,6 @@
 # ios-extra — current state
 
-Last updated 2026-10-19 after the 0093 phone test. Read [HANDOFF.md](HANDOFF.md) for how to
+Last updated 2026-10-19 after 0093 phone result and verified 0094 build. Read [HANDOFF.md](HANDOFF.md) for how to
 continue and [AGENTS.md](AGENTS.md) for the rules. The per-step history (images,
 hashes, CI runs, raw numbers) is [docs/GPU_LOG.md](docs/GPU_LOG.md); the hardware and
 mainline reference is [docs/GPU_GMU_BOOT.md](docs/GPU_GMU_BOOT.md); the per-patch
@@ -33,6 +33,7 @@ GitHub now confirms public. Kernel builds use this repo's GitHub Actions
 | 0091 | 10 | mainline A618 RSC/PDC init (48 writes, readback), RSC stop handshake | 39170396365 | handshake ok, 9/48 writes did not read back |
 | 0092 | 10 | same, logs every mismatch + reads the table first | 39171199100 | stop handshake ok; all 9 mismatches identified |
 | 0093 | 11 | 13 GMU buffer pages, mainline HFI layout, 29 ATOS checks | 39293204273 **passed** | 29/29 ATOS; inactive=1, restored=0 |
+| 0094 | 12 | read-only inventory of 29 pre-boot GMU registers | 39297388718 **passed** | not booted |
 
 The user confirmed the home screen after every boot up to 0093. Each stage runs
 inside the previous one's window (`sweetgpu=N` includes all lower modes) and undoes
@@ -45,14 +46,29 @@ Rendering is still CPU. The GMU processor has never been released from reset.
 ## Immediate next action
 
 0093 phone test passed the memory-map gate: all 29 ATOS checks match; final
-SMR/S2CR/SCTLR/CBAR=0/3/0/0x10000, inactive=1, restored=0, FSR/sGFSR=0. The user confirmed the home screen. Raw values and diagnostic limits are in GPU_LOG.
+SMR/S2CR/SCTLR/CBAR=0/3/0/0x10000, inactive=1, restored=0, FSR/sGFSR=0. The user
+confirmed the home screen. Raw values and diagnostic limits are in GPU_LOG.
 A saved CBAR value again carried dirty upper bits when logged as 64-bit; the actual
-store was 32-bit low-word 0. 0094 normalizes narrow expected diagnostics without changing their MMIO value.
+store was 32-bit low-word 0. 0094 normalizes narrow expected diagnostics without
+changing their MMIO value.
 
 0094 implements HANDOFF step 3: a separate opt-in (`sweetgpu=12`) read-only dump
 of 29 pre-boot GMU registers, with CM3 still reset and all earlier rollbacks intact.
-Normal/sanitized host tests pass; arm64 compile passes. Full CI and phone pending. No GMU release or GX power
-has occurred. 0093 source/build/image identity is recorded in GPU_LOG; isolated
+Normal/sanitized host tests and arm64 compile pass. Full CI
+[39297388718](https://github.com/dipa-studio/ios-extra/actions/runs/39297388718)
+passed on 8104c7466c39d66b3169f1c420ac630312c8eb02. Kernel hash/symbols verified;
+CI source/firmware byte-identical to the tested isolated tree. Packaged image
+round-trips correctly. **Not booted yet.** Fastboot check found zero devices;
+asked the user to enter fastboot. On confirmation, recheck then run:
+
+```sh
+python3 tools/gpu-phone-test.py --image shim/out/shim-boot-0094-gmupreboot.img \
+  --sha256 f1d9e4f9db5f8c468803135b591cf1b1dc9c1dc4d58512f91378746cbb2bf9c0 \
+  --name phone-0094-gmupreboot
+```
+
+Record all 29 pre-boot values, buffer/rollback results and home-screen answer.
+No GMU release or GX power has occurred. 0093 source/build/image identity is recorded in GPU_LOG; isolated
 source baseline is d3a6423 (validated 0093), with 0094 as its working diff.
 
 ## User-visible iOS observation (2026-10-19)

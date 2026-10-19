@@ -40,18 +40,29 @@ has never been powered. 0093 passed its phone test at 17:43:38 UTC: all 29 ATOS 
 restored=0 with the known inert S2CR/CBAR residue, FSR/sGFSR=0; raw values in GPU_LOG.
 The user confirmed the home screen, but reports missing wallpaper and some white
 Settings/widgets (see NOTES); cause unestablished. Continue GPU as requested.
-No CM3 release or GX power. 0094 implements the separate
-read-only pre-boot register dump (step 3), with normal/sanitized host tests and local
-arm64 compile passing. It also fixes the narrow expected-value diagnostic that
-carried dirty CBAR upper bits in 0093, without changing the 32-bit MMIO value.
+0094 implements the separate read-only pre-boot register dump (step 3). Normal/sanitized host tests and local
+arm64 compile pass; full CI 39297388718 passed on 8104c74 and its source/firmware
+match the tested isolated files byte-for-byte. The image is packaged and verified,
+but not booted. This also normalizes the narrow expected diagnostic for CBAR;
+its low 32-bit MMIO value is unchanged.
 
 ## Immediate next action
 
-Build 0094 (`sweetgpu=12`) in this repo's CI; verify source/kernel artifacts and
-package it. **Check fastboot before asking the user**; boot once if exactly one
-is already present and the pending test is authorized, otherwise ask for fastboot.
-Record all 29 `pre-boot GMU` values and home-screen result. Do not release CM3 in
-this experiment. 0093 home screen is confirmed; preserve the separate UI observation in NOTES.
+Checked fastboot: zero devices. Asked the user to enter fastboot. When ready,
+recheck first, then run the one temporary 0094 test:
+
+```sh
+python3 tools/gpu-phone-test.py --image shim/out/shim-boot-0094-gmupreboot.img \
+  --sha256 f1d9e4f9db5f8c468803135b591cf1b1dc9c1dc4d58512f91378746cbb2bf9c0 \
+  --name phone-0094-gmupreboot
+```
+
+Record all 29 `pre-boot GMU` values from the first complete cached report, especially
+DTCM_FW_VERSION +0xafe0, CM3_BOOT_CONFIG, GENERAL_7, RPMH_CTRL and fence/HFI/log
+controls. Record buffer/rollback state and ask for home screen. No CM3 release in
+this test. Only after this measurement, design step 4 against the observed values;
+mainline's initial idle level is ACTIVE (see GPU_GMU_BOOT source clarification).
+Preserve the separate UI observation in NOTES; user asked to continue GPU work.
 
 ## Next steps (each is its own measured patch; do not merge steps)
 
@@ -157,9 +168,9 @@ the user's words "home screen" for the boot confirmation they give.
 > `docs/GPU_GMU_BOOT.md`; `docs/GPU_LOG.md` is history. Do not touch
 > `/home/dipa/ios-sweet`. The phone is only ever booted with a temporary
 > `fastboot boot` after the user puts it in fastboot; never flash, never run
-> `fastboot getvar`, never reboot it unannounced. The next action is the pending 0092
-> test (`tools/gpu-phone-test.py`, command in `HANDOFF.md`); ask the user for
-> fastboot, run it, record the raw values, then continue with the numbered "Next
+> `fastboot getvar`, never reboot it unannounced. The next action is the pending 0094
+> read-only test (`tools/gpu-phone-test.py`, command in `HANDOFF.md`); always check
+> fastboot first, ask only if none is present, run it, record raw values, then continue with the numbered "Next
 > steps", one measured patch per phone boot. Test every precondition, keep every
 > experiment opt-in (`sweetgpu=N`) and rolled back, distinguish source reading /
 > green build / phone result, and add no attribution text to commits or docs.

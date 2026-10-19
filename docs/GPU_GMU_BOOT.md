@@ -9,7 +9,7 @@ Source reading is not hardware proof: keep those separate when you add to this f
 ## Sources
 
 - Mainline Linux v6.12 `drivers/gpu/drm/msm/adreno/{a6xx_gmu.c,a6xx_gmu.h,a6xx_hfi.c,
-  a6xx_hfi.h,a6xx_gpu.c,adreno_gpu.c}` and `registers/adreno/{a6xx_gmu.xml,a6xx.xml}`,
+  a6xx_hfi.h,a6xx_gpu.c,adreno_gpu.c,a6xx_catalog.c}` and `registers/adreno/{a6xx_gmu.xml,a6xx.xml}`,
   fetched from git.kernel.org into `/run/media/dipa/android/ios-extra-work/gpu-fw/`
   (raw.githubusercontent.com rate-limits with HTTP 429; use
   `https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/plain/<path>?h=v6.12`).
@@ -106,6 +106,25 @@ From `a6xx_gmu_fw_start()`, `a6xx_gmu_start()`, `a6xx_rpmh_start()`,
 16. OOB protocol (`a6xx_gmu_set_oob`): write `1 << request` to `HOST2GMU_INTR_SET`;
     poll `GMU2HOST_INTR_INFO` for `1 << ack`; write that bit to `GMU2HOST_INTR_CLR`.
     Legacy bits: `GPU_SET` request 16 / ack 24; others in `a6xx_gmu_oob_bits[]`.
+
+**Source clarification for the first attempt:** v6.12 `a6xx_gmu_init()` sets
+`gmu->idle_level = GMU_IDLE_STATE_ACTIVE`. With that initial level, power_config
+writes SYS_BUS/ICACHE/DCACHE=1 and INTER_FRAME_CTRL=0x09c40400, then enables the
+RPMH client bits; its SPTP/IFPC switch cases do not run, so it does **not** write
+the two hysteresis registers or add their control bits. The 0094 inventory still
+reads those registers to establish their initial values. Preserve this source
+ordering/initial idle choice when implementing a first start; reading them does
+not authorize changing idle policy.
+
+**Source check of chip identity:** v6.12
+[`a6xx_catalog.c`](https://github.com/torvalds/linux/blob/v6.12/drivers/gpu/drm/msm/adreno/a6xx_catalog.c)
+(git blob `0312b6ee0356be276fdc7eae1a51a8e585b214c3`, external copy in `gpu-fw/`)
+has an SM7150-specific entry for chip 0x06010800 using a630_gmu.bin / a630_sqe.fw
+and no `gmu_chipid` override. Thus the mainline formula gives HFI_SFR_ADDR
+0x06018000 for this chip. This value is computed from source, not written or
+phone-measured yet. The XML's RPMH enable positions used by power_config are
+0,4,8,9,10,11 (OR mask 0x00000f11); preserve other bits with read/modify/write.
+Do not add the MIN_VOTE enables at bits 12..15.
 
 Not yet read in detail: HFI message formats/versions, the GX/CX/MX ARC vote
 table construction (`a6xx_gmu_rpmh_arc_votes_init`: built from `cmd_db_read_aux_data`

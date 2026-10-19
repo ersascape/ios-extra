@@ -5,6 +5,28 @@ CI runs, phone results and the reasoning at the time. The current state and the 
 action are in [NOTES.md](../NOTES.md) and [HANDOFF.md](../HANDOFF.md). Entries that say
 "not yet built/booted" were true when written; newer entries supersede them.
 
+## 0094 full build and verified image — 2026-10-19
+
+- Full [CI 39297388718](https://github.com/dipa-studio/ios-extra/actions/runs/39297388718)
+  **passed** on `8104c7466c39d66b3169f1c420ac630312c8eb02`.
+- Kernel SHA256 `3622b9ac5798f146a514d54f61c7ae191e8275f238d51f0c95233c724a1d0711`;
+  SHA256SUMS check passed. `_sweet_gpu_probe` at 0xfffffe00074fa838 and
+  `_sweet_rpmh_arc_set` at 0xfffffe00074f8548. Artifacts local/ignored in
+  `ios-extra-work/out-0094` and `ci-0094`.
+- CI GPU source SHA256 `3caa2f49b2c160a4d8b5b08621fe6caedc189a5fde334aaed40a1535101d3ad4`;
+  staged firmware header `2c76898351726399ac212d29c3ca7670786ad00c77e5be28da3b847af0baedf2`;
+  RPMh source `fc3669172ee14592cbee2f4312450e68ca9eac7870612d7d669fa2872bf404ca`.
+  All three byte-identical to locally tested isolated files.
+- Image `shim/out/shim-boot-0094-gmupreboot.img`, 17268736 bytes, SHA256
+  `f1d9e4f9db5f8c468803135b591cf1b1dc9c1dc4d58512f91378746cbb2bf9c0`,
+  mode 12, source/CI identity in `shim/out/manifest-0094.json`. Unpacked payload
+  and command-line round-trip passed. **Not booted yet.**
+- Checked fastboot first (serials not displayed/stored): zero devices; asked the
+  user to enter fastboot. No reboot issued. Phone last tested on 0093, whose
+  home screen is now confirmed; separate UI limitations are recorded in NOTES.
+- Pruned reproducible 0092 kernel/buildtree/image/payload/unpack-check artifacts;
+  preserved manifests and all phone logs, working 0093 and pending 0094 artifacts.
+
 ## Implementation — 0094 read-only GMU pre-boot inventory (local checks pass)
 
 - `0094-sweet-gpu-gmu-preboot-inventory.patch`, `sweetgpu=12`, isolated baseline
