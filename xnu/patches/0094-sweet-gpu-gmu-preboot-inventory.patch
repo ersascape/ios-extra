@@ -1,0 +1,141 @@
+diff --git a/bsd/dev/sweet_gpu.c b/bsd/dev/sweet_gpu.c
+index 6b3a436..762102d 100644
+--- a/bsd/dev/sweet_gpu.c
++++ b/bsd/dev/sweet_gpu.c
+@@ -40,6 +40,8 @@
+  * sweetgpu=11 replaces the single-page SMMU test with dummy/debug/log/HFI buffers,
+  * mainline legacy HFI headers, 13 page mappings and bounded ATOS checks. No master
+  * runs; stream/context controls are restored (known inert S2CR/CBAR exception).
++ * sweetgpu=12 also snapshots the GMU pre-boot configuration and diagnostics, read-only,
++ * after the buffer mapping is disabled and with CM3 verified held in reset.
+  * Register provenance and limitations: ios-extra/docs/GPU_BRINGUP.md.
+  */
+ #if defined(ARM64_BOARD_CONFIG_SWEET)
+@@ -167,6 +169,43 @@ struct gpu_arc_inventory {
+ 	struct gpu_arc_resource resource[GPU_ARC_RESOURCES];
+ };
+ 
++/* v6.12 a6xx_gmu.xml dword indexes * 4; RSCC SEQ_BUSY includes its 0x23000 base.
++ * DTCM_FW_VERSION is DTCM_START (GMU +0x7000) + 0xff8 dwords, as a6xx_gmu_start.
++ * Only inventory: no start configuration, wake request, HFI trigger or CM3 release. */
++static const struct { const char *name; uint32_t off; } gpu_preboot_regs[] = {
++	{ "GENERAL_7", 0x51cc * 4 },
++	{ "RSCC_CONTROL_REQ", 0x9307 * 4 },
++	{ "RSCC_CONTROL_ACK", 0x9308 * 4 },
++	{ "RSCC_SEQ_BUSY_DRV0", GPU_RSCC_BASE + 0x0101 * 4 },
++	{ "CM3_SYSRESET", 0x5000 * 4 },
++	{ "CM3_BOOT_CONFIG", 0x5001 * 4 },
++	{ "CM3_FW_INIT_RESULT", 0x501c * 4 },
++	{ "CM3_FW_BUSY", 0x501a * 4 },
++	{ "DTCM_FW_VERSION", 0x7000 + 0xff8 * 4 },
++	{ "HFI_QTBL_ADDR", 0x5185 * 4 },
++	{ "HFI_QTBL_INFO", 0x5184 * 4 },
++	{ "AHB_FENCE_RANGE_0", 0x9311 * 4 },
++	{ "CM3_CFG", 0x502d * 4 },
++	{ "HFI_SFR_ADDR", 0x5182 * 4 },
++	{ "PWR_COL_CP_MSG", 0x5100 * 4 },
++	{ "PWR_COL_CP_RESP", 0x5101 * 4 },
++	{ "SYS_BUS_CONFIG", 0x4c0f * 4 },
++	{ "ICACHE_CONFIG", 0x4c00 * 4 },
++	{ "DCACHE_CONFIG", 0x4c01 * 4 },
++	{ "PWR_COL_INTER_FRAME_CTRL", 0x50c0 * 4 },
++	{ "PWR_COL_INTER_FRAME_HYST", 0x50c1 * 4 },
++	{ "PWR_COL_SPTPRAC_HYST", 0x50c2 * 4 },
++	{ "RPMH_CTRL", 0x50e8 * 4 },
++	{ "GENERAL_0", 0x51c5 * 4 },
++	{ "GENERAL_1", 0x51c6 * 4 },
++	{ "GENERAL_6", 0x51cb * 4 },
++	{ "AO_HOST_INTERRUPT_STATUS", 0x9305 * 4 },
++	{ "HFI_CTRL_INIT", 0x5186 * 4 },
++	{ "HFI_CTRL_STATUS", 0x5180 * 4 },
++};
++#define GPU_PREBOOT_READS (sizeof(gpu_preboot_regs) / sizeof(gpu_preboot_regs[0]))
++
++
+ /* 0093: memory and ATOS only. CM3 remains held in reset throughout. */
+ #define GPU_BUF_BYTES    0x10000u /* 3 table pages + 13 mapped 4 KiB pages */
+ #define GPU_BUF_PAGES    13u
+@@ -183,6 +222,9 @@ struct gpu_buffer_probe {
+ 
+ /* Cached outcome of the sweetgpu=3 CX experiment (0 = step not reached). */
+ struct gpu_power_experiment {
++	unsigned int preboot_requested, preboot_done;
++	const char *preboot_error;
++	uint32_t preboot_value[GPU_PREBOOT_READS];
+ 	struct gpu_buffer_probe buf;
+ 	unsigned int requested;
+ 	const char *error;
+@@ -682,6 +724,8 @@ gpu_buffer_set(vm_offset_t smmu, struct gpu_buffer_probe *b, uint32_t off, uint6
+ 		gpu_write64(smmu, off, value);
+ 		got = gpu_read64(smmu, off);
+ 	} else {
++		/* Saved 32-bit inputs can also carry dirty upper bits through EL2 reads. */
++		__asm__ volatile("and %0, %0, #0xffffffff" : "+r" (value));
+ 		gpu_write32(smmu, off, (uint32_t)value);
+ 		got = gpu_read32(smmu, off);
+ 		/* Force a real 64-bit mask even if EL2 left upper bits dirty after LDR W. */
+@@ -840,6 +884,27 @@ restore:
+ #undef BSET
+ }
+ 
++/* Read only after the already measured buffer test has disabled its mapping. */
++static void
++gpu_gmu_preboot_read(vm_offset_t gmu, struct gpu_power_experiment *x)
++{
++	x->preboot_requested = 1;
++	if (!x->buf.requested || x->buf.error || x->buf.stage != 3 ||
++	    x->buf.passed != GPU_BUF_CHECKS || x->buf.checks != GPU_BUF_CHECKS || !x->buf.inactive) {
++		x->preboot_error = "buffer/ATOS/inactive gate not satisfied; pre-boot dump skipped";
++		return;
++	}
++	if (gpu_read32(gmu, 0x14000) != 1 || gpu_read32(gmu, 0x14068) != 0) {
++		x->preboot_error = "CM3 reset/idle precondition failed; pre-boot dump skipped";
++		return;
++	}
++	for (unsigned int i = 0; i < GPU_PREBOOT_READS; i++) {
++		printf("SWEET GPU: reading pre-boot GMU %s +0x%x\n", gpu_preboot_regs[i].name, gpu_preboot_regs[i].off);
++		x->preboot_value[i] = gpu_read32(gmu, gpu_preboot_regs[i].off);
++		x->preboot_done = i + 1;
++	}
++}
++
+ /* One write of mainline's A618 a6xx_gmu_rpmh_init. region 0 = GMU block (RSCC base
+  * 0x23000 applied by the table), 1 = gmu_pdc, 2 = gmu_pdc_seq. off is a byte offset. */
+ static const struct { unsigned char region; uint32_t off; uint32_t value; } gpu_rpmh_init[] = {
+@@ -1032,6 +1097,9 @@ gpu_gmu_read(struct gpu_power_experiment *x, int mode)
+ 		vm_offset_t smmu = gpu_smmu_read(x);
+ 		if (smmu && mode >= 11) {
+ 			gpu_gmu_buffers(gmu, smmu, x);
++			if (mode >= 12) {
++				gpu_gmu_preboot_read(gmu, x);
++			}
+ 		} else if (smmu && mode >= 8) {
+ 			gpu_smmu_gmu_context(smmu, x);
+ 		}
+@@ -1267,6 +1335,15 @@ gpu_power_log(const struct gpu_power_experiment *x)
+ 		}
+ 		printf("SWEET GPU: SMMU micro-mmu +0x6000 = 0x%08x (read-only inventory)\n", x->smmu_micro);
+ 	}
++	if (x->preboot_requested) {
++		for (unsigned int i = 0; i < x->preboot_done; i++) {
++			printf("SWEET GPU: pre-boot GMU %s +0x%x = 0x%08x\n",
++			    gpu_preboot_regs[i].name, gpu_preboot_regs[i].off, x->preboot_value[i]);
++		}
++		printf("SWEET GPU: pre-boot GMU read=%u/%u result: %s\n", x->preboot_done,
++		    (unsigned int)GPU_PREBOOT_READS, x->preboot_error ? x->preboot_error :
++		    "read-only dump complete; no start writes or CM3 release");
++	}
+ 	if (x->buf.requested) {
+ 		const struct gpu_buffer_probe *b = &x->buf;
+ 		printf("SWEET GPU: buffers pa=0x%llx bytes=0x%x stage=%u checks=%u/%u passed=%u inactive=%u restored=%u\n",
+@@ -1544,8 +1621,8 @@ sweet_gpu_probe(void)
+ 	if (!PE_parse_boot_argn("sweetgpu", &mode, sizeof(mode)) || mode == 0) {
+ 		return;
+ 	}
+-	if (mode < 1 || mode > 11) {
+-		printf("SWEET GPU: unsupported sweetgpu=%d (0=off, 1=clocks, 2=+ARC, 3=+CX, 4=+GMU clocks, 5=+GMU reads, 6=+GMU firmware to TCM, 7=+SMMU read, 8=+GMU SMMU context test, 9=+RSC/PDC read, 10=+RSC/PDC init, 11=GMU buffers/ATOS)\n", mode);
++	if (mode < 1 || mode > 12) {
++		printf("SWEET GPU: unsupported sweetgpu=%d (0=off, 1=clocks, 2=+ARC, 3=+CX, 4=+GMU clocks, 5=+GMU reads, 6=+GMU firmware to TCM, 7=+SMMU read, 8=+GMU SMMU context test, 9=+RSC/PDC read, 10=+RSC/PDC init, 11=GMU buffers/ATOS, 12=+pre-boot GMU reads)\n", mode);
+ 		return;
+ 	}
+ 	if (mode >= 2) {

@@ -48,12 +48,13 @@ Rendering is still CPU. The GMU processor has never been released from reset.
 SMR/S2CR/SCTLR/CBAR=0/3/0/0x10000, inactive=1, restored=0, FSR/sGFSR=0. Home-screen
 confirmation is pending. Raw values and diagnostic limits are in GPU_LOG.
 A saved CBAR value again carried dirty upper bits when logged as 64-bit; the actual
-store was 32-bit low-word 0. Normalize narrow expected diagnostics next.
+store was 32-bit low-word 0. 0094 normalizes narrow expected diagnostics without changing their MMIO value.
 
-Continue HANDOFF step 3: a separate opt-in read-only pre-boot GMU register dump,
-with CM3 still reset and all earlier rollbacks intact. No GMU release or GX power
+0094 implements HANDOFF step 3: a separate opt-in (`sweetgpu=12`) read-only dump
+of 29 pre-boot GMU registers, with CM3 still reset and all earlier rollbacks intact.
+Normal/sanitized host tests pass; arm64 compile passes. Full CI and phone pending. No GMU release or GX power
 has occurred. 0093 source/build/image identity is recorded in GPU_LOG; isolated
-source baseline before 0093 is 60d4b0e (validated 0092), with 0093 as its diff.
+source baseline is d3a6423 (validated 0093), with 0094 as its working diff.
 
 ## Hard constraints (unchanged)
 

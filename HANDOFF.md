@@ -36,28 +36,20 @@ Patches 0080-0092 are built and phone-tested. 0092 was temporarily booted on
 nine constrained RSC/PDC readbacks and a successful stop handshake (0x01010006).
 The init state did not persist through this boot path. Raw report in GPU_LOG;
 step 1 interpretation and limits in GPU_GMU_BOOT. CM3 remains held in reset and GX
-has never been powered. 0093 implements the separate opt-in GMU-buffer / ATOS experiment (step 2).
-Normal/sanitized host tests and local arm64 compile pass; full CI 39293204273
-**passed** on ab7a61d. CI GPU/RPMh source and firmware header match the isolated
-tree byte-for-byte. The first CI skipped while private overnight; the user
-requested restoring public visibility, now verified. The 0093 image is ready but
-not booted; do not repeat 0092.
+has never been powered. 0093 passed its phone test at 17:43:38 UTC: all 29 ATOS checks, inactive=1,
+restored=0 with the known inert S2CR/CBAR residue, FSR/sGFSR=0; raw values in GPU_LOG.
+Home-screen answer pending. No CM3 release or GX power. 0094 implements the separate
+read-only pre-boot register dump (step 3), with normal/sanitized host tests and local
+arm64 compile passing. It also fixes the narrow expected-value diagnostic that
+carried dirty CBAR upper bits in 0093, without changing the 32-bit MMIO value.
 
 ## Immediate next action
 
-The user has been asked for a fresh fastboot for 0093. After confirmation:
-
-```sh
-python3 tools/gpu-phone-test.py --image shim/out/shim-boot-0093-gmubuffers.img \
-  --sha256 dd4f6de48318e94e0dee5933467a998ec9ec6c90f352f9e050168b3202304f7a \
-  --name phone-0093-gmubuffers
-```
-
-Record all raw `buffers ATOS` and `buffers wr` lines from the first complete
-cached replay, `passed=29`, `inactive=1`, the final registers and result. A known
-inert S2CR/CBAR difference may give `restored=0`; it must not be confused with full
-restore. Ask for home screen, update NOTES/GPU_LOG, then step 3 (read-only pre-boot
-register inventory) as its own new measured patch. 0092 home screen is confirmed.
+Build 0094 (`sweetgpu=12`) in this repo's CI; verify source/kernel artifacts and
+package it. **Check fastboot before asking the user**; boot once if exactly one
+is already present and the pending test is authorized, otherwise ask for fastboot.
+Record all 29 `pre-boot GMU` values and home-screen result. Do not release CM3 in
+this experiment. Record 0093 home-screen answer when supplied.
 
 ## Next steps (each is its own measured patch; do not merge steps)
 
@@ -99,7 +91,7 @@ announce lines are the evidence. Make the next build smaller, not bigger.
 
 1. Edit `bsd/dev/sweet_gpu.c` (and, if needed, `sweet_rpmh.c`) in the **isolated tree**
    `/run/media/dipa/android/ios-extra-work/buildtree/xnu`. Its local git has one commit
-   per CI-validated baseline (latest `60d4b0e` = 0092; 0093 is the uncommitted diff).
+   per CI-validated baseline (latest `d3a6423` = 0093; 0094 is the uncommitted diff).
    Before starting a new step, commit the validated state there:
    `git add -A bsd/dev/sweet_gpu.c && git -c user.name=ios-extra -c
    user.email=ios-extra@localhost commit -m "Validated 009N baseline"`. The untracked

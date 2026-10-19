@@ -276,3 +276,36 @@ replay without new writes or allocations. The inherited RSC SEQ_BUSY refusal
 also now has its own test. Normal and ASan/UBSan suites and local arm64 compile
 pass. Full CI 39293204273 subsequently passed with matching source artifacts;
 0093 phone result remains pending.
+
+## 0094 — pre-boot GMU register inventory (`sweetgpu=12`)
+
+This is step 3, a separate measured patch after 0093's successful 29/29 ATOS
+phone result. It adds a cached read-only inventory of 29 registers covering every
+GMU control the first CM3 start will write, plus firmware-version and status words.
+No wake request, start configuration, HFI trigger or CM3 release is added.
+
+The table `gpu_preboot_regs[]` derives byte offsets directly from pinned v6.12
+`a6xx_gmu.xml` dword indices multiplied by four. RSCC SEQ_BUSY includes the known
+0x23000 base. The DTCM firmware-version word is 0x7000 + 0xff8*4 = 0xafe0, from
+`a6xx_gmu_start()`. The table includes GENERAL_0/1/6/7 (the A6xx names explicitly
+present in the XML); no guessed GENERAL_2..5 or A7xx-only offsets are read.
+
+The dump runs after the buffer experiment disabled the mapping, still inside the
+CX/GMU clock hold. Preconditions: buffer probe requested, no buffer error,
+stage=3, passed=29, completed checks=29, inactive=1; then recheck live CM3 reset=1
+and busy=0. Each condition has an independent refusal test with zero MMIO writes.
+Each read is announced just before the access and cached for USB replay. Unknown
+or unexpected values are printed as found; nothing is written to "fix" them.
+
+Also normalize the narrow expected value in `gpu_buffer_set` with an explicit
+ARM64 AND before the existing 32-bit store/comparison/log. On 0093, incoming
+CBAR=0 promoted to a 64-bit diagnostic with dirty upper bits. The actual store
+was already 32-bit zero; this fixes comparison/log width, not the MMIO value.
+A regression test injects the exact observed `0xfffffe8f00000000` input and checks
+that the expected diagnostic is 0 and the 32-bit store/readback remains 0.
+
+Host checks compare all 29 offsets and snapshot values, prove no GMU/SMMU memory
+changes or MMIO stores in the dump and every refusal, and cover mode-11 exclusion,
+missing GMU/SMMU map, failed buffer gate, full mode-12 rollback and replay without
+new allocations/writes. Normal and ASan/UBSan suites pass; local arm64 compile
+passes. These are source/host results; full CI and phone inventory remain pending.

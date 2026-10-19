@@ -5,6 +5,19 @@ CI runs, phone results and the reasoning at the time. The current state and the 
 action are in [NOTES.md](../NOTES.md) and [HANDOFF.md](../HANDOFF.md). Entries that say
 "not yet built/booted" were true when written; newer entries supersede them.
 
+## Implementation — 0094 read-only GMU pre-boot inventory (local checks pass)
+
+- `0094-sweet-gpu-gmu-preboot-inventory.patch`, `sweetgpu=12`, isolated baseline
+  d3a6423 (validated 0093). 29 source-verified offsets, including DTCM version
+  word +0xafe0, cached only after the buffer map is inactive and CM3 reset/idle
+  is rechecked. No start writes or processor release.
+- Normal and ASan/UBSan host suites pass: 29 offset/value checks, all 8 refusal
+  terms with zero writes, missing-map/failed-buffer exclusions, lower-mode
+  isolation and replay. Also tests the saved narrow CBAR diagnostic normalization
+  against the exact dirty input observed in 0093. Arm64 compile: 0 of 1 failed.
+- Full CI and phone result pending; source/build checks do not prove these new
+  registers are readable on the phone. Design: GPU_CX_EXPERIMENT.
+
 ## Phone result — 0093 GMU buffers and ATOS, 2026-10-19 17:43 UTC
 
 - Checked `fastboot devices` first (serial redacted): exactly one device already
