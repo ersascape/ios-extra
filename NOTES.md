@@ -278,3 +278,13 @@ error::ResourceWarning -m unittest discover -s tests` (also with
   implementation was SWEET-only. Expanded its build guard to FP6 in patch 0035;
   this preserves XML entitlement support and resolves the specific undefined symbols.
   New CI build pending.
+- Run `39414717734` at `48b58a5948a7c23e46022406eb5134e0da7f314d` completed successfully:
+  both the FP6 XNU build and `fp6-boot` packaging job passed. The run uploaded
+  `fp6-fastboot-boot` (shim boot image, SHA256SUMS and manifest), plus `xnu-kernel`
+  and `fp6-adt`. This confirms a kernel build and temporary-boot-image package only;
+  no phone boot has been performed for this image.
+- The user expanded the FP6 port goal to staged XNU support for CPU/SMP, timer/GIC,
+  display console, UFS storage, graphics/software rendering and USB/DWC3 networking
+  or serial. Work these subsystems one at a time; distinguish bootloader-provided
+  framebuffer splash from an XNU display driver. Fairphone 6 is SM7635 (Snapdragon
+  7s Gen 3), so the user's table's SM7450 label should not be used for this target.
