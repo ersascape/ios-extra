@@ -601,3 +601,27 @@ error::ResourceWarning -m unittest discover -s tests` (also with
   step is the user's temporary `fastboot boot` test, then use the resulting
   console/panic or root mount observation to tune the stream mapping and UFS
   command path.
+
+## FP6 UFS root HFS mount fix (2026-10-20)
+
+- User tested the UFS-root image from run `39439447885`. Phone output reported
+  `userdata` on LUN 0, first block `0x666d88`, 213586 MiB, read-only, and an
+  enabled SMMU stream entry for SID `0x60` (`SMR=0x80000060`). The selected
+  `ufsroot0` device was then followed by root mount failure `errno 19`
+  (`ENODEV`). This confirms discovery and root-device selection; SMMU mapping
+  was already present and preserved.
+- Traced the mount failure to FP6's generated master config: patch 0026 builds
+  and registers the Apple OSS HFS implementation only when `SWEET_HFS` is
+  enabled, but the new `MASTER.arm64.fp6` config omitted that option and the
+  `sweet_hfs` filesystem selection. Added patch
+  `0106-fp6-enable-hfs-root.patch` and pushed commit `4ce0c16`; it enables both
+  for FP6 so `vfs_mountroot` registers HFS.
+- CI run `39441508260` built successfully (build job `118692265513`, 7m30s).
+  As before, automated boot packaging skipped because `FP6_STOCK_DTB_URL` is
+  unset. Locally packaged the matching kernel/ADT and verified stock DTB as a
+  header-v2 UFS-root image:
+  `/tmp/fp6-hfs-39441508260/ufs-root/fp6-shim-ufs-root.img`, 23,396,352 bytes,
+  SHA256 `ed7d3aeaa163215c375f1eb11b7068e3399f3c263831c5a9013533f41d2f19fd`.
+  The manifest records kernel, ADT and DTB hashes and `rd=ufsroot0`; package
+  validation confirmed the embedded components. This HFS-enabled image has
+  not yet been booted on the phone.
