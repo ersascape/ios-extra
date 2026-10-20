@@ -1,0 +1,13 @@
+--- a/pexpert/pexpert/arm64/FP6.h
++++ b/pexpert/pexpert/arm64/FP6.h
+@@ -39,4 +39,10 @@
+ #define QCOM_VTIMER_INTID 27
+ #define QCOM_IPI_SGI 1
+ #define QCOM_BOOT_MAX_CPUS 8
++/*
++ * FP6 has distinct efficiency and performance CPU classes. Enable XNU's
++ * AMP scheduler; with HAS_CLUSTER unset, XNU groups these into E (0-3) and
++ * P (4-7) scheduling sets instead of preserving the physical 4/3/1 split.
++ */
++#define __ARM_AMP__ 1
+ /* GICv3 register definitions; see GICv3 spec (Arm IHI 0069G) */

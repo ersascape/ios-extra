@@ -8,29 +8,28 @@
   `cluster-type` to integer 0.
 - XNU's parser in patch 0099 recognizes ASCII `E`/`P` values for those types.
   Updated `tools/mkadt.py` to emit `E` for CPUs 0–3 and `P` for CPUs 4–7. This
-  corrects the topology metadata; it does not by itself enable AMP scheduling
-  or prove concurrent workload execution.
-- The ADT generator completed locally. A matching XNU CI build and fresh phone
-  boot are still needed. User previously reported eight CPUs up, but did not
-  provide the startup log that would verify each per-core PSCI and IPI message.
+  corrects the topology metadata. Patch 0108 now defines `__ARM_AMP__` in the
+  FP6 header so XNU builds its AMP/Edge scheduler and forms E/P scheduling sets.
+  With `HAS_CLUSTER` unset, the 4/3/1 physical layout is represented to the
+  scheduler as one E set (CPUs 0–3) and one P set (CPUs 4–7).
+- The ADT was generated locally; CI build and phone validation are pending.
+  User previously reported eight CPUs up, but did not provide the startup log
+  that would verify each per-core PSCI and IPI message. Scheduling on P cores
+  and a measured performance improvement remain unverified.
 
 ## FP6 boot log repetition (2026-10-20)
 
-- The user reports repeated launch messages for `bluetoothd`, `xpcproxy`, and
-  different AKS clients, alongside repeated HFS `set hardlink bit` messages
-  with the same CNID/inoid. These are separate symptoms: process-spawn logs do
-  not establish why a service is restarting, while HFS patch 0041 explains the
-  repeated link line as an in-memory flag repair that is emitted again on each
-  lookup; it does not persistently repair the catalog record. Follow-up
-  observation: AKS entries for `backboardd`, `familycircled`, and `securityd`
-  confirm those processes started and reached AKS calls; the earlier inference
-  that Backboard had not started was incorrect. SpringBoard/UI startup remains
-  unconfirmed.
-- Extended patch 0041's existing SWEET log limiter to FP6. It caps that
-  diagnostic at the first eight reports to prevent repeated catalog lookups
-  from flooding USB/console logs. This only limits logging; it does not fix
-  catalog metadata or the daemon restart causes. CI/build and phone validation
-  are pending.
+- The user's latest FP6 observation is only AKS calls from `backboardd`; there
+  is no confirmation yet for other AKS clients, SpringBoard, or UI startup.
+  The separate MediaTek-device screenshot is not FP6 evidence. AKS is the
+  AppleKeyStore interface; this tree already provides a built-in no-passcode
+  compatibility implementation without SEP-backed protection. `backboardd`
+  reaching it indicates the request path is present, but does not identify
+  whether the returned state is sufficient for display startup.
+- Repeated HFS hardlink messages and daemon-spawn output were seen earlier.
+  HFS patch 0041's limiter only caps diagnostic output and does not repair
+  catalog metadata. The user asked to defer that cap for now, so the FP6 guard
+  is removed from patch 0041 for the next build; SWEET's existing cap remains.
 
 ## FP6 SWEET userspace-enablement patch audit (2026-10-20)
 
@@ -40,9 +39,9 @@
   for FP6. The FP6 `MASTER.arm64.fp6` config introduced by patch 0099 already
   omits `config_ext_resolver`, matching the effective SWEET configuration from
   patch 0057. Neither behavior needs another source change.
-- Keep the HFS diagnostic limiter in patch 0041 as the only source change in
-  this build. It only caps repeated hardlink repair messages; it cannot explain
-  why the SpringBoard UI has not appeared.
+- Defer the FP6 HFS diagnostic limiter. The current source change for the next
+  build is the AMP scheduler enablement in patch 0108; whether it improves
+  scheduling/performance requires a boot and measurement.
 
 ## FP6 watchdogd service discovery (2026-10-20)
 
