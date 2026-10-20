@@ -357,3 +357,34 @@ error::ResourceWarning -m unittest discover -s tests` (also with
   FP6 DWC3/clock/PHY state report, then test endpoint-zero enumeration before
   adding CDC-ECM. The new root image must not be presented as a phone-tested
   result.
+
+
+## FP6 Qualcomm UFS and GPIO ADT (2026-10-20)
+
+- Started `0100-fp6-qcom-ufs-root.patch`: enables the existing UFSHCI driver
+  for FP6, labels its output QCOM UFS, keeps Sweet-only log/GPU/USB/touch/key
+  startup behind the SWEET board guard, rejects failed controller MMIO maps,
+  and adds an idempotent initializer with a read-only probe entry point. The
+  probe ignores `ufsrw`; root mode honors it only when explicitly requested.
+- `IOKitBSDInit.cpp` gains an opt-in `fp6ufsprobe=1` hook and FP6 `rd=ufsroot0`
+  routing. The probe image retains `rd=md0`; the root image omits the RAM disk
+  and leaves the existing Android `userdata` untouched. No image has been built
+  or booted from these changes.
+- Corrected `tools/mkadt.py` to match the FP6 stock DTB's Cliffs TLMM:
+  physical base `0x0f000000`, 16 MiB range, SPI 208, 179 GPIOs, reserved 56–60.
+  This replaces an incorrect Volcano-compatible/reserved-pin guess.
+- The FP6 bugreport identifies the touch controller as ESWIN EPH86xx on SPI0.0
+  at QUPv3 SE0 `0xa80000`; the Fairphone SM7635 modules contain its SPI driver.
+  Linux reports reset GPIO 364, but the TLMM mapping is not established and the
+  base stock DTB marks SPI0 disabled. Do not pulse reset or configure SPI until
+  the matching overlay and power/pin state are understood.
+- Added opt-in `fp6gpio=1` and `fp6touch=1` passive probes to the UFS-probe
+  image. They sample Cliffs GPIO input states (skipping reserved pins 56–60)
+  and report SPI0's handed-off device-tree status. They do not access the
+  disabled SPI block or write pin mux, clock, reset, or SPI command registers.
+  These are source changes only until the CI build and phone log; they are
+  diagnostics, not a touch event driver.
+- The packager/workflow create the RAM-disk baseline, read-only UFS probe, and
+  UFS-root attempt. CI has not run. FP6 USB gadget/debug transport and active
+  EPH86xx SPI/HID input remain unported; Sweet's SM7150 implementations are
+  still guarded from FP6.

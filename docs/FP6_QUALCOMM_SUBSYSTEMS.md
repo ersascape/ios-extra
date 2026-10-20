@@ -35,13 +35,22 @@ debug link and should remain out of the first experiment.
 
 | Block | What the board/kernel sources show | Bring-up assessment |
 | --- | --- | --- |
-| UFS | Qualcomm UFSHCI host with QMP UFS PHY; FP6 is configured for UFS storage. | High priority for iOS userspace. The existing SWEET UFS driver is tied to SM7150 registers. FP6 needs its own controller handoff/initialization and a media path XNU can mount. |
+| UFS | `qcom,ufshc` host at `0x1d84000`, QMP v4-crow PHY, UFS 3.1. | The first FP6 path reuses ABL's active UFSHCI link, takes over the transfer list, reads GPT and exposes `userdata` as `ufsroot0`. Probe mode issues only SCSI reads; root mode defaults to read-only. The controller handoff and sector format still need phone validation. |
 | RPMh / regulators / SPMI | Qualcomm RPMh clock, regulator and power-domain controllers, plus SPMI PMIC drivers. | Useful after kernel startup for safe power sequencing. Start with read-only state and a small, sourced regulator/clock change; this is not needed for the first RAM-disk init. |
 | Display | MIPI-DSI panel and Qualcomm display/GPU stack; bootloader supplies the initial framebuffer. | The bootloader framebuffer is a useful console. A live panel driver requires DSI, panel, clock, regulator and backlight sequencing. Keep the splash and an XNU display driver as separate milestones. |
 | GPU | Adreno 710 / Qualcomm KGSL path and firmware are present in Android sources. | Later work. The existing Adreno 618 experiments and UniXNU Adreno 740 stack are architectural references, not drop-in drivers for this GPU. |
-| Touch / keys | FP6 device tree identifies the board input hardware and its buses/interrupts. | A good peripheral driver after the root and debug paths; requires the board-specific controller and bus support. |
+| Touch / keys | The FP6 bugreport identifies `ESWIN EPH86XX Touchscreen` at SPI0.0 (`0xa80000` GENI SPI); the module is in Fairphone's SM7635 kernel sources. Linux reports reset GPIO 364, whose TLMM mapping still needs resolving. | First probe reports SPI0's handed-off DT status and samples Cliffs TLMM GPIO inputs. It avoids MMIO access to the disabled SPI block, pin-mux/clock/reset writes, and touch commands. Touch events need GENI SPI, IRQ/reset/power sequencing, and an IOKit HID service. |
 | Wi-Fi / Bluetooth | Device configuration references QCA6750 WLAN, WCN6450 connectivity and firmware/DSP components. | Complex and dependent on firmware, transport, power and vendor interfaces. Not an early XNU bring-up target. |
 | Audio / camera / cellular | Qualcomm DSP, codec, camera and modem subsystems with vendor services/firmware. | Much later. They depend on several working power, bus, DMA and userspace services. |
+
+## FP6 ADT GPIO node
+
+`tools/mkadt.py --device fp6` emits a `tlmm` node for the Qualcomm
+Cliffs GPIO controller: physical base `0x0f000000`, size `0x01000000`, GIC
+SPI 208, 179 GPIOs, and reserved pins 56–60 from the matching stock DTB. The node is nested
+under `/arm-io`; its `reg` address is translated through that node's `ranges`.
+This makes the SoC GPIO provider discoverable through the ADT. It does not
+configure pins or enable the Sweet board's GPIO code on FP6.
 
 ## iOS root image status
 
@@ -51,12 +60,14 @@ the volume appeared OK, and sparse-image inspection recognized the Android
 sparse format. This is a host-side image build only; the image has not been
 flashed or mounted by FP6 XNU.
 
-The tested FP6 boot path currently packages the kernel with a tiny `rd=md0`
-RAM-disk init. It does not yet provide FP6 UFS block storage or mount the HFS+
-image from `userdata`. Flashing the image now would overwrite the phone's
-existing `userdata` contents without making the current kernel boot that iOS
-root. Do not use `fastboot flash userdata` for this image yet. Keep testing with
-temporary `fastboot boot` images until the FP6 UFS and root-media path exist.
+The known FP6 image packages a tiny `rd=md0` RAM-disk init. The new packaging
+modes can create a read-only UFS probe image that returns to `md0`, and an
+`rd=ufsroot0` image with no RAM disk for the user's requested root-path attempt.
+These source changes have not yet been built by CI or run on the phone. Root mode
+uses UFS writes only if an explicit `ufsrw=1` boot argument is added; the
+packager does not add it. The current `userdata` still contains Android data, so
+HFS mount failure is expected. Do not flash the iOS image to `userdata` as part
+of this test.
 
 ## Source locations
 

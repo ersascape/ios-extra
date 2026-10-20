@@ -21,6 +21,11 @@ def main():
                     help='matching stock FP6 DTB; required for the tested header-v2 boot path')
     ap.add_argument('--ramdisk', type=Path, default=None,
                     help='static Mach-O init image to boot from md0 instead of waiting for UFS/HFS')
+    mode = ap.add_mutually_exclusive_group()
+    mode.add_argument('--ufs-probe', action='store_true',
+                      help='probe Qualcomm UFS read-only, then continue from md0')
+    mode.add_argument('--ufs-root', action='store_true',
+                      help='boot root from the Qualcomm UFS userdata partition')
     ap.add_argument('--header-version', default=None)
     ap.add_argument('--cmdline', default=None)
     ap.add_argument('--image-name', default='fp6-shim-boot.img')
@@ -29,8 +34,18 @@ def main():
     args = ap.parse_args()
     out = args.out.resolve()
     out.mkdir(parents=True, exist_ok=True)
+    if args.ufs_probe and not args.ramdisk:
+        ap.error('--ufs-probe requires --ramdisk so the probe can return to a known init')
+    if args.ufs_root and args.ramdisk:
+        ap.error('--ufs-root cannot include a RAM disk')
+    if args.ufs_root and args.cmdline and 'rd=ufsroot0' not in args.cmdline.split():
+        ap.error('--ufs-root custom --cmdline must include rd=ufsroot0')
+    if args.ufs_probe and args.cmdline and 'fp6ufsprobe=1' not in args.cmdline.split():
+        ap.error('--ufs-probe custom --cmdline must include fp6ufsprobe=1')
     cmdline = args.cmdline or ('debug=0xc serial=3 cpus=8 keepsyms=1 -noprogress' +
-                               (' rd=md0' if args.ramdisk else ''))
+                               (' rd=ufsroot0' if args.ufs_root else
+                                ' rd=md0 fp6ufsprobe=1 fp6gpio=1 fp6touch=1' if args.ufs_probe else
+                                ' rd=md0' if args.ramdisk else ''))
     payload, info = mkpayload.build(str(args.kernel), str(args.adt), cmdline,
                                     str(args.ramdisk) if args.ramdisk else None)
     payload_path = out / 'fp6-payload.bin'

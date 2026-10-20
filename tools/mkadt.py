@@ -284,17 +284,33 @@ def build_fp6(seed=None, phys_base=None, mem_size=None):
         ('compatible', cstr('sweet,display')),
         ('canvas-width', u32(1116)), ('canvas-height', u32(2484)),
     ])
+    gic_phandle = next(phandle)
+    gic = node('gic', [
+        ('AAPL,phandle', u32(gic_phandle)),
+        ('compatible', cstr('arm,gic-v3')),
+        ('interrupt-controller', b''), ('virtual-timer-intid', u32(27)),
+        ('reg', u64(0x17100000 - soc_base, 0x10000,
+                    0x17180000 - soc_base, 0x200000)),
+    ])
+    tlmm = node('tlmm', [
+        ph(), ('compatible', cstr('qcom,cliffs-pinctrl')),
+        # FP6's matching stock DTB identifies the TLMM as Cliffs: physical
+        # 0x0f000000, 16 MiB aperture, GIC SPI 208, 179 GPIOs. arm-io ranges
+        # maps child 0 to 0x01000000.
+        ('reg', u64(0x0f000000 - soc_base, 0x01000000)),
+        ('gpio-controller', b''), ('#gpio-cells', u32(2)),
+        ('interrupt-controller', b''), ('#interrupt-cells', u32(2)),
+        ('interrupt-parent', u32(gic_phandle)),
+        ('interrupts', u32(0, 208, 4)),
+        ('qcom,ngpios', u32(179)),
+        ('qcom,gpios-reserved', u32(56, 57, 58, 59, 60)),
+    ])
     arm_io = node('arm-io', [
         ph(), ('device_type', cstr('sweet-io')),
         ('compatible', cstr('sweet-io') + cstr('arm-io')),
         ('#address-cells', u32(2)), ('#size-cells', u32(2)),
         ('ranges', u64(0, soc_base, 0x100000000 - soc_base)),
-    ], [node('gic', [
-        ph(), ('compatible', cstr('arm,gic-v3')),
-        ('interrupt-controller', b''), ('virtual-timer-intid', u32(27)),
-        ('reg', u64(0x17100000 - soc_base, 0x10000,
-                    0x17180000 - soc_base, 0x200000)),
-    ]), node('wdt', [ph(), ('no-pmu', u32(1))]), display])
+    ], [gic, tlmm, node('wdt', [ph(), ('no-pmu', u32(1))]), display])
     # Fairphone's upstream sm7635-fairphone-fp6.dts defines a simple
     # framebuffer at 0xe3940000, 1116x2484x4 bytes, and reserves the containing
     # 0x2b00000 splash region so ABL leaves the display active.

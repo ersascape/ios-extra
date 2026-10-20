@@ -190,6 +190,13 @@ jobs:
           python3 tools/fp6-package.py --kernel "$kernel" --adt ci-adt/fp6.adt \
             --dtb fp6-boot/fp6-stock.dtb --ramdisk fp6-boot/init \
             --out fp6-boot --commit "$SOURCE_COMMIT" --ci-run "$CI_RUN"
+          python3 tools/fp6-package.py --kernel "$kernel" --adt ci-adt/fp6.adt \
+            --dtb fp6-boot/fp6-stock.dtb --ramdisk fp6-boot/init \
+            --ufs-probe --out fp6-boot/ufs-probe \
+            --image-name fp6-shim-ufs-probe.img --commit "$SOURCE_COMMIT" --ci-run "$CI_RUN"
+          python3 tools/fp6-package.py --kernel "$kernel" --adt ci-adt/fp6.adt \
+            --dtb fp6-boot/fp6-stock.dtb --ufs-root --out fp6-boot/ufs-root \
+            --image-name fp6-shim-ufs-root.img --commit "$SOURCE_COMMIT" --ci-run "$CI_RUN"
       - uses: actions/upload-artifact@v4
         if: ${{ vars.FP6_STOCK_DTB_URL != '' }}
         with:
@@ -198,6 +205,12 @@ jobs:
             fp6-boot/fp6-shim-boot.img
             fp6-boot/SHA256SUMS
             fp6-boot/manifest.json
+            fp6-boot/ufs-probe/fp6-shim-ufs-probe.img
+            fp6-boot/ufs-probe/SHA256SUMS
+            fp6-boot/ufs-probe/manifest.json
+            fp6-boot/ufs-root/fp6-shim-ufs-root.img
+            fp6-boot/ufs-root/SHA256SUMS
+            fp6-boot/ufs-root/manifest.json
           if-no-files-found: error
           retention-days: 7
       - name: Explain missing FP6 stock DTB
