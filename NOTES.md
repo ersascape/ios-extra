@@ -48,8 +48,23 @@ design is [docs/GPU_CX_EXPERIMENT.md](docs/GPU_CX_EXPERIMENT.md).
   (DTrace `MUTEX_HELD`, ARM `bad_page_cnt`, scheduler `max_unsafe_rt_quanta`,
   and VM `uple_create_btref`). No errors were reported from the USB changes.
   The workflow default is restored to `DEVELOPMENT`, which has built previously;
-  the diagnostic boot flags and USB debug image remain enabled. A new build and
-  phone test are pending.
+  the diagnostic boot flags and USB debug image remain enabled.
+- CI run 39428369953 passed for commit `207b1d8f3ee632c3cc3c3404007230752473ca0d`.
+  It built `kernel.development.fp6` (SHA256
+  `ea460a064820ac507e202e82ab26c1ba87d3174d2cd3b948a0662dbc82e1336e`) and the
+  corrected FP6 ADT (SHA256
+  `cc7891f4b863eaea02343c5624e4f9249010e6010641f03149ad23d9775be3fa`). The
+  kernel compiled with `DEVELOPMENT`; runtime debug args are enabled. CI's boot
+  packaging step skipped because `FP6_STOCK_DTB_URL` is unset.
+- Packaged `/tmp/fp6-usb-394283/usb-debug/fp6-shim-usb-debug.img` locally using
+  that run's kernel and ADT plus the existing stock DTB (SHA256
+  `16a9e60e441772b5cf491a6b51dbe4829f5895fa284bcfa342623bc5b2287dc5`). The
+  header-v2 unpack check verified payload, shim and embedded DTB. Image SHA256
+  is `81de2706d9094cc9f539a45fcaae60ffae2e346702d748c408319db18d3d7eb5`; boot
+  args are `debug=0xc serial=3 cpus=8 keepsyms=1 -noprogress rd=md0 fp6usb=2`.
+  `hardware_tested` is false: USB enumeration, DMA and log delivery have not
+  been observed on the phone. The host can listen with
+  `tools/sweet-usbnet.sh /tmp/fp6-usb-394283/usb-debug/fp6-usb.log`.
 
 ## FP6 hardware bringup and pthread/gPanicBase fixes (2026-10-20)
 
