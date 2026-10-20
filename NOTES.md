@@ -39,9 +39,75 @@
   for FP6. The FP6 `MASTER.arm64.fp6` config introduced by patch 0099 already
   omits `config_ext_resolver`, matching the effective SWEET configuration from
   patch 0057. Neither behavior needs another source change.
-- Defer the FP6 HFS diagnostic limiter. The current source change for the next
-  build is the AMP scheduler enablement in patch 0108; whether it improves
-  scheduling/performance requires a boot and measurement.
+- Patch 0108 enables the AMP scheduler. Its CI build passed; phone testing is
+  pending. The FP6 HFS diagnostic limiter was deferred for that scheduler
+  build, then re-enabled in the follow-up HFS patch comparison below.
+
+## D22AP product metadata recovery and FP6 boot package (2026-10-20)
+
+- Located the iPhone X iOS 16.7.16 IPSW locally and extracted its D22AP device
+  tree to the ignored `research/ipsw-x/` directory. The FP6 ADT generator copied
+  all 61 non-placeholder `/product` properties; a parsed comparison confirmed
+  they match the IPSW tree exactly and syscfg placeholders are excluded.
+- Packaged `/tmp/fp6-ipsw-product-boot/fp6-shim-d22ap-product-ufs-root.img`
+  with the existing AMP kernel from CI run 39461451126 (source commit
+  `590b4bc05bfa574f4bfdb3fa4f101308c5ce5548`), stock FP6 DTB and the prior
+  UFS-root command line. Header v2 packaging and embedded kernel/DTB/payload
+  checks passed. Image SHA-256:
+  `2cb4f1b8cbe2bd46a6771c648897931d0efc0e8b462a4dcb644c94e3878c0579`.
+- No fastboot device was connected when checked, so this image has not been
+  booted. The GitHub workflow still lacks the local D22AP ADT input; its normal
+  generated ADT omits `/product` until that input is provisioned there.
+- The current FP6 userdata root image is not available locally. The IPSW is
+  present, but this work only extracted its device tree; it did not inspect the
+  phone's userdata or validate its current HFS volume.
+
+## FP6 HFS patch comparison and root image status (2026-10-20)
+
+- Shallow-cloned SWEET at `11da58b` for read-only comparison. FP6 already has
+  the relevant HFS support: staged Apple OSS HFS (0026), unsealed-root handling
+  (0029), read/write root support (0031), rename-swap (0052), and UFS performance
+  work (0069). FP6's 0106 enables `SWEET_HFS` in its own master config; SWEET's
+  generic `config/MASTER` change is therefore not needed.
+- SWEET's 0041 patch already limits repeated hardlink-catalog diagnostics to
+  eight messages. Re-enabled that behavior for FP6 as well, per the user's new
+  request to bring in SWEET's HFS patches. It suppresses repeated log output;
+  it does not repair catalog records or filesystem corruption.
+- No FP6 root image or extracted OS/SystemOS/AppOS images are present in the
+  available local paths, so the current userdata HFS volume could not be
+  inspected here. Earlier notes record a pre-boot `fsck.hfsplus -fy` as OK;
+  that is not a check of the volume after the phone mounted it read-write.
+- The user's Nord 2 report is separate: Apple userland and eight CPUs were
+  already running there before the MediaTek framebuffer handoff was added. It
+  does not establish the integrity of FP6's root volume.
+
+## FP6 IOSurface and framebuffer enablement (2026-10-20)
+
+- Patch 0109 enables the existing `SweetSurface` and `SweetFramebuffer`
+  implementations for the FP6 build and adds the FP6 IOKit personalities for
+  `IOCoreSurfaceRoot` and `AppleCLCD`. The FP6 ADT already publishes
+  `/arm-io/disp0` as `sweet,display`; the shim supplies `PE_current_console`
+  video fields from the bootloader FDT's `0xe3940000` framebuffer node.
+- Replayed syntax compilation for `SweetSurface.cpp`, `SweetFramebuffer.cpp`,
+  and `KernelConfigTables.cpp` against the prior CI build tree with clang 23;
+  all three passed. The repository helper's pinned Swift clang path is absent
+  on this host, so the replay used the installed clang. Full CI build and phone
+  presentation test are pending.
+- The image packaged before patch 0109 does not contain this driver enablement.
+  The new code only copies CPU-rendered IOSurface frames to the framebuffer ABL
+  left active; no FP6 DSI/panel initialization is added here.
+- CI initially rejected 0109 because its context-free hunks used stale line
+  numbers after patches 0101 and 0107. Added surrounding context in commit
+  `3a500436979d8c3debbe07ed8d58f5ccfc5f55de`; patch application and the full
+  XNU build then passed in Actions run `39468219112` (5m42s).
+- Packaged that run's kernel with the verified stock FP6 DTB and an FP6 ADT
+  carrying all 61 non-placeholder `/product` properties from the local D22AP
+  IPSW ADT. Image:
+  `/tmp/fp6-display-build-39468219112/fp6-shim-d22ap-product-ufs-root.img`,
+  SHA-256 `84aad4e03bc396e684dcd45219200a744745dd1681219a80c71d2276c7c4865a`.
+  Header-v2 unpack/metadata checks passed. CI's automatic phone-image packaging
+  skipped because `FP6_STOCK_DTB_URL` is unset; this local package uses the
+  verified DTB. It has not been booted on the phone.
 
 ## FP6 watchdogd service discovery (2026-10-20)
 
