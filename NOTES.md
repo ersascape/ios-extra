@@ -108,14 +108,14 @@ design is [docs/GPU_CX_EXPERIMENT.md](docs/GPU_CX_EXPERIMENT.md).
   Command line includes `rd=ufsroot0 fp6usb=2`. The user booted it and reported
   `SCSI completion detail 0x2102` and panicked task pointer
   `0xfffffe1b4109ec10`.
-- The user tested that image and reported panic detail `0x2102` at SCSI
-  completion. Decoding patch 0102's packed value gives opcode `0x00` (TEST UNIT
-  READY), OCS `0`, response UPIU `0x21`, and SCSI status `0x02` (CHECK
-  CONDITION). The request completed at the UFS transport level; this alone does
-  not identify the media condition, and the panicked-task pointer is not a
-  fault diagnosis. Linux's UFS definitions confirm that sense data is embedded
-  in the response UPIU, so the follow-up does not issue a separate REQUEST
-  SENSE command.
+- The reported `0x2102` detail decodes to response UPIU `0x21` and SCSI status
+  `0x02` (CHECK CONDITION); OCS is zero and the command was TEST UNIT READY.
+  Because the reported stage is still `SCSI completion` on the 0103 image, its
+  earlier guard also saw nonzero response byte `resp[6]`, which the packed
+  detail omits. The UFS transport completed, but the response byte and sense
+  values remain unknown. The panicked-task pointer is not a fault diagnosis.
+  Linux's UFS definitions confirm that sense data is embedded in the response
+  UPIU, so a separate REQUEST SENSE command is unnecessary.
 - Patch 0103 decodes the embedded sense key/ASC/ASCQ and reports them in the
   panic detail. It retries TEST UNIT READY for up to 3 seconds only for UNIT
   ATTENTION or NOT READY / becoming ready; other SCSI errors remain failures.
@@ -124,7 +124,15 @@ design is [docs/GPU_CX_EXPERIMENT.md](docs/GPU_CX_EXPERIMENT.md).
   validated `/tmp/fp6-sense-394337/ufs-root/fp6-shim-ufs-sense-debug.img`,
   SHA256 `1a55b0261c102fff887dfb9fd33c97d0c4705a9d59b56e054c0bf7d5fab6cf55`.
   It uses `rd=ufsroot0 fp6usb=2`, is read-only with respect to UFS by default,
-  and has not yet been booted. Phone validation is still pending.
+  and was subsequently booted; it reproduced the SCSI completion panic below.
+- The user then booted the 0103 image and still saw
+  `ufsroot0 unavailable 5 at SCSI completion detail 0x2102`. The 0103 kernel
+  binary contains the new check-condition path, so this stage indicates its
+  earlier completion guard still rejected the nonzero SCSI response byte
+  (`resp[6]`) before sense decoding. The packed detail retains UPIU `0x21` and
+  status `0x02` but omits `resp[6]`. Patch 0104 moves response/status handling
+  into the sense-reporting path and will expose both response and embedded
+  sense; the exact response code and sense values are not yet known.
 
 ## FP6 hardware bringup and pthread/gPanicBase fixes (2026-10-20)
 
