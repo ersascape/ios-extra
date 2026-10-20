@@ -24,6 +24,27 @@ design is [docs/GPU_CX_EXPERIMENT.md](docs/GPU_CX_EXPERIMENT.md).
   dumps that property; a rebuilt image and phone retest are still pending. This is
   a source-based diagnosis until the corrected build reaches the same boot stage.
 
+## FP6 root panic and USB debug path (2026-10-20)
+
+- A second phone photo's backtrace was symbolicated against the exact kernel
+  from CI run 39423526775. `IOFindBSDRoot` reaches its explicit panic branch:
+  `QCOM UFS root %s unavailable: %d`; the visible panic-stack `Assert` frame is
+  secondary. This identifies the failure as UFS root selection. The photo is
+  cropped before the formatted error number, so the specific UFS init/GPT error
+  remains unknown. This differs from the earlier GIC interrupt-cell panic.
+- Source inspection found the SWEET DWC3 ECM gadget and UDP log sender already
+  exist, but their controller power/clock probe uses SWEET-only GCC offsets.
+  Patch 0101 adds an opt-in FP6 entry (`fp6usb=1` for DWC3 handoff diagnostics,
+  `fp6usb=2` to start the ECM gadget and UDP console log at
+  `192.168.7.1:5140`). The FP6 path does not read or write SWEET GCC offsets or
+  change SMMU registers. USB DMA/IOMMU operation is not yet measured.
+- Patch 0101 also hooks the existing 4 MiB in-memory console ring for FP6 from
+  the first serial-console output, before UFS root setup can panic. This gives
+  the USB log sender access to root-selection diagnostics. A separate USB
+  debug boot image uses a `DEBUG` XNU build and `fp6usb=2`; the ordinary RAM-disk
+  image keeps USB disabled. Patch application/build and a phone test are
+  pending.
+
 ## FP6 hardware bringup and pthread/gPanicBase fixes (2026-10-20)
 
 - On-device observation with packaged header v2 boot image (containing stock DTB):
