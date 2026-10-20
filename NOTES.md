@@ -11,14 +11,25 @@
   including the `IOPMUPrimary` marker, but explicitly logs that hardware
   watchdog control is disabled. This is an interim service-discovery fix, not
   a hardware watchdog driver.
-- Patch syntax/numstat parsed locally. No XNU build, CI run, or phone test has
-  been performed yet; the FP6 daemon path still needs a built image and boot
-  observation.
 - First CI attempt `39455499092` exposed context failures in patch 0107 before
   compilation; the new patch had guessed source line positions from earlier
   hunks. Reworked the hunks to include surrounding exact context. The corrected
-  patch is pending a follow-up CI run; no kernel compile or phone result is
-  claimed from the failed attempt.
+  commit `9c3c2f7b49c908840fc46108c6db12628e27e779` passed CI run
+  `39456160901` (XNU build and FP6 packaging job). CI skipped image upload
+  because `FP6_STOCK_DTB_URL` is unset. The matching kernel and ADT were
+  downloaded locally and their SHA256 values verified; the known matching
+  stock DTB was reused (`16a9e60e441772b5cf491a6b51dbe4829f5895fa284bcfa342623bc5b2287dc5`).
+- Locally packaged and header-v2 validated a UFS-root image preserving the
+  prior iOS userspace boot arguments:
+  `/tmp/fp6-watchdog-39456160901/ufs-root/fp6-shim-ufs-root-watchdog.img`,
+  SHA256 `e31d60c0b1323f70829a3aab41ad31ad16a2dc3d8bf230a8833ecfcda61e2680`.
+  It embeds kernel SHA256
+  `e2c08fa79086456dfc5d24bf4c519895a1246237f7f0e50a92812fe26db40fbc` and ADT
+  SHA256 `9f6030208a39700f508f34fd01c6ec5f95376fa1efb25dbdeeeb202e9322496d`.
+  The command line retains `rd=ufsroot0 ufsrw=1 fp6usb=2
+  unentitled_ios_sim_launch=1 launchd_unsecure_cache=1`. Header-v2 checksum,
+  unpacked payload and embedded DTB checks pass. This is package validation;
+  the new dummy watchdog personality has not yet been observed on the phone.
 
 ## FP6 unsealed HFS root authentication (2026-10-20)
 
