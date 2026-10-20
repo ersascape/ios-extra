@@ -14,6 +14,11 @@
 - Patch syntax/numstat parsed locally. No XNU build, CI run, or phone test has
   been performed yet; the FP6 daemon path still needs a built image and boot
   observation.
+- First CI attempt `39455499092` exposed context failures in patch 0107 before
+  compilation; the new patch had guessed source line positions from earlier
+  hunks. Reworked the hunks to include surrounding exact context. The corrected
+  patch is pending a follow-up CI run; no kernel compile or phone result is
+  claimed from the failed attempt.
 
 ## FP6 unsealed HFS root authentication (2026-10-20)
 

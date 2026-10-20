@@ -1,17 +1,27 @@
 --- a/iokit/Kernel/arm/SweetWatchdog.cpp
 +++ b/iokit/Kernel/arm/SweetWatchdog.cpp
-@@ -14,1 +14,1 @@
+@@ -17,4 +17,4 @@
+ #include <pexpert/arm64/board_config.h>
+ 
 -#if defined(SWEET)
 +#if defined(SWEET) || defined(FP6)
+ #include <IOKit/IOService.h>
 --- a/iokit/KernelConfigTables.cpp
 +++ b/iokit/KernelConfigTables.cpp
-@@ -41,2 +41,4 @@
+@@ -42,5 +42,7 @@
+     "   { 'IOClass' = QcomCPU; 'IOProviderClass' = IOPlatformDevice;"
+     "     'IONameMatch' = 'qcom,kryo'; 'IOProbeScore' = 10000:32; },"
      "   { 'IOClass' = AppleKeyStore; 'IOProviderClass' = IOResources;"
      "     'IOMatchCategory' = AppleKeyStore; },"
 +    "   { 'IOClass' = IOWatchdog; 'IOProviderClass' = IOResources;"
 +    "     'IOMatchCategory' = IOWatchdog; },"
+     "   { 'IOClass' = SweetPlatformExpert; 'IOProviderClass' = IOPlatformExpertDevice;"
 --- a/iokit/Kernel/arm/SweetWatchdog.cpp
 +++ b/iokit/Kernel/arm/SweetWatchdog.cpp
-@@ -52,1 +52,1 @@
+@@ -49,5 +49,5 @@
+ 	setProperty(kIOUserClientClassKey, "IOWatchdogUserClient");
+ 	setProperty("IOPMUPrimary", 1ULL, 32);
+ 	registerService();
 -	IOLog("SWEET WDT: IOWatchdog registered (accepts check-ins, never fires)\n");
 +	IOLog("WDT: IOWatchdog registered (dummy; hardware watchdog disabled)\n");
+ 	return true;
