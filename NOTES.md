@@ -1,10 +1,28 @@
 # ios-extra — current state
 
-Last updated 2026-10-19 after the 0097 phone test and 0098 local checks. Read [HANDOFF.md](HANDOFF.md) for how to
+Last updated 2026-10-20 after Phoenix source inspection and support edits. Read [HANDOFF.md](HANDOFF.md) for how to
 continue and [AGENTS.md](AGENTS.md) for the rules. The per-step history (images,
 hashes, CI runs, raw numbers) is [docs/GPU_LOG.md](docs/GPU_LOG.md); the hardware and
 mainline reference is [docs/GPU_GMU_BOOT.md](docs/GPU_GMU_BOOT.md); the per-patch
 design is [docs/GPU_CX_EXPERIMENT.md](docs/GPU_CX_EXPERIMENT.md).
+
+## POCO X2 / Phoenix support (2026-10-20)
+
+- Inspected `aospa-phoenix/android_kernel_xiaomi_phoenix` at
+  `c01153e9ba446642640749077a19467e7e0094f5` in `/tmp` (source only; clone is
+  not part of this repository). It confirms the shared SM7150 platform and
+  Adreno 618 family. Phoenix and Sweet both have 1080x2400 panels with 120 Hz
+  maximum timing; the Phoenix source describes WLED and 30–120 Hz modes, while
+  Sweet uses OLED and 60/120 Hz modes.
+- Added a `PHOENIX` XNU machine config that reuses the existing SM7150 board
+  definition, platform expert and GPU path. Added `--device phoenix` to
+  `tools/mkadt.py`; generated Phoenix trees use the `xiaomi,phoenix` compatible
+  and a distinct synthetic ECID. The iOS-facing D22AP / iPhone10,3 identity is
+  retained for the bundled iPhone X userland.
+- This is source inspection and code editing only. No tests, XNU build, CI run,
+  phone boot, or display observation was performed. The XNU/platform changes
+  and Phoenix ADT have not yet been built or tested on hardware. See
+  [docs/PHOENIX.md](docs/PHOENIX.md).
 
 ## What this repo is
 

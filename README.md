@@ -1,8 +1,10 @@
 # ios-extra
 
-Driver playground for [ios-sweet](https://github.com/dipa-studio/ios-sweet), the XNU / iOS port for the Redmi Note 10 Pro (`sweet`, SM7150). Made public with the user's approval on 2026-10-18.
+Driver playground for the XNU / iOS port on Qualcomm SM7150 phones: Redmi Note 10 Pro (`sweet`) and POCO X2 (`phoenix`).
 
 Start experiments here, build and test them, then port working changes into `ios-sweet`. This repository has its own Git history and remote.
+
+Phoenix uses the shared SM7150/A618 board support. Its Phoenix machine config and ADT profile keep the XNU board identity distinct while retaining the current iPhone X userland identity. Source findings and the unbuilt support status are in [docs/PHOENIX.md](docs/PHOENIX.md).
 
 ## Baseline
 
