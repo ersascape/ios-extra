@@ -63,11 +63,13 @@ flashed or mounted by FP6 XNU.
 The known FP6 image packages a tiny `rd=md0` RAM-disk init. The new packaging
 modes can create a read-only UFS probe image that returns to `md0`, and an
 `rd=ufsroot0` image with no RAM disk for the user's requested root-path attempt.
-These source changes have not yet been built by CI or run on the phone. Root mode
-uses UFS writes only if an explicit `ufsrw=1` boot argument is added; the
-packager does not add it. The current `userdata` still contains Android data, so
-HFS mount failure is expected. Do not flash the iOS image to `userdata` as part
-of this test.
+The CI kernel build passed in run `39423526775`; the CI image-packaging job
+skipped because `FP6_STOCK_DTB_URL` is not configured. Header-v2 images were
+packaged locally with the matching stock DTB and validated, but none has been
+booted. Root mode uses UFS writes only if `ufsrw=1` is explicitly added; the
+packager does not add it. The current `userdata` still contains Android data,
+so this is not yet an iOS userspace boot. Do not flash the iOS image to
+`userdata` as part of this test.
 
 ## Source locations
 

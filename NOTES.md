@@ -368,8 +368,9 @@ error::ResourceWarning -m unittest discover -s tests` (also with
   probe ignores `ufsrw`; root mode honors it only when explicitly requested.
 - `IOKitBSDInit.cpp` gains an opt-in `fp6ufsprobe=1` hook and FP6 `rd=ufsroot0`
   routing. The probe image retains `rd=md0`; the root image omits the RAM disk
-  and leaves the existing Android `userdata` untouched. No image has been built
-  or booted from these changes.
+  and leaves the existing Android `userdata` untouched. At the initial source
+  change, neither image had been built or booted; follow-up CI/package results
+  are recorded below.
 - Corrected `tools/mkadt.py` to match the FP6 stock DTB's Cliffs TLMM:
   physical base `0x0f000000`, 16 MiB range, SPI 208, 179 GPIOs, reserved 56–60.
   This replaces an incorrect Volcano-compatible/reserved-pin guess.
@@ -388,9 +389,22 @@ error::ResourceWarning -m unittest discover -s tests` (also with
   image. They sample Cliffs GPIO input states (skipping reserved pins 56–60)
   and report the ESWIN touch ADT node. They do not access SPI MMIO or write pin
   mux, clock, reset, or SPI command registers.
-  These are source changes only until the CI build and phone log; they are
-  diagnostics, not a touch event driver.
-- The packager/workflow create the RAM-disk baseline, read-only UFS probe, and
-  UFS-root attempt. CI has not run. FP6 USB gadget/debug transport and active
-  EPH86xx SPI/HID input remain unported; Sweet's SM7150 implementations are
-  still guarded from FP6.
+  The successful build contains these paths; no phone observation exists yet.
+  They are diagnostics, not a touch event driver.
+- The corrected workflow run `39423526775` succeeded on source commit
+  `d50bbff0304a365ee2972e3c041b2a9936e53591`. CI kernel SHA256:
+  `2736519b29b5b6737aa40ddbf2377affea27d3a0adc5db7279677bc90a061181`; FP6
+  ADT SHA256: `da9a1f5881207ac946db3f64cbd4165b8828a899019a049a04bb49081d3529f4`.
+- The CI `fp6-boot` job skipped packaging because `FP6_STOCK_DTB_URL` is not
+  configured. Using the verified CI kernel/ADT and local matching stock DTB
+  (`16a9e60e441772b5cf491a6b51dbe4829f5895fa284bcfa342623bc5b2287dc5`),
+  locally packaged Android boot header-v2 images in
+  `/tmp/fp6-ci-39423526775/images/`. The recommended read-only probe image is
+  `touch-probe/fp6-shim-touch-ufs-probe.img`, 22,917,120 bytes, SHA256
+  `f5abf0c8697aebef950f1d1fa6d997d6eae1d3a770caacd3b3377b0d26928198`; its
+  command line keeps `rd=md0` and enables `fp6ufsprobe=1 fp6gpio=1 fp6touch=1`.
+  Baseline and `rd=ufsroot0` images are alongside it. Package validation
+  confirmed embedded kernel/payload/DTB and all SHA256SUMS; no image has been
+  booted. Current Android `userdata` is not the iOS HFS+ root image.
+- FP6 USB gadget/debug transport and active EPH86xx SPI/HID input remain
+  unported; Sweet's SM7150 implementations are still guarded from FP6.
