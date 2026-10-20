@@ -105,8 +105,9 @@ design is [docs/GPU_CX_EXPERIMENT.md](docs/GPU_CX_EXPERIMENT.md).
   artifacts and local stock DTB:
   `/tmp/fp6-ufs-stage-394313/fp6-shim-ufs-stage-debug.img`, 22,900,736 bytes,
   SHA256 `3b9100a82b7576f8f9ebf6d4c7ea66593e9ce0cf3e88f3fcfed383d5e37825c5`.
-  Command line includes `rd=ufsroot0 fp6usb=2`. It has not been booted; no
-  UFS behavior or failure-stage report has yet been observed on hardware.
+  Command line includes `rd=ufsroot0 fp6usb=2`. The user booted it and reported
+  `SCSI completion detail 0x2102` and panicked task pointer
+  `0xfffffe1b4109ec10`.
 - The user tested that image and reported panic detail `0x2102` at SCSI
   completion. Decoding patch 0102's packed value gives opcode `0x00` (TEST UNIT
   READY), OCS `0`, response UPIU `0x21`, and SCSI status `0x02` (CHECK
@@ -118,8 +119,12 @@ design is [docs/GPU_CX_EXPERIMENT.md](docs/GPU_CX_EXPERIMENT.md).
 - Patch 0103 decodes the embedded sense key/ASC/ASCQ and reports them in the
   panic detail. It retries TEST UNIT READY for up to 3 seconds only for UNIT
   ATTENTION or NOT READY / becoming ready; other SCSI errors remain failures.
-  This change still needs CI compilation and a phone retest before claiming UFS
-  root works.
+  CI run `39433706325` built successfully on commit
+  `be6b8d176a83426b12697bc0c0a27d8fc4374744`. Packaged and header-v2 unpack
+  validated `/tmp/fp6-sense-394337/ufs-root/fp6-shim-ufs-sense-debug.img`,
+  SHA256 `1a55b0261c102fff887dfb9fd33c97d0c4705a9d59b56e054c0bf7d5fab6cf55`.
+  It uses `rd=ufsroot0 fp6usb=2`, is read-only with respect to UFS by default,
+  and has not yet been booted. Phone validation is still pending.
 
 ## FP6 hardware bringup and pthread/gPanicBase fixes (2026-10-20)
 
