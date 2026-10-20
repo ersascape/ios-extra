@@ -222,7 +222,7 @@
 +}
 +
 +#if defined(ARM64_BOARD_CONFIG_FP6)
-+/* Passive reads only: Qualcomm Cliffs TLMM input state and SPI0 GENI state. */
++/* Passive reads only: Qualcomm Cliffs TLMM input state and SPI0 ADT status. */
 +int
 +fp6_gpio_probe(void)
 +{
@@ -263,19 +263,19 @@
 +	unsigned int size = 0;
 +	int error;
 +
-+	/* Inspect the handed-off DT only; the base DT marks this block disabled. */
++	/* Inspect the XNU ADT only; the active SPI/HID service is a later step. */
 +	error = SecureDTLookupEntry(NULL,
-+	    "/soc/qcom,qupv3_0_geni_se@ac0000/spi@a80000", &spi);
++	    "/soc/spi@a80000/eswin_eph861x@0", &spi);
 +	if (error != kSuccess) {
-+		printf("FP6 TOUCH: ESWIN EPH86xx is on SPI0, but SPI0 is absent from the handed-off DT\n");
++		printf("FP6 TOUCH: ESWIN EPH86xx ADT node not found\n");
 +		return ENOENT;
 +	}
 +	error = SecureDTGetProperty(spi, "status", (void const **)&status, &size);
 +	if (error == kSuccess && size > 0) {
-+		printf("FP6 TOUCH: ESWIN EPH86xx on QUPv3 SPI0 (0xa80000), DT status '%s'; no MMIO access attempted\n",
++		printf("FP6 TOUCH: ESWIN EPH86xx ADT node found; status '%s'; active SPI/HID is not implemented\n",
 +		    status);
 +	} else {
-+		printf("FP6 TOUCH: ESWIN EPH86xx on QUPv3 SPI0 (0xa80000), DT status absent; no MMIO access attempted\n");
++		printf("FP6 TOUCH: ESWIN EPH86xx ADT node found; status absent; active SPI/HID is not implemented\n");
 +	}
 +	return 0;
 +}

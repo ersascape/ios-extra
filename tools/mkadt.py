@@ -292,8 +292,9 @@ def build_fp6(seed=None, phys_base=None, mem_size=None):
         ('reg', u64(0x17100000 - soc_base, 0x10000,
                     0x17180000 - soc_base, 0x200000)),
     ])
+    tlmm_phandle = next(phandle)
     tlmm = node('tlmm', [
-        ph(), ('compatible', cstr('qcom,cliffs-pinctrl')),
+        ('AAPL,phandle', u32(tlmm_phandle)), ('compatible', cstr('qcom,cliffs-pinctrl')),
         # FP6's matching stock DTB identifies the TLMM as Cliffs: physical
         # 0x0f000000, 16 MiB aperture, GIC SPI 208, 179 GPIOs. arm-io ranges
         # maps child 0 to 0x01000000.
@@ -305,6 +306,42 @@ def build_fp6(seed=None, phys_base=None, mem_size=None):
         ('qcom,ngpios', u32(179)),
         ('qcom,gpios-reserved', u32(56, 57, 58, 59, 60)),
     ])
+    touch = node('eswin_eph861x@0', [
+        ph(), ('compatible', cstr('eswin,eph861x')),
+        ('reg', u32(0)), ('status', cstr('okay')),
+        ('spi-max-frequency', u32(2000000)), ('bits-per-word', u32(8)),
+        ('spi-cpol', b''), ('spi-cpha', b''), ('eswin,spi-mode', u32(3)),
+        ('interrupt-parent', u32(tlmm_phandle)),
+        ('interrupts', u32(19, 2)),
+        ('eswin,irq-gpio', u32(tlmm_phandle, 19, 0)),
+        ('eswin,irq-on-state', u32(0)),
+        ('eswin,reset-gpio', u32(tlmm_phandle, 20, 0)),
+        ('eswin,reset-on-state', u32(0)),
+        ('eswin,reset-active-ms', u32(20)), ('eswin,reset-delay-ms', u32(200)),
+        ('eswin,power-delay-ms', u32(200)),
+        ('eswin,spi-byte-delay-us', u32(10)), ('eswin,spi-block-delay-us', u32(10)),
+        ('eswin,fw_name', cstr('EPH86XX_fw.bin')),
+        ('eswin,input_name', cstr('ESWIN EPH86XX Touchscreen')),
+        ('eswin,panel-invert-x', u32(1)), ('eswin,panel-invert-y', u32(0)),
+        ('eswin,panel-max-x', u32(1116)), ('eswin,panel-max-y', u32(2484)),
+        ('eswin,regulator_avdd', cstr('avdd')),
+        ('eswin,regulator_dvdd', cstr('iovdd')),
+        ('xnu,supply-avdd-name', cstr('L22B')),
+        ('xnu,supply-iovdd-name', cstr('L9B')),
+    ])
+    spi0 = node('spi@a80000', [
+        ph(), ('compatible', cstr('qcom,spi-geni')),
+        ('reg', u32(0x00a80000, 0x4000)),
+        ('#address-cells', u32(1)), ('#size-cells', u32(0)),
+        ('interrupt-parent', u32(gic_phandle)), ('interrupts', u32(0, 353, 4)),
+        ('clock-names', cstr('se-clk')), ('status', cstr('okay')),
+        ('xnu,spi0-pins', u32(94, 95, 96, 97)),
+    ], [touch])
+    soc = node('soc', [
+        ph(), ('compatible', cstr('simple-bus')),
+        ('#address-cells', u32(1)), ('#size-cells', u32(1)),
+        ('ranges', u32(0, 0, 0, 0xffffffff)),
+    ], [spi0])
     arm_io = node('arm-io', [
         ph(), ('device_type', cstr('sweet-io')),
         ('compatible', cstr('sweet-io') + cstr('arm-io')),
@@ -337,7 +374,7 @@ def build_fp6(seed=None, phys_base=None, mem_size=None):
         ('target-sub-type', cstr('SM7635')),
         ('manufacturer', cstr('Fairphone')), ('#address-cells', u32(2)),
         ('#size-cells', u32(2)),
-    ], [chosen, defaults, cpus, arm_io, fbcon, buttons] + product + [ufs])
+    ], [chosen, defaults, cpus, arm_io, soc, fbcon, buttons] + product + [ufs])
 
 
 if __name__ == '__main__':

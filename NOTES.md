@@ -375,13 +375,19 @@ error::ResourceWarning -m unittest discover -s tests` (also with
   This replaces an incorrect Volcano-compatible/reserved-pin guess.
 - The FP6 bugreport identifies the touch controller as ESWIN EPH86xx on SPI0.0
   at QUPv3 SE0 `0xa80000`; the Fairphone SM7635 modules contain its SPI driver.
-  Linux reports reset GPIO 364, but the TLMM mapping is not established and the
-  base stock DTB marks SPI0 disabled. Do not pulse reset or configure SPI until
-  the matching overlay and power/pin state are understood.
+  The matching FP6 SKU overlay includes the Volcano MTP touch description:
+  SPI mode 3 at 2 MHz, IRQ TLMM GPIO 19, reset GPIO 20, SPI pins 94–97, L22B
+  and L9B supplies, plus `EPH86XX_fw.bin`. Linux's GPIO number 364 corresponds
+  to the source reset pin in that overlay, although XNU must use the TLMM-local
+  pin number 20.
+- Updated the generated FP6 ADT to mark QUPv3 SPI0 and its ESWIN touch child
+  present, with the overlay's GPIO and panel metadata. The controller still
+  needs a GENI driver, pinmux/clock/regulator support and a HID event service;
+  marking the ADT node present does not turn on the physical bus.
 - Added opt-in `fp6gpio=1` and `fp6touch=1` passive probes to the UFS-probe
   image. They sample Cliffs GPIO input states (skipping reserved pins 56–60)
-  and report SPI0's handed-off device-tree status. They do not access the
-  disabled SPI block or write pin mux, clock, reset, or SPI command registers.
+  and report the ESWIN touch ADT node. They do not access SPI MMIO or write pin
+  mux, clock, reset, or SPI command registers.
   These are source changes only until the CI build and phone log; they are
   diagnostics, not a touch event driver.
 - The packager/workflow create the RAM-disk baseline, read-only UFS probe, and

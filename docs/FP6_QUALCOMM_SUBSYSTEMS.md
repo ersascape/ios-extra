@@ -39,18 +39,18 @@ debug link and should remain out of the first experiment.
 | RPMh / regulators / SPMI | Qualcomm RPMh clock, regulator and power-domain controllers, plus SPMI PMIC drivers. | Useful after kernel startup for safe power sequencing. Start with read-only state and a small, sourced regulator/clock change; this is not needed for the first RAM-disk init. |
 | Display | MIPI-DSI panel and Qualcomm display/GPU stack; bootloader supplies the initial framebuffer. | The bootloader framebuffer is a useful console. A live panel driver requires DSI, panel, clock, regulator and backlight sequencing. Keep the splash and an XNU display driver as separate milestones. |
 | GPU | Adreno 710 / Qualcomm KGSL path and firmware are present in Android sources. | Later work. The existing Adreno 618 experiments and UniXNU Adreno 740 stack are architectural references, not drop-in drivers for this GPU. |
-| Touch / keys | The FP6 bugreport identifies `ESWIN EPH86XX Touchscreen` at SPI0.0 (`0xa80000` GENI SPI); the module is in Fairphone's SM7635 kernel sources. Linux reports reset GPIO 364, whose TLMM mapping still needs resolving. | First probe reports SPI0's handed-off DT status and samples Cliffs TLMM GPIO inputs. It avoids MMIO access to the disabled SPI block, pin-mux/clock/reset writes, and touch commands. Touch events need GENI SPI, IRQ/reset/power sequencing, and an IOKit HID service. |
+| Touch / keys | FP6 SKU overlays copy the Volcano MTP touch description: ESWIN EPH86xx on QUPv3 SPI0 at `0xa80000`, mode 3 at 2 MHz, TLMM IRQ 19, reset 20, and SPI pins 94–97. Its firmware is `EPH86XX_fw.bin`. | The generated ADT now marks SPI0 and the touch child present and carries those GPIO/panel parameters. This is device description only: XNU still needs GENI clocks/pinmux, L22B/L9B regulator handling, reset sequencing, SPI transactions, IRQ dispatch, and an IOKit HID service before touch events work. |
 | Wi-Fi / Bluetooth | Device configuration references QCA6750 WLAN, WCN6450 connectivity and firmware/DSP components. | Complex and dependent on firmware, transport, power and vendor interfaces. Not an early XNU bring-up target. |
 | Audio / camera / cellular | Qualcomm DSP, codec, camera and modem subsystems with vendor services/firmware. | Much later. They depend on several working power, bus, DMA and userspace services. |
 
 ## FP6 ADT GPIO node
 
-`tools/mkadt.py --device fp6` emits a `tlmm` node for the Qualcomm
-Cliffs GPIO controller: physical base `0x0f000000`, size `0x01000000`, GIC
-SPI 208, 179 GPIOs, and reserved pins 56–60 from the matching stock DTB. The node is nested
-under `/arm-io`; its `reg` address is translated through that node's `ranges`.
-This makes the SoC GPIO provider discoverable through the ADT. It does not
-configure pins or enable the Sweet board's GPIO code on FP6.
+`tools/mkadt.py --device fp6` emits Cliffs TLMM at physical `0x0f000000`, size
+`0x01000000`, GIC SPI 208, 179 GPIOs and reserved pins 56–60. It also emits
+QUPv3 SPI0 and the ESWIN touch child from the FP6 SKU overlay, including GPIO
+19/20 and pins 94–97. The TLMM node sits under `/arm-io`; SPI0 sits under
+`/soc` with identity address translation. The GPIO probe reads existing input state only; the ADT entries
+do not yet program SPI clocks, pin muxes, regulators or reset.
 
 ## iOS root image status
 
