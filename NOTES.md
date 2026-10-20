@@ -6,6 +6,18 @@ hashes, CI runs, raw numbers) is [docs/GPU_LOG.md](docs/GPU_LOG.md); the hardwar
 mainline reference is [docs/GPU_GMU_BOOT.md](docs/GPU_GMU_BOOT.md); the per-patch
 design is [docs/GPU_CX_EXPERIMENT.md](docs/GPU_CX_EXPERIMENT.md).
 
+## Fairphone 6 platform audit (2026-10-20)
+
+- Began a source-only audit for Fairphone (Gen. 6), device name `FP6`.
+  Fairphone identifies it as Snapdragon 7s Gen 3 / SM7635. Mainline Linux has
+  `milos-fairphone-fp6.dts` with `fairphone,fp6` and `qcom,milos` compatibles.
+- QCM6490 is Fairphone 5, not Fairphone 6. No QCM6490 code or FP5 target was
+  added as part of this work.
+- No FP6 machine config, ADT profile, build, CI, or device test has been
+  performed. The current GPU investigation remains specific to SM7150 /
+  Adreno 618. Source audit details and limits are in
+  [docs/FAIRPHONE6.md](docs/FAIRPHONE6.md).
+
 ## POCO X2 / Phoenix support (2026-10-20)
 
 - Inspected `aospa-phoenix/android_kernel_xiaomi_phoenix` at
