@@ -1,5 +1,38 @@
 # ios-extra — current state
 
+## FP6 Tegu-style iOS 16 root image (2026-10-21)
+
+- Rebuilt the iOS 20H392 root from the locally extracted OS, SystemOS, and
+  AppOS images using a Tegu-style Linux guest copy (`rsync -aH --numeric-ids`).
+  `/dev/kvm` is unavailable here, so QEMU used TCG; the OS copy took about 22
+  minutes. The earlier host-built image with invalid HFS index/thread records
+  remains rejected and must not be flashed.
+- Applied `tools/sweet-root-tweaks.py` through Tegu's isolated guest. Readback
+  confirmed the Setup skip, launchd crash-policy rename and CommCenter removal,
+  migration marker, audio/recorder disables, SpringBoard settings, containers,
+  and ownership/mode requirements. The image has no mobileactivationd system
+  container yet, so the tweak script warned that it skipped the data ark; FP6
+  activation still depends on the ADT `/chosen` security-status properties.
+- Tegu's read-only verifier passed for launchd, dyld, SystemVersion, all 44
+  shared-cache aliases (matching inode numbers to the cryptex copies), the two
+  trampoline libraries, cryptex symlinks, log directories/owners, and the
+  system keybag. Linux `fsck.hfsplus -fy` repaired the volume; subsequent
+  `-fn` reports only the documented journaled-volume-header minor-repair
+  warning (status 8), with catalog, multi-linked-file, hierarchy, extents,
+  attributes, and bitmap checks clean. Tegu's temporary local check accepts
+  only this specific header-only warning.
+- Linux HFS+ still does not set Apple's hard-link chain bit on these links;
+  XNU can log/repair that bit at lookup, and patch 0041 only limits repeated
+  diagnostics. The Tegu check proves the cache paths share inodes, not that the
+  HFS catalog contains Apple's chain-bit metadata. This is the known Linux HFS+
+  limitation and was also present in the earlier successful Tegu path.
+- Raw image: `research/fp6-rootfs-tegu-20261021/fp6-ios-root-tegu.hfs`, SHA256
+  `574cbad62a794a5e8f69cb118a37c0cf915ffe4e66ab1a5a296175c1a216296d`.
+  Fastboot sparse image: `research/fp6-rootfs-tegu-20261021/fp6-ios-root-tegu.simg`,
+  SHA256 `a1c6f7da616520841c4d56ac2a147940c5c93a0b4406cb1c9ae6832d64338f7c`;
+  sparse header is v1, 4 KiB blocks, 4,194,304 blocks. Neither image has been
+  flashed or booted on the phone.
+
 ## FP6 `mount[3]` boot-task panic (2026-10-20)
 
 - The latest phone photo shows `mount[3] exited -- no exit reason available --
