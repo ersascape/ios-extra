@@ -326,3 +326,34 @@ error::ResourceWarning -m unittest discover -s tests` (also with
   image was then booted on the phone; the user reports that all 8 CPUs came up.
   The exact image SHA and boot log have not yet been provided, so this observation
   is not attributed to a particular package.
+
+## FP6 iOS userspace image and Qualcomm subsystem audit (2026-10-20)
+
+- Built a local iOS 16.7.16 (`20H392`) HFS+ root image from the user-provided
+  iPhone X IPSW. The raw image is 16 GiB; `img2simg` produced a 12 GiB Android
+  sparse image. The final `fsck.hfsplus -fy` reported the volume appeared OK;
+  `file` recognized the output as Android sparse v1. This is host-side image
+  construction only. It has not been flashed or mounted by FP6 XNU.
+- Do not flash this image to `userdata` yet. That operation overwrites the
+  phone's existing userdata, while the current FP6 image boots a tiny `rd=md0`
+  RAM-disk init and has no FP6 UFS block driver/root-media path. The iOS HFS+
+  image therefore cannot yet be used by the running kernel. Raw and sparse
+  images remain under Downloads and are not tracked.
+- User clarified that the current debugging goal is USB debugging. Source review
+  confirms FP6's Qualcomm DWC3 wrapper at `0xa600000`, generic DWC3 core at
+  `0xa600000`, eUSB2 PHY at `0x088e3000`, EUD registers at `0x088e2000` and
+  `0x0c278000`, and QMP USB/DP combo PHY at `0x088e8000`. It uses OTG/role
+  switching, extcon/EUD and PDC interrupts. Existing CDC-ECM/live-log patches
+  0072–0077 are SWEET/SM7150-specific and cannot simply be enabled for FP6.
+  See [FP6 Qualcomm subsystem audit](docs/FP6_QUALCOMM_SUBSYSTEMS.md).
+- Source review also finds the next practical subsystem priorities: FP6 UFS
+  block/root support for iOS userspace, USB CDC-ECM for debug logs, then the
+  board-specific power/regulator path and touch input. The bootloader framebuffer
+  is separate from a live panel driver; Adreno 618/740 code is not a drop-in for
+  FP6's Adreno 710. Wi-Fi, Bluetooth, audio, camera and cellular depend on more
+  firmware/DSP and transport work.
+- No FP6 USB code was changed or tested in this audit, and no new CI run or phone
+  boot was started. The next USB code change should first gather a read-only
+  FP6 DWC3/clock/PHY state report, then test endpoint-zero enumeration before
+  adding CDC-ECM. The new root image must not be presented as a phone-tested
+  result.
