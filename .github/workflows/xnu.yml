@@ -29,6 +29,8 @@ on:
       - "tools/mkadt.py"
       - "tools/mkpayload.py"
       - "tools/fp6-package.py"
+      - "tools/sweet-init.S"
+      - "tools/mkinit.py"
       - "tools/prepare-xnu-build.py"
       - "tools/mkbootv4.py"
       - "tools/unpack_bootv2.py"
@@ -169,6 +171,11 @@ jobs:
           path: ci-adt
       - name: Install shim toolchain
         run: sudo apt-get update && sudo apt-get install -y clang lld llvm
+      - name: Build minimal FP6 RAM-disk init
+        run: |
+          mkdir -p fp6-boot
+          clang -target arm64-apple-ios16.0 -c tools/sweet-init.S -o fp6-boot/init.o
+          python3 tools/mkinit.py fp6-boot/init.o fp6-boot/init
       - name: Package FP6 temporary boot image
         env:
           SOURCE_COMMIT: ${{ github.sha }}
@@ -177,6 +184,7 @@ jobs:
           kernel="ci-kernel/kernel.$(printf '%s' "$KERNEL_CONFIG" | tr '[:upper:]' '[:lower:]').fp6"
           test -f "$kernel"
           python3 tools/fp6-package.py --kernel "$kernel" --adt ci-adt/fp6.adt \
+            --ramdisk fp6-boot/init \
             --out fp6-boot --commit "$SOURCE_COMMIT" --ci-run "$CI_RUN"
       - uses: actions/upload-artifact@v4
         with:

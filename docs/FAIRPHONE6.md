@@ -57,8 +57,9 @@ must not be used for a phone boot until those inputs are confirmed.
 
 The `xnu` GitHub Actions workflow accepts `FP6` as a machine config and
 publishes the generated `fp6-adt` template separately. On push, the workflow
-uses the `MACHINE_CONFIG` repository variable if set; otherwise the existing
-SWEET default applies. CI has not run this workflow for FP6 yet.
+uses the `MACHINE_CONFIG` repository variable if set; otherwise FP6 is the
+default. Run 39414717734 built and packaged the FP6 kernel; its boot image was
+not the previously used header v2 format, so it is not a verified device image.
 
 Source references inspected from LineageOS repositories at device-tree commit
 `f32428a`, device configuration commit `564f00b`, and kernel commit
@@ -98,6 +99,10 @@ been booted on the phone.
 
 After verifying SHA256SUMS, a temporary device test uses `fastboot devices`
 (exactly one phone) and `fastboot boot fp6-shim-boot.img`. Record the displayed
-shim status and bootloader response. This initial image has no root filesystem
-and does not establish userspace or driver support. Do not use the Sweet GPU
-phone-test helper for FP6.
+shim status and bootloader response. The FP6 CI packager builds a tiny signed
+init executable and appends it as a RAM disk, then boots with `rd=md0`. That
+exercises kernel-to-userspace startup without depending on the current missing
+UFS/IOMedia root path. It is a minimal bring-up init, not the iOS root
+filesystem. The FP6 UFS host driver and HFS root-media path are still
+unimplemented for this profile. Repackage with the stock FP6 DTB for the known
+header v2 boot path. Do not use the Sweet GPU phone-test helper for FP6.

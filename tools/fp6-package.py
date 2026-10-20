@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Package a CI FP6 kernel and matching ADT as a temporary Android v4 boot image."""
+"""Package a CI FP6 kernel and matching ADT as a temporary Android boot image."""
 import argparse
 import hashlib
 import json
@@ -18,16 +18,20 @@ def main():
     ap.add_argument('--adt', required=True, type=Path)
     ap.add_argument('--out', required=True, type=Path)
     ap.add_argument('--dtb', type=Path, default=None)
+    ap.add_argument('--ramdisk', type=Path, default=None,
+                    help='static Mach-O init image to boot from md0 instead of waiting for UFS/HFS')
     ap.add_argument('--header-version', default=None)
-    ap.add_argument('--cmdline', default='debug=0xc serial=3 cpus=8 keepsyms=1 -noprogress')
+    ap.add_argument('--cmdline', default=None)
     ap.add_argument('--image-name', default='fp6-shim-boot.img')
     ap.add_argument('--commit', default='local')
     ap.add_argument('--ci-run', default='local')
     args = ap.parse_args()
     out = args.out.resolve()
     out.mkdir(parents=True, exist_ok=True)
-    cmdline = args.cmdline
-    payload, info = mkpayload.build(str(args.kernel), str(args.adt), cmdline)
+    cmdline = args.cmdline or ('debug=0xc serial=3 cpus=8 keepsyms=1 -noprogress' +
+                               (' rd=md0' if args.ramdisk else ''))
+    payload, info = mkpayload.build(str(args.kernel), str(args.adt), cmdline,
+                                    str(args.ramdisk) if args.ramdisk else None)
     payload_path = out / 'fp6-payload.bin'
     payload_path.write_bytes(payload)
     hdr_ver = args.header_version or ('2' if args.dtb else '4')

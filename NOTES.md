@@ -298,7 +298,12 @@ error::ResourceWarning -m unittest discover -s tests` (also with
 - Separate boot observations reported by the user: XNU waits for
   `IOProviderClass IOMedia AppleHFS`, and the boot picker failed to write its
   reason to NVRAM. Neither observation verifies secondary CPU startup. Root media
-  publication and NVRAM persistence remain separate issues.
+  publication and NVRAM persistence remain separate issues. The wait is emitted
+  by `IOFindBSDRoot`'s fallback HFS-media matcher when no `rd=` root was selected.
+  For the next FP6 image, package a minimal Mach-O init as the existing virtual
+  `RAMDisk`/`rd=md0` root. This deliberately bypasses UFS; it does not implement or
+  validate the FP6 UFS host driver. The CI packager now builds and includes that
+  init. The known header-v2 packaging path still requires the local stock DTB.
 - Correction after reviewing the earlier FP6 boot notes: the known on-device path used
   Android boot header v2 with the stock DTB embedded. CI run `39414717734` uploaded a
   5,626,548-byte compressed artifact, but that artifact expands to a 16,203,776-byte
