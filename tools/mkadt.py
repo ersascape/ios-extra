@@ -257,8 +257,10 @@ def build_fp6(seed=None, phys_base=None, mem_size=None):
         node('asmb', [ph(), ('lp-sip0', u64(0x6f)), ('lp-sip1', u32(1))])])
 
     # CPU affinity values, Kryo compatibility and 4/3/1 cluster membership
-    # match Qualcomm's published Volcano DTS. Frequencies and cache topology
-    # are omitted because they are not required to identify the boot CPUs.
+    # match Qualcomm's published Volcano DTS. XNU's topology parser recognizes
+    # the ASCII tags 'E' and 'P' in cluster-type; use its two scheduler classes
+    # for the four efficiency and four performance cores. Frequencies and cache
+    # topology are omitted because they are not required to start the CPUs.
     cpu_nodes = []
     for core in range(8):
         cluster = 0 if core < 4 else 1 if core < 7 else 2
@@ -266,7 +268,8 @@ def build_fp6(seed=None, phys_base=None, mem_size=None):
             ph(), ('device_type', cstr('cpu')),
             ('compatible', cstr('qcom,kryo') + cstr('ARM,v8')),
             ('reg', u32(core << 8)), ('cpu-id', u32(core)),
-            ('cluster-id', u32(cluster)), ('cluster-type', u32(0)),
+            ('cluster-id', u32(cluster)),
+            ('cluster-type', u32(ord('E') if cluster == 0 else ord('P'))),
             ('die-cluster-id', u32(0)),
             ('cluster-core-id', u32(core if cluster == 0 else core - (4 if cluster == 1 else 7))),
             ('state', cstr('running' if core == 0 else 'stopped')),

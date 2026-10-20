@@ -1,5 +1,19 @@
 # ios-extra — current state
 
+## FP6 CPU cluster topology (2026-10-20)
+
+- Source review confirms the Volcano DTS uses MPIDRs `0x000` through `0x700`,
+  with efficiency CPUs 0–3 and performance CPUs 4–7 arranged as 4/3/1 clusters.
+  The generated ADT preserved those MPIDRs and cluster IDs, but set every
+  `cluster-type` to integer 0.
+- XNU's parser in patch 0099 recognizes ASCII `E`/`P` values for those types.
+  Updated `tools/mkadt.py` to emit `E` for CPUs 0–3 and `P` for CPUs 4–7. This
+  corrects the topology metadata; it does not by itself enable AMP scheduling
+  or prove concurrent workload execution.
+- The ADT generator completed locally. A matching XNU CI build and fresh phone
+  boot are still needed. User previously reported eight CPUs up, but did not
+  provide the startup log that would verify each per-core PSCI and IPI message.
+
 ## FP6 watchdogd service discovery (2026-10-20)
 
 - The FP6 DT/ADT does not expose a verified APSS/MSM watchdog resource, so do
