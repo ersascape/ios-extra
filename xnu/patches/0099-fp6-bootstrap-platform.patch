@@ -154,18 +154,6 @@ index 135405e..30e3d8c 100644
  	/* libpthread-514.100.2 includes the trailing kwe_uth pointer. */
  	char opaque[56];
  #else
-diff --git a/config/MASTER b/config/MASTER
-index 4fde794..07147cb 100644
---- a/config/MASTER
-+++ b/config/MASTER
-@@ -113,7 +113,6 @@ options		CONFIG_WORKLOOP_DEBUG	# <config_workloop_debug>
- #	4.4 filesystems
- #
- options		MOCKFS		# Boot from an executable	# <mockfs>
--options		SWEET_HFS	# Built-in Apple OSS HFS (SWEET)	# <sweet_hfs>
- options		FIFO		# fifo support			# <fifo>
- options		FDESC		# fdesc_fs support		# <fdesc>
- options		DEVFS		# devfs support			# <devfs>
 diff --git a/config/MASTER.arm64.fp6 b/config/MASTER.arm64.fp6
 new file mode 100644
 index 0000000..306dd5d
@@ -410,19 +398,6 @@ index 0000000..b87d04f
 +
 +options   CONFIG_RESLIDE_SHARED_CACHE		# <reslide_shared_cache>
 +options   CONFIG_KERNEL_TBI		# <kernel_tbi>
-diff --git a/config/MASTER.arm64.sweet b/config/MASTER.arm64.sweet
-index e305f0d..d1eaa84 100644
---- a/config/MASTER.arm64.sweet
-+++ b/config/MASTER.arm64.sweet
-@@ -95,6 +95,8 @@ machine		"arm64"						# <arm64>
- 
- makeoptions	OSFMK_MACHINE = "arm64"				# <mach>
- 
-+options		SWEET_HFS	# Built-in Apple OSS HFS	# <sweet_hfs>
-+
- options		COUNT_SYSCALLS		# count bsd system calls 	# <countcalls>
- options     TRASH_VFP_ON_SAVE   # <debug,trash_vfp>
- options		ALTERNATE_DEBUGGER	# <alternate_debugger>
 diff --git a/iokit/Kernel/IOService.cpp b/iokit/Kernel/IOService.cpp
 index 59c834e..f0ba20c 100644
 --- a/iokit/Kernel/IOService.cpp
