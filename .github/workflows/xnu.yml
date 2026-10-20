@@ -215,4 +215,5 @@ jobs:
           retention-days: 7
       - name: Explain missing FP6 stock DTB
         if: ${{ vars.FP6_STOCK_DTB_URL == '' }}
-        run: echo '::warning::Skipped fastboot image: set the repository variable FP6_STOCK_DTB_URL to a direct URL for the matching stock FP6 DTB.'
+        run: |
+          echo "::warning::Skipped fastboot image: set the repository variable FP6_STOCK_DTB_URL to a direct URL for the matching stock FP6 DTB."
