@@ -2,7 +2,7 @@
 # dxb runs patches/*.sh from the XNU source root before applying *.patch.
 set -euo pipefail
 
-case "${MACHINE_CONFIG:-}" in SWEET|PHOENIX) ;; *) exit 0 ;; esac
+case "${MACHINE_CONFIG:-}" in SWEET|PHOENIX|FP6) ;; *) exit 0 ;; esac
 [[ "${MACOS_VERSION:-}" == 13.5 ]] || {
     echo 'SWEET libpthread integration requires xnu-8796.141.3 (macOS 13.5)' >&2
     exit 1
@@ -62,4 +62,4 @@ PY
 # the provider so local compiles from the uploaded build tree work as well.
 pthread_sdk=$(xcrun --sdk macosx --show-sdk-path)
 cp "$pthread_sdk/usr/include/TargetConditionals.h" bsd/pthread/sweet_libpthread/
-echo "Staged libpthread-514.100.2 ($pthread_sha) for SWEET"
+echo "Staged libpthread-514.100.2 ($pthread_sha) for ${MACHINE_CONFIG}"

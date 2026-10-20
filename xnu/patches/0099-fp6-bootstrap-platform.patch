@@ -1209,7 +1209,7 @@ index d43130f..b3e2216 100644
  	if (root_pointer == 0) {
 +#if defined(ARM64_BOARD_CONFIG_SWEET) || defined(ARM64_BOARD_CONFIG_FP6)
 +		static dbg_registry_t builtin_cdbg;
-+		builtin_cdbg.top_level_header.record_id = kDbgIdTopLevelHeader;
++		builtin_cdbg.top_level_header.record_id = DEBUG_RECORD_ID_LONG('C','D','B','G','-','H','D','R');
 +		builtin_cdbg.top_level_header.num_records = 16;
 +		builtin_cdbg.top_level_header.record_size_bytes = sizeof(dbg_record_header_t);
 +		consistent_debug_registry = &builtin_cdbg;

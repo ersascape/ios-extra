@@ -255,3 +255,19 @@ pcap), `phone-ecm-host.py` (host side of the USB ECM link), `xnu-cc.py` (single-
 arm64 compile against the CI build tree). Host tests: `python3 -W
 error::ResourceWarning -m unittest discover -s tests` (also with
 `IOS_EXTRA_CFLAGS="-fsanitize=address,undefined -fno-sanitize-recover=all -g"`).
+
+## FP6 Actions failure review (2026-10-20)
+
+- Reviewed failed FP6 run `39412735706` at `83a712822ef0855bf653f00ee2938b8845766352`.
+  The compile reached the XNU build and reported an undefined `kDbgIdTopLevelHeader`
+  in the FP6 consistent-debug fallback, plus missing staged `sweet_libpthread/kern/*.c`
+  includes. Downloaded that run's `xnu-buildtree` artifact and confirmed XNU 8796's
+  `consistent_debug.h` documents the top-level record field but does not define that
+  symbol. The fallback now supplies a local CDBG-HDR record ID. The libpthread staging
+  script now stages the immutable matching provider for FP6, consistent with patch
+  0099 compiling its provider sources. Pending a new Actions result.
+- Reviewed FP6 Qualcomm constants in patch 0099 and the generated ADT: FP6 uses
+  GIC redistributor stride `0x40000`, virtual timer INTID 27, one CPU for initial
+  bring-up, and SM7635/Volcano compatible strings. Patch 0099 corrects the initial
+  FP6 header's placeholder stride. No device or display driver behavior is inferred
+  from these build definitions; the framebuffer splash is bootloader-provided.
