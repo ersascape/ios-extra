@@ -96,6 +96,17 @@ design is [docs/GPU_CX_EXPERIMENT.md](docs/GPU_CX_EXPERIMENT.md).
   so the next UFS-root attempt can identify the underlying failure without a
   working UDP stream. This is diagnostic instrumentation, not yet an UFS fix;
   it still needs a CI build and phone boot.
+- Patch 0102 CI run `39431367035` succeeded on commit
+  `cd38bdead498c0dd7e687aa169490ad723f781a5`. Kernel SHA256:
+  `cc1462c718fa2c8280c8426b0cca4eb87cac2a35a01a74437ac5558b003df334`;
+  matching FP6 ADT SHA256: `2a9500cfffd003771621b6ea0afbea573f3e43eabff748f2777c2032b49b76ff`.
+  CI boot packaging skipped because `FP6_STOCK_DTB_URL` is unset. Locally
+  packaged and header-v2 validated a temporary UFS-root image using those
+  artifacts and local stock DTB:
+  `/tmp/fp6-ufs-stage-394313/fp6-shim-ufs-stage-debug.img`, 22,900,736 bytes,
+  SHA256 `3b9100a82b7576f8f9ebf6d4c7ea66593e9ce0cf3e88f3fcfed383d5e37825c5`.
+  Command line includes `rd=ufsroot0 fp6usb=2`. It has not been booted; no
+  UFS behavior or failure-stage report has yet been observed on hardware.
 
 ## FP6 hardware bringup and pthread/gPanicBase fixes (2026-10-20)
 
