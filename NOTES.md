@@ -60,10 +60,19 @@
   As a result, its `vnode_check_signature` hook never marks root-filesystem
   binaries `CS_PLATFORM_BINARY`; the boot-task check rejects `/sbin/fsck`.
 - Extended patch 0035's policy-registration guard to include FP6. This is the
-  targeted source fix and still requires CI. The next image should also include
-  `launchd_unsecure_cache=1`, as the known-good SWEET userspace boot args do;
-  that independently lets launchd use its job cache without AMFI's trust-cache
-  service. No new image is available yet.
+  targeted source fix. Commit `8c423bf0bd8917e0a49787eac2b40bfb5385625f`
+  passed CI run `39447341232` (XNU build and FP6 boot job).
+- `launchd_unsecure_cache=1` is also included, as in the known-good SWEET
+  userspace boot args; it lets launchd use its job cache without AMFI's
+  trust-cache service. Packaged and header-v2 validated the matching kernel and
+  ADT plus verified stock DTB as
+  `/tmp/fp6-platform-394473/ufs-root/fp6-shim-ufs-root-amfi.img`, SHA256
+  `34ac69fbdef9e3d32d4d0dbb6dc0b28ba4264590a1b71dca026a4aa347509c0a`.
+  Kernel SHA256 `38c525fe8753ee2a456ad684bd38264d70e582846a12e17bc04d30d500bc3cb4`,
+  ADT SHA256 `f228d71be97a8f6525819282745dd92d1ef7fecbd26a86aaaa6c4d8f8f46b35b`.
+  Command line retains UFS writes and USB diagnostics and adds both
+  `unentitled_ios_sim_launch=1 launchd_unsecure_cache=1`. Phone validation is
+  pending.
 
 Last updated 2026-10-20 after adding the FP6 ADT profile. Read [HANDOFF.md](HANDOFF.md) for how to
 continue and [AGENTS.md](AGENTS.md) for the rules. The per-step history (images,
