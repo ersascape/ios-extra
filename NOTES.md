@@ -24,8 +24,17 @@ design is [docs/GPU_CX_EXPERIMENT.md](docs/GPU_CX_EXPERIMENT.md).
   `18f69070e456841cc4d400f6d6438b7ede02eb2e6b0429d4b231da88e7d9eddc`,
   and no FP6 ADT artifact. A source commit mentioning FP6 did not select FP6
   for this push build. Do not package that kernel for FP6.
-- Dispatched run `39372737713` explicitly with `machine_config=FP6`,
-  DEVELOPMENT, from main after `b08556b`. Result and artifacts are pending.
+- FP6 build run `39373440958` at `24370bb` generated the ADT, then failed during
+  XNU compilation; the `fp6-boot` job was skipped, so no matching kernel/boot
+  image exists. The failed compile pulled in SWEET HFS and pthread features
+  through the shared master config, and the portable BearSSL include paths were
+  only enabled for SWEET.
+- Corrected the config scope: SWEET HFS is machine-specific; FP6 no longer
+  enables Sweet HFS or its bundled pthread provider. FP6 still stages the
+  portable crypto implementation, with compiler include paths enabled for
+  FP6. A clean local replay now applies all 99 repository patches and the four
+  selected Ventura harness patches. This is patch validation only; a full CI
+  build and phone boot are still pending.
 
 - Local LLVM build now links the shim and packages an unsigned Android v4 image.
   The local packaging check used placeholder payload bytes only: shim and ramdisk
@@ -33,8 +42,8 @@ design is [docs/GPU_CX_EXPERIMENT.md](docs/GPU_CX_EXPERIMENT.md).
 - `tools/fp6-package.py` consumes a kernel and ADT from the same CI run, builds
   the FP6 shim, verifies packaged components and writes hashes/provenance.
   The new `fp6-boot` CI job uploads `fp6-fastboot-boot` after an FP6 kernel build.
-  Its first CI execution remains pending. Pushes still use the repository's
-  MACHINE_CONFIG variable (default SWEET); select FP6 for a manual run.
+  Its first CI execution failed before packaging. Pushes now use the FP6 target
+  by default; select other targets explicitly for manual runs.
 - FP6 shim failures halt instead of entering Sweet diagnostic probes. Missing
   runtime framebuffer leaves the display untouched. The loader searches aligned
   payload headers after possible vendor ramdisks and validates segment extents.

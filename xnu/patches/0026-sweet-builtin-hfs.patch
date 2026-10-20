@@ -1,14 +1,3 @@
-diff --git a/config/MASTER b/config/MASTER
---- a/config/MASTER
-+++ b/config/MASTER
-@@ -113,6 +113,7 @@
- #	4.4 filesystems
- #
- options		MOCKFS		# Boot from an executable	# <mockfs>
-+options		SWEET_HFS	# Built-in Apple OSS HFS (SWEET)	# <sweet_hfs>
- options		FIFO		# fifo support			# <fifo>
- options		FDESC		# fdesc_fs support		# <fdesc>
- options		DEVFS		# devfs support			# <devfs>
 diff --git a/config/MASTER.arm64.sweet b/config/MASTER.arm64.sweet
 --- a/config/MASTER.arm64.sweet
 +++ b/config/MASTER.arm64.sweet
@@ -21,6 +10,13 @@ diff --git a/config/MASTER.arm64.sweet b/config/MASTER.arm64.sweet
  #  FILESYS_RELEASE= [ FILESYS_BASE ]
  #  FILESYS_DEV =    [ FILESYS_BASE config_iocount_trace ]
  #  FILESYS_DEBUG =  [ FILESYS_BASE config_iocount_trace ]
+@@ -95,5 +95,6 @@
+ machine		"arm64"						# <arm64>
+ 
+ makeoptions	OSFMK_MACHINE = "arm64"				# <mach>
+ 
++options		SWEET_HFS	# Built-in Apple OSS HFS (SWEET) # <sweet_hfs>
+ options		COUNT_SYSCALLS		# count bsd system calls 	# <countcalls>
 diff --git a/bsd/conf/files b/bsd/conf/files
 --- a/bsd/conf/files
 +++ b/bsd/conf/files

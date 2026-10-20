@@ -56,55 +56,9 @@ index 9066367..0ec93ff 100644
  	if (trust_cache_rt == NULL) {
  		return KERN_NOT_SUPPORTED;
  	}
-diff --git a/bsd/pthread/sweet_pthread_init.c b/bsd/pthread/sweet_pthread_init.c
-index 5a82439..4a2fa55 100644
---- a/bsd/pthread/sweet_pthread_init.c
-+++ b/bsd/pthread/sweet_pthread_init.c
-@@ -1,5 +1,5 @@
- /* Built-in provider: Apple libpthread-514.100.2, paired with xnu-8796.141.3. */
--#if defined(ARM64_BOARD_CONFIG_SWEET)
-+#if (defined(ARM64_BOARD_CONFIG_SWEET) || defined(ARM64_BOARD_CONFIG_FP6))
- #include "sweet_pthread_compat.h"
- #include "sweet_libpthread/kern/kern_init.c"
- 
-diff --git a/bsd/pthread/sweet_pthread_support.c b/bsd/pthread/sweet_pthread_support.c
-index beae777..486f1cf 100644
---- a/bsd/pthread/sweet_pthread_support.c
-+++ b/bsd/pthread/sweet_pthread_support.c
-@@ -1,5 +1,5 @@
- /* Built-in provider: Apple libpthread-514.100.2, paired with xnu-8796.141.3. */
--#if defined(ARM64_BOARD_CONFIG_SWEET)
-+#if (defined(ARM64_BOARD_CONFIG_SWEET) || defined(ARM64_BOARD_CONFIG_FP6))
- #include "sweet_pthread_compat.h"
- #include "sweet_libpthread/kern/kern_support.c"
- #endif /* ARM64_BOARD_CONFIG_SWEET */
-diff --git a/bsd/pthread/sweet_pthread_synch.c b/bsd/pthread/sweet_pthread_synch.c
-index 08baa1b..8a159f5 100644
---- a/bsd/pthread/sweet_pthread_synch.c
-+++ b/bsd/pthread/sweet_pthread_synch.c
-@@ -1,5 +1,5 @@
- /* Built-in provider: Apple libpthread-514.100.2, paired with xnu-8796.141.3. */
--#if defined(ARM64_BOARD_CONFIG_SWEET)
-+#if (defined(ARM64_BOARD_CONFIG_SWEET) || defined(ARM64_BOARD_CONFIG_FP6))
- #include "sweet_pthread_compat.h"
- #include "sweet_libpthread/kern/kern_synch.c"
- #endif /* ARM64_BOARD_CONFIG_SWEET */
-diff --git a/bsd/sys/pthread_internal.h b/bsd/sys/pthread_internal.h
-index 135405e..30e3d8c 100644
---- a/bsd/sys/pthread_internal.h
-+++ b/bsd/sys/pthread_internal.h
-@@ -34,7 +34,7 @@
- 
- struct ksyn_waitq_element {
- #if __LP64__
--	#if defined(ARM64_BOARD_CONFIG_SWEET)
-+	#if (defined(ARM64_BOARD_CONFIG_SWEET) || defined(ARM64_BOARD_CONFIG_FP6))
- 	/* libpthread-514.100.2 includes the trailing kwe_uth pointer. */
- 	char opaque[56];
- #else
 diff --git a/config/MASTER.arm64.fp6 b/config/MASTER.arm64.fp6
 new file mode 100644
-index 0000000..a469824
+index 0000000..306dd5d
 --- /dev/null
 +++ b/config/MASTER.arm64.fp6
 @@ -0,0 +1,115 @@
@@ -141,7 +95,7 @@ index 0000000..a469824
 +#  BSD_RELEASE =    [ BSD_BASE ]
 +#  BSD_DEV =        [ BSD_BASE config_vnguard ]
 +#  BSD_DEBUG =      [ BSD_BASE config_vnguard ]
-+#  FILESYS_BASE =   [ devfs fdesc fifo mockfs sweet_hfs fs_compression config_protect config_mnt_rootsnap config_rosv_startup config_mount_vm config_mount_prebootrecovery config_basesystemroot config_fse quota namedstreams config_imgsrc_access config_triggers config_searchfs config_volfs config_appledouble nullfs bindfs config_mnt_suid config_firmlinks config_dataless_files config_union_mounts config_file_leases ]
++#  FILESYS_BASE =   [ devfs fdesc fifo mockfs fs_compression config_protect config_mnt_rootsnap config_rosv_startup config_mount_vm config_mount_prebootrecovery config_basesystemroot config_fse quota namedstreams config_imgsrc_access config_triggers config_searchfs config_volfs config_appledouble nullfs bindfs config_mnt_suid config_firmlinks config_dataless_files config_union_mounts config_file_leases ]
 +#  FILESYS_RELEASE= [ FILESYS_BASE ]
 +#  FILESYS_DEV =    [ FILESYS_BASE config_iocount_trace ]
 +#  FILESYS_DEBUG =  [ FILESYS_BASE config_iocount_trace ]
@@ -225,10 +179,10 @@ index 0000000..a469824
 +options   CONFIG_KERNEL_TBI		# <kernel_tbi>
 diff --git a/config/MASTER.arm64.phoenix b/config/MASTER.arm64.phoenix
 new file mode 100644
-index 0000000..f822c67
+index 0000000..b87d04f
 --- /dev/null
 +++ b/config/MASTER.arm64.phoenix
-@@ -0,0 +1,115 @@
+@@ -0,0 +1,117 @@
 +#
 +# phoenix bootstrap: MASTER.arm64.MacOSX plus the open-source
 +# arm64 assembly and pmap (nos_arm_asm, nos_arm_pmap). Apple's own SoC configs
@@ -326,6 +280,8 @@ index 0000000..f822c67
 +
 +makeoptions	OSFMK_MACHINE = "arm64"				# <mach>
 +
++options		SWEET_HFS	# Built-in Apple OSS HFS	# <sweet_hfs>
++
 +options		COUNT_SYSCALLS		# count bsd system calls 	# <countcalls>
 +options     TRASH_VFP_ON_SAVE   # <debug,trash_vfp>
 +options		ALTERNATE_DEBUGGER	# <alternate_debugger>
@@ -345,7 +301,7 @@ index 0000000..f822c67
 +options   CONFIG_RESLIDE_SHARED_CACHE		# <reslide_shared_cache>
 +options   CONFIG_KERNEL_TBI		# <kernel_tbi>
 diff --git a/iokit/Kernel/arm/SweetCPU.cpp b/iokit/Kernel/arm/SweetCPU.cpp
-index 2545cf9..eedc287 100644
+index 2545cf9..cf5c67a 100644
 --- a/iokit/Kernel/arm/SweetCPU.cpp
 +++ b/iokit/Kernel/arm/SweetCPU.cpp
 @@ -5,7 +5,7 @@
@@ -357,6 +313,187 @@ index 2545cf9..eedc287 100644
  #include <IOKit/IOCPU.h>
  #include <IOKit/IOLib.h>
  #include <libkern/c++/OSData.h>
+@@ -75,14 +75,14 @@ SweetCPU::start(IOService *provider)
+ 	}
+ 	/* MPIDR Aff1 = core: 0x000-0x500 A55, 0x600/0x700 A76 */
+ 	if (cpu->phys_id > 0x700 || (cpu->phys_id & 0xff) != 0 ||
+-	    topology->num_cpus > SWEET_SMP_MAX_CPUS) {
+-		panic("SWEET CPU: invalid topology cpu=%u mpidr=0x%x count=%u",
++	    topology->num_cpus > QCOM_BOOT_MAX_CPUS) {
++		panic("QCOM CPU: invalid topology cpu=%u mpidr=0x%x count=%u",
+ 		    cpu->cpu_id, cpu->phys_id, topology->num_cpus);
+ 	}
+ 	if (!IOCPU::start(provider)) {
+ 		return false;
+ 	}
+-	cpuName = OSSymbol::withCStringNoCopy("Kryo 470");
++	cpuName = OSSymbol::withCStringNoCopy("Qualcomm ARM64");
+ 	if (cpuName == NULL) {
+ 		return false;
+ 	}
+@@ -101,10 +101,10 @@ SweetCPU::start(IOService *provider)
+ 	perfmon_interrupt_handler_func pmi_handler = NULL;
+ 	kern_return_t result = ml_processor_register(&info, &machProcessor, &ipi_handler, &pmi_handler);
+ 	if (result != KERN_SUCCESS) {
+-		panic("SWEET CPU: ml_processor_register failed: %d", result);
++		panic("QCOM CPU: ml_processor_register failed: %d", result);
+ 	}
+ 	if (pmi_handler != NULL) {
+-		panic("SWEET CPU: PMI routing is not implemented");
++		panic("QCOM CPU: PMI routing is not implemented");
+ 	}
+ 
+ 	registerService();
+@@ -114,7 +114,7 @@ SweetCPU::start(IOService *provider)
+ 		thread_t thread;
+ 		result = kernel_thread_start(&SweetCPU::startAll, NULL, &thread);
+ 		if (result != KERN_SUCCESS) {
+-			panic("SWEET CPU: cannot create startup thread: %d", result);
++			panic("QCOM CPU: cannot create startup thread: %d", result);
+ 		}
+ 		thread_deallocate(thread);
+ 	}
+@@ -128,8 +128,8 @@ SweetCPU::startAll(void *arg __unused, wait_result_t result __unused)
+ 	const ml_topology_info_t *topology = ml_get_topology_info();
+ 	uint32_t requested = 1;
+ 	PE_parse_boot_argn("cpus", &requested, sizeof(requested));
+-	IOLog("SWEET CPU: requested=%u selected=%u (limit=%u)\n",
+-	    requested, topology->num_cpus, SWEET_SMP_MAX_CPUS);
++	IOLog("QCOM CPU: requested=%u selected=%u (limit=%u)\n",
++	    requested, topology->num_cpus, QCOM_BOOT_MAX_CPUS);
+ 
+ 	uint64_t deadline;
+ 	nanoseconds_to_deadline(10 * NSEC_PER_SEC, &deadline);
+@@ -137,35 +137,35 @@ SweetCPU::startAll(void *arg __unused, wait_result_t result __unused)
+ 		if (mach_absolute_time() > deadline) {
+ 			for (unsigned int i = 0; i < topology->num_cpus; i++) {
+ 				if (__atomic_load_n(&sweet_cpus[i], __ATOMIC_ACQUIRE) == NULL) {
+-					IOLog("SWEET CPU: cpu=%u NOT registered (IOKit matching timeout)\n", i);
++					IOLog("QCOM CPU: cpu=%u NOT registered (IOKit matching timeout)\n", i);
+ 				}
+ 			}
+-			panic("SWEET CPU: CPU registration timeout");
++			panic("QCOM CPU: CPU registration timeout");
+ 		}
+ 		IOSleep(1);
+ 	}
+ 	/* The supplied ADT has cpu0 as the boot CPU and ascending A55 nodes. */
+ 	if (topology->boot_cpu->cpu_id != 0 || topology->boot_cpu->phys_id != 0) {
+-		panic("SWEET CPU: expected boot MPIDR 0 and logical CPU 0");
++		panic("QCOM CPU: expected boot MPIDR 0 and logical CPU 0");
+ 	}
+ 	for (unsigned int i = 0; i < topology->num_cpus; i++) {
+ 		SweetCPU *cpu = __atomic_load_n(&sweet_cpus[i], __ATOMIC_ACQUIRE);
+ 		kern_return_t kr = processor_start(cpu->machProcessor);
+ 		if (kr != KERN_SUCCESS) {
+-			panic("SWEET CPU: cpu=%u processor_start failed: %d", i, kr);
++			panic("QCOM CPU: cpu=%u processor_start failed: %d", i, kr);
+ 		}
+ 		/* processor_start() is asynchronous for secondaries in this XNU. */
+ 		nanoseconds_to_deadline(5 * NSEC_PER_SEC, &deadline);
+ 		while (__atomic_load_n(&cpu->initialized, __ATOMIC_ACQUIRE) == 0 ||
+ 		    !sweet_cpu_signal_is_enabled(i)) {
+ 			if (mach_absolute_time() > deadline) {
+-				IOLog("SWEET CPU: cpu=%u mpidr=0x%x NOT alive after 5s\n",
++				IOLog("QCOM CPU: cpu=%u mpidr=0x%x NOT alive after 5s\n",
+ 				    i, topology->cpus[i].phys_id);
+-				panic("SWEET CPU: cpu=%u startup timeout (reset/MMU/GIC/SGI)", i);
++				panic("QCOM CPU: cpu=%u startup timeout (reset/MMU/GIC/SGI)", i);
+ 			}
+ 			IOSleep(1);
+ 		}
+-		IOLog("SWEET CPU: cpu=%u mpidr=0x%x came alive; SGI1 OK\n",
++		IOLog("QCOM CPU: cpu=%u mpidr=0x%x came alive; SGI1 OK\n",
+ 		    i, topology->cpus[i].phys_id);
+ 	}
+ 	/* Publish exactly once, after every selected CPU has completed initCPU(). */
+@@ -173,7 +173,7 @@ SweetCPU::startAll(void *arg __unused, wait_result_t result __unused)
+ 	__atomic_load_n(&sweet_cpus[topology->boot_cpu->cpu_id], __ATOMIC_ACQUIRE)->cpusRunning();
+ 	IOService::publishResource(gIOAllCPUInitializedKey, kOSBooleanTrue);
+ 	ml_set_max_cpus(topology->max_cpu_id + 1);
+-	IOLog("SWEET CPU: %u/%u CPUs initialized, SGI1 verified\n",
++	IOLog("QCOM CPU: %u/%u CPUs initialized, SGI1 verified\n",
+ 	    topology->num_cpus, topology->num_cpus);
+ 	thread_terminate(current_thread());
+ }
+@@ -189,7 +189,7 @@ void
+ SweetCPU::initCPU(bool boot)
+ {
+ 	if (!boot) {
+-		panic("SWEET CPU: cpu=%u resume is not implemented", getCPUNumber());
++		panic("QCOM CPU: cpu=%u resume is not implemented", getCPUNumber());
+ 	}
+ 	assert(cpu_number() == (int)getCPUNumber());
+ 
+@@ -200,7 +200,7 @@ SweetCPU::initCPU(bool boot)
+ 	 * Waiting here with DAIF.I set would deadlock every secondary. */
+ 	signalCPU(this);
+ 	setCPUState(kIOCPUStateRunning);
+-	kprintf("SWEET CPU: cpu=%u entered initCPU mpidr=0x%llx EL%llu IRQs=%u\n",
++	kprintf("QCOM CPU: cpu=%u entered initCPU mpidr=0x%llx EL%llu IRQs=%u\n",
+ 	    getCPUNumber(), __builtin_arm_rsr64("MPIDR_EL1") & 0xffffULL,
+ 	    __builtin_arm_rsr64("CurrentEL") >> 2, ml_get_interrupts_enabled());
+ 	__atomic_store_n(&initialized, 1, __ATOMIC_RELEASE);
+@@ -212,18 +212,18 @@ SweetCPU::signalCPU(IOCPU *target)
+ 	const ml_topology_info_t *topology = ml_get_topology_info();
+ 	unsigned int logical = target->getCPUNumber();
+ 	if (logical >= topology->num_cpus) {
+-		panic("SWEET CPU: invalid SGI target %u", logical);
++		panic("QCOM CPU: invalid SGI target %u", logical);
+ 	}
+ 	/* Use the TARGET affinity, including Aff1, never the sender's MPIDR. */
+ 	uint64_t mpidr = topology->cpus[logical].phys_id;
+ 	unsigned int aff0 = mpidr & 0xff;
+ 	if (aff0 >= 16) {
+-		panic("SWEET CPU: SGI target requires unsupported range selector");
++		panic("QCOM CPU: SGI target requires unsupported range selector");
+ 	}
+ 	uint64_t sgi = (((mpidr >> 32) & 0xff) << 48) |
+ 	    (((mpidr >> 16) & 0xff) << 32) |
+ 	    (((mpidr >> 8) & 0xff) << 16) |
+-	    ((uint64_t)SWEET_IPI_SGI << 24) | (1ULL << aff0);
++	    ((uint64_t)QCOM_IPI_SGI << 24) | (1ULL << aff0);
+ 	__builtin_arm_dsb(DSB_ISHST);
+ 	__builtin_arm_wsr64("ICC_SGI1R_EL1", sgi);
+ 	__builtin_arm_isb(ISB_SY);
+@@ -236,17 +236,17 @@ SweetCPU::startCPU(vm_offset_t start_paddr, vm_offset_t arg_paddr)
+ 	/* cpu_start() passes NULL,NULL: x20/x21 are set by LowResetVectorBase. */
+ 	if (start_paddr != 0 || arg_paddr != 0 || cpu->phys_id == 0 ||
+ 	    __atomic_load_n(&initialized, __ATOMIC_ACQUIRE) != 0) {
+-		panic("SWEET CPU: cpu=%u unsupported restart", getCPUNumber());
++		panic("QCOM CPU: cpu=%u unsupported restart", getCPUNumber());
+ 	}
+ 	vm_offset_t entry = ml_static_vtop((vm_offset_t)&sweet_secondary_entry);
+-	IOLog("SWEET CPU: cpu=%u CPU_ON target=0x%x entry_pa=0x%llx context=%u\n",
++	IOLog("QCOM CPU: cpu=%u CPU_ON target=0x%x entry_pa=0x%llx context=%u\n",
+ 	    getCPUNumber(), cpu->phys_id, (uint64_t)entry, getCPUNumber());
+ 	__builtin_arm_dsb(DSB_SY);
+ 	int32_t rc = sweet_psci_cpu_on(cpu->phys_id, entry, getCPUNumber());
+-	IOLog("SWEET CPU: cpu=%u PSCI CPU_ON rc=%d\n", getCPUNumber(), rc);
++	IOLog("QCOM CPU: cpu=%u PSCI CPU_ON rc=%d\n", getCPUNumber(), rc);
+ 	/* cpu_start() discards PE_cpu_start's return; do not silently carry on. */
+ 	if (rc != 0) {
+-		panic("SWEET CPU: cpu=%u NOT alive: PSCI CPU_ON rc=%d", getCPUNumber(), rc);
++		panic("QCOM CPU: cpu=%u NOT alive: PSCI CPU_ON rc=%d", getCPUNumber(), rc);
+ 	}
+ 	return KERN_SUCCESS;
+ }
+@@ -254,13 +254,13 @@ SweetCPU::startCPU(vm_offset_t start_paddr, vm_offset_t arg_paddr)
+ void
+ SweetCPU::quiesceCPU(void)
+ {
+-	panic("SWEET CPU: CPU quiesce is not implemented");
++	panic("QCOM CPU: CPU quiesce is not implemented");
+ }
+ 
+ void
+ SweetCPU::haltCPU(void)
+ {
+-	panic("SWEET CPU: CPU halt/suspend is not implemented");
++	panic("QCOM CPU: CPU halt/suspend is not implemented");
+ }
+ 
+ const OSSymbol *
 diff --git a/iokit/Kernel/arm/SweetPlatformExpert.cpp b/iokit/Kernel/arm/SweetPlatformExpert.cpp
 index 0631685..f8b8fcc 100644
 --- a/iokit/Kernel/arm/SweetPlatformExpert.cpp
@@ -397,6 +534,19 @@ index 92f3e26..d02ca88 100644
      "     'IOProbeScore'    = 10000:32;"
      "   },"
      "   {"
+diff --git a/libkern/conf/Makefile.template b/libkern/conf/Makefile.template
+index aca295c..b43dd4e 100644
+--- a/libkern/conf/Makefile.template
++++ b/libkern/conf/Makefile.template
+@@ -19,7 +19,7 @@ include $(MakeInc_def)
+ CFLAGS+= -include meta_features.h -DLIBKERN_KERNEL_PRIVATE -DOSALLOCDEBUG=1
+ SFLAGS+= -include meta_features.h
+ 
+-ifeq ($(CURRENT_MACHINE_CONFIG),SWEET)
++ifneq ($(filter SWEET PHOENIX FP6,$(CURRENT_MACHINE_CONFIG)),)
+ SWEET_AES_ROOT = $(SRCROOT)/libkern/crypto/sweet_bearssl
+ SWEET_AES_INC = -I$(SWEET_AES_ROOT)/inc -I$(SWEET_AES_ROOT)/src
+ sweet_aes.o_INCFLAGS = $(SWEET_AES_INC)
 diff --git a/libkern/crypto/corecrypto_aes.c b/libkern/crypto/corecrypto_aes.c
 index 384abb6..91c7462 100644
 --- a/libkern/crypto/corecrypto_aes.c
@@ -634,27 +784,38 @@ index b082a10..093338b 100644
  boolean_t sweet_cpu_signal_is_enabled(unsigned int cpu);
  boolean_t
 diff --git a/osfmk/arm64/machine_routines.c b/osfmk/arm64/machine_routines.c
-index a1f2a91..6ff8cbb 100644
+index a1f2a91..f68bff7 100644
 --- a/osfmk/arm64/machine_routines.c
 +++ b/osfmk/arm64/machine_routines.c
-@@ -954,7 +954,7 @@ ml_parse_cpu_topology(void)
+@@ -954,13 +954,13 @@ ml_parse_cpu_topology(void)
  	const boolean_t cpus_boot_arg_present = PE_parse_boot_argn("cpus", &cpu_boot_arg, sizeof(cpu_boot_arg));
  	const boolean_t cpumask_boot_arg_present = PE_parse_boot_argn("cpumask", &cpumask_boot_arg, sizeof(cpumask_boot_arg));
  
 -#if defined(SWEET)
+-	/* Opt in to SMP: cpus=N (N <= SWEET_SMP_MAX_CPUS; cores 6-7 are the A76s). */
 +#if (defined(SWEET) || defined(FP6))
- 	/* Opt in to SMP: cpus=N (N <= SWEET_SMP_MAX_CPUS; cores 6-7 are the A76s). */
++	/* Board-specific bring-up ceiling; FP6 remains single-CPU. */
  	if (!cpus_boot_arg_present || cpu_boot_arg == 0) {
  		cpu_boot_arg = 1;
-@@ -1087,7 +1087,7 @@ ml_parse_cpu_topology(void)
+ 	}
+-	if (cpu_boot_arg > SWEET_SMP_MAX_CPUS) {
+-		cpu_boot_arg = SWEET_SMP_MAX_CPUS;
++	if (cpu_boot_arg > QCOM_BOOT_MAX_CPUS) {
++		cpu_boot_arg = QCOM_BOOT_MAX_CPUS;
+ 	}
+ #endif
+ 
+@@ -1087,8 +1087,8 @@ ml_parse_cpu_topology(void)
  		}
  #endif
  
 -#if defined(SWEET)
+-		/* Aff1 encodes the core on SM7150, not an Apple cluster ID. */
 +#if (defined(SWEET) || defined(FP6))
- 		/* Aff1 encodes the core on SM7150, not an Apple cluster ID. */
++		/* Qualcomm DT supplies cluster membership independently of MPIDR Aff1. */
  		cpu->die_cluster_id = (int)ml_readprop(child, "die-cluster-id", 0);
  		cpu->cluster_core_id = (int)ml_readprop(child, "cluster-core-id", cpu->phys_id >> 8);
+ #else
 @@ -2180,7 +2180,7 @@ ml_get_decrementer(void)
  	return dec;
  }
@@ -665,7 +826,7 @@ index a1f2a91..6ff8cbb 100644
   * sweet: arm_vm_init() calls this unconditionally; Apple's definition (it
   * enters the PPL/monitor) ships only in the closed per-SoC library. There is
 diff --git a/osfmk/arm64/sleh.c b/osfmk/arm64/sleh.c
-index 24f1abc..2f00b4e 100644
+index 24f1abc..aaf2fad 100644
 --- a/osfmk/arm64/sleh.c
 +++ b/osfmk/arm64/sleh.c
 @@ -1856,7 +1856,7 @@ sleh_irq(arm_saved_state_t *state)
@@ -677,6 +838,15 @@ index 24f1abc..2f00b4e 100644
  	/*
  	 * sweet: TrustZone owns GIC Group 0, so the timer and IPIs that other
  	 * ARM64 targets take as FIQs arrive here as Group 1 IRQs.
+@@ -1867,7 +1867,7 @@ sleh_irq(arm_saved_state_t *state)
+ 	if (intid >= 1020 && intid <= 1023) {
+ 		return; /* spurious */
+ 	}
+-	if (intid == sweet_vtimer_intid) {
++	if (intid == qcom_vtimer_intid) {
+ 		sleh_interrupt_handler_prologue(state, DBG_INTR_TYPE_TIMER);
+ 		cdp->cpu_decrementer = -1; /* Large */
+ 		INTERRUPT_MASKED_DEBUG_START(rtclock_intr, DBG_INTR_TYPE_TIMER);
 diff --git a/osfmk/prng/entropy.c b/osfmk/prng/entropy.c
 index 42286ed..ed67975 100644
 --- a/osfmk/prng/entropy.c
@@ -798,18 +968,21 @@ index 54edb01..122243a 100644
  #else
  		crypto_random_uniform(zpercpu_get(sizeclass.ks_rng_ctx), num_slots,
 diff --git a/pexpert/arm/pe_fiq.c b/pexpert/arm/pe_fiq.c
-index 6089db9..a37812e 100644
+index 6089db9..262e52d 100644
 --- a/pexpert/arm/pe_fiq.c
 +++ b/pexpert/arm/pe_fiq.c
-@@ -17,7 +17,7 @@
+@@ -17,9 +17,9 @@
  #define GICR_WAKE_TIMEOUT_NS (1000000000ULL) // timeout for redistributor wakeup (default 1s)
  MACHINE_TIMEOUT(gicr_wake_timeout_ns, "gicr-wake-timeout", GICR_WAKE_TIMEOUT_NS, MACHINE_TIMEOUT_UNIT_NSEC, NULL);
  
 -#if defined(SWEET)
 +#if (defined(SWEET) || defined(FP6))
  /* Phone default; QEMU virt wires the architected virtual timer to INTID 27. */
- SECURITY_READ_ONLY_LATE(uint32_t) sweet_vtimer_intid = SWEET_VTIMER_INTID;
+-SECURITY_READ_ONLY_LATE(uint32_t) sweet_vtimer_intid = SWEET_VTIMER_INTID;
++SECURITY_READ_ONLY_LATE(uint32_t) qcom_vtimer_intid = QCOM_VTIMER_INTID;
  #endif
+ 
+ static vm_offset_t gicd_base;
 @@ -102,7 +102,7 @@ pe_init_fiq()
  			panic("%s: incorrect reg property size in GIC DT node; expecting 32 bytes but got %u bytes", __func__, prop_size);
  		}
@@ -819,6 +992,18 @@ index 6089db9..a37812e 100644
  		/* Read only on the boot CPU, before the GIC and RO-late lockdown. */
  		void const *timer_prop;
  		unsigned int timer_size;
+@@ -114,9 +114,9 @@ pe_init_fiq()
+ 			if (intid < 16 || intid >= 32) {
+ 				panic("%s: virtual timer INTID %u is not a PPI", __func__, intid);
+ 			}
+-			sweet_vtimer_intid = intid;
++			qcom_vtimer_intid = intid;
+ 		}
+-		kprintf("SWEET GIC: virtual timer INTID %u\n", sweet_vtimer_intid);
++		kprintf("SWEET GIC: virtual timer INTID %u\n", qcom_vtimer_intid);
+ #endif
+ 
+ 		vm_offset_t soc_base_phys = pe_arm_get_soc_base_phys();
 @@ -164,7 +164,7 @@ pe_init_fiq()
  		}
  	}
@@ -828,6 +1013,15 @@ index 6089db9..a37812e 100644
  	/*
  	 * Real hardware with two security states: Group 0 is TrustZone's and
  	 * non-secure writes to it are ignored. Everything we own is Group 1 NS
+@@ -175,7 +175,7 @@ pe_init_fiq()
+ 	for (unsigned int i = 0; i < 32; i += 4) {
+ 		gicr_write32(GICR_IPRIORITYR0 + i, 0xA0A0A0A0);
+ 	}
+-	gicr_write32(GICR_ISENABLER0, (1U << sweet_vtimer_intid) | (1U << SWEET_IPI_SGI));
++	gicr_write32(GICR_ISENABLER0, (1U << qcom_vtimer_intid) | (1U << QCOM_IPI_SGI));
+ #else
+ 	// Configure timers and legacy FIQ to be group 0
+ 	gicr_write32(GICR_IGROUPR0, 0x81FFFFFF);
 @@ -190,7 +190,7 @@ pe_init_fiq()
  	__builtin_arm_wsr64("ICC_SRE_EL1", icc_sre);
  	__builtin_arm_isb(ISB_SY);
@@ -847,30 +1041,38 @@ index 6089db9..a37812e 100644
  	uint32_t gicd_ctlr = gicd_read32(GICD_CTLR);
  	gicd_ctlr |= GICD_CTLR_ARE_NS | GICD_CTLR_ENABLEGRP1A | GICD_CTLR_ENABLEGRP1;
 diff --git a/pexpert/pexpert/arm/protos.h b/pexpert/pexpert/arm/protos.h
-index 9004f2b..a3c18fd 100644
+index 9004f2b..44e998d 100644
 --- a/pexpert/pexpert/arm/protos.h
 +++ b/pexpert/pexpert/arm/protos.h
-@@ -36,7 +36,7 @@ void uart_putc_options(char, bool);
+@@ -36,8 +36,8 @@ void uart_putc_options(char, bool);
  int uart_getc(void);
  
  void pe_init_fiq(void);
 -#if defined(ARM64_BOARD_CONFIG_SWEET)
+-extern uint32_t sweet_vtimer_intid;
 +#if (defined(ARM64_BOARD_CONFIG_SWEET) || defined(ARM64_BOARD_CONFIG_FP6))
- extern uint32_t sweet_vtimer_intid;
++extern uint32_t qcom_vtimer_intid;
  #endif
  
+ #ifdef PRIVATE
 diff --git a/pexpert/pexpert/arm64/FP6.h b/pexpert/pexpert/arm64/FP6.h
-index 3ab81a3..1363f02 100644
+index 3ab81a3..19e8673 100644
 --- a/pexpert/pexpert/arm64/FP6.h
 +++ b/pexpert/pexpert/arm64/FP6.h
-@@ -32,4 +32,35 @@
- #define GIC_SPURIOUS_IRQ          1023
- #define GICR_PE_SIZE              0x20000
+@@ -30,6 +30,40 @@
+ #endif
  
-+/* Shared GIC/IOCPU names; single CPU until FP6 SMP is measured. */
-+#define SWEET_VTIMER_INTID 27
-+#define SWEET_IPI_SGI 1
-+#define SWEET_SMP_MAX_CPUS 1
+ #define GIC_SPURIOUS_IRQ          1023
+-#define GICR_PE_SIZE              0x20000
++#define GICR_PE_SIZE              0x40000 /* volcano.dtsi redistributor-stride */
++
++/* Source: LineageOS sm7635 kernel 9535e0f0885d3d4b91c38054541e16019d1e64bd,
++ * include/linux/irqchip/arm-gic-v3.h; vendor qcom/volcano.dtsi.
++ * Virtual timer is PPI 11 => INTID 27. SGI 1 is this port's software IPI
++ * choice. One CPU is a bring-up limit, not the hardware core count. */
++#define QCOM_VTIMER_INTID 27
++#define QCOM_IPI_SGI 1
++#define QCOM_BOOT_MAX_CPUS 1
 +/* GICv3 register definitions; see GICv3 spec (Arm IHI 0069G) */
 +#define GICD_CTLR                 0x0
 +
@@ -897,7 +1099,7 @@ index 3ab81a3..1363f02 100644
 +#define ICC_SRE_SRE                             0x1
 +/* End of GICv3 register definitions */
 +
-+
+ 
  #endif /* _PEXPERT_ARM64_FP6_H */
 diff --git a/pexpert/pexpert/arm64/Makefile b/pexpert/pexpert/arm64/Makefile
 index c7d274f..59a95ec 100644
@@ -910,4 +1112,28 @@ index c7d274f..59a95ec 100644
 +	FP6.h \
  	SWEET.h
  
+ 
+diff --git a/pexpert/pexpert/arm64/SWEET.h b/pexpert/pexpert/arm64/SWEET.h
+index b99c2f4..8eaa0f3 100644
+--- a/pexpert/pexpert/arm64/SWEET.h
++++ b/pexpert/pexpert/arm64/SWEET.h
+@@ -23,7 +23,7 @@
+  * CPU_ON; the scheduler does not know the A76s are faster (no AMP/P-E
+  * clusters yet).
+  */
+-#define SWEET_SMP_MAX_CPUS         8
++#define QCOM_BOOT_MAX_CPUS         8
+ 
+ #define ARM_ARCH_TIMER
+ #define __ARM_ARCH__              8
+@@ -47,8 +47,8 @@
+  * virt, hyp) instead of the usual 13/14/11/10: the virtual timer XNU uses
+  * (CNTV) is INTID 16 + 3 = 19.
+  */
+-#define SWEET_VTIMER_INTID        19
+-#define SWEET_IPI_SGI             1       // SGI used for cross-CPU signals
++#define QCOM_VTIMER_INTID        19
++#define QCOM_IPI_SGI             1       // SGI used for cross-CPU signals
+ 
+ #define GIC_SPURIOUS_IRQ          1023    // IRQ no. for GIC spurious interrupt
  
