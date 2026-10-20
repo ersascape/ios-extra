@@ -1,28 +1,39 @@
 diff --git a/iokit/Kernel/arm/SweetSurface.h b/iokit/Kernel/arm/SweetSurface.h
 --- a/iokit/Kernel/arm/SweetSurface.h
 +++ b/iokit/Kernel/arm/SweetSurface.h
-@@ -13,1 +13,1 @@
+@@ -13,4 +13,4 @@
 -#if defined(SWEET)
 +#if defined(SWEET) || defined(FP6)
+ #include <IOKit/IOMemoryDescriptor.h>
+ #include <IOKit/IOBufferMemoryDescriptor.h>
+ #include <libkern/c++/OSObject.h>
 diff --git a/iokit/Kernel/arm/SweetSurface.cpp b/iokit/Kernel/arm/SweetSurface.cpp
 --- a/iokit/Kernel/arm/SweetSurface.cpp
 +++ b/iokit/Kernel/arm/SweetSurface.cpp
-@@ -30,1 +30,1 @@
+@@ -30,4 +30,4 @@
 -#if defined(SWEET)
 +#if defined(SWEET) || defined(FP6)
+ #include <IOKit/IOService.h>
+ #include <IOKit/IOUserClient.h>
+ #include <IOKit/IOKitKeys.h>
 diff --git a/iokit/Kernel/arm/SweetFramebuffer.cpp b/iokit/Kernel/arm/SweetFramebuffer.cpp
 --- a/iokit/Kernel/arm/SweetFramebuffer.cpp
 +++ b/iokit/Kernel/arm/SweetFramebuffer.cpp
-@@ -41,1 +41,1 @@
+@@ -41,4 +41,4 @@
 -#if defined(SWEET)
 +#if defined(SWEET) || defined(FP6)
+ #include <IOKit/IOService.h>
+ #include <IOKit/IOUserClient.h>
+ #include <IOKit/IOKitKeys.h>
 diff --git a/iokit/KernelConfigTables.cpp b/iokit/KernelConfigTables.cpp
 --- a/iokit/KernelConfigTables.cpp
 +++ b/iokit/KernelConfigTables.cpp
-@@ -47,2 +47,6 @@
+@@ -46,4 +46,8 @@
      "   { 'IOClass' = SweetCPU; 'IOProviderClass' = IOPlatformDevice;"
      "     'IONameMatch' = 'qcom,kryo'; 'IOProbeScore' = 9000:32; },"
 +    "   { 'IOClass' = IOCoreSurfaceRoot; 'IOProviderClass' = IOResources;"
 +    "     'IOMatchCategory' = IOCoreSurfaceRoot; },"
 +    "   { 'IOClass' = AppleCLCD; 'IOProviderClass' = IOPlatformDevice;"
 +    "     'IONameMatch' = 'sweet,display'; },"
+ #endif
+ #if defined(ARM64_BOARD_CONFIG_SWEET) || defined(ARM64_BOARD_CONFIG_PHOENIX)
