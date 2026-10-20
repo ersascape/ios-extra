@@ -303,7 +303,7 @@
 + */
 +#include <pexpert/arm64/board_config.h>
 +
-+#if defined(SWEET)
++#if defined(SWEET) || defined(FP6)
 +#include <IOKit/IOLib.h>
 +#include <libkern/c++/OSArray.h>
 +#include <libkern/c++/OSBoolean.h>

@@ -271,3 +271,10 @@ error::ResourceWarning -m unittest discover -s tests` (also with
   bring-up, and SM7635/Volcano compatible strings. Patch 0099 corrects the initial
   FP6 header's placeholder stride. No device or display driver behavior is inferred
   from these build definitions; the framebuffer splash is bootloader-provided.
+
+- Follow-up run `39413914090` at `6da7325` staged pthread successfully and compiled all
+  XNU objects, then failed at final link: `sweet_amfi.o` referenced seven
+  `sweet_entitlements_*` functions absent from `SweetEntitlements.cpp` because that
+  implementation was SWEET-only. Expanded its build guard to FP6 in patch 0035;
+  this preserves XML entitlement support and resolves the specific undefined symbols.
+  New CI build pending.
