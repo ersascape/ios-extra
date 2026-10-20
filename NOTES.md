@@ -88,6 +88,14 @@ design is [docs/GPU_CX_EXPERIMENT.md](docs/GPU_CX_EXPERIMENT.md).
   `1a6831822a695c88e3537b48a71ec7c3a176bdd150d3ffc587153743e2764e8f`.
   Header-v2 payload/shim/DTB validation passed. It has not been booted; this is
   a diagnostic image, not a UFS-root fix.
+- The user clarified that the probe logs are not files on `md0`; correct. The
+  intended destination is the host-side UDP capture, which remained empty.
+  The latest panic photo confirms `EIO` (errno 5), but does not distinguish
+  request-list takeover from a failed SCSI completion. Patch 0102 records the
+  failing UFS stage and command/status detail and adds them to the panic text,
+  so the next UFS-root attempt can identify the underlying failure without a
+  working UDP stream. This is diagnostic instrumentation, not yet an UFS fix;
+  it still needs a CI build and phone boot.
 
 ## FP6 hardware bringup and pthread/gPanicBase fixes (2026-10-20)
 
