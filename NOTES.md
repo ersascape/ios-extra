@@ -625,3 +625,14 @@ error::ResourceWarning -m unittest discover -s tests` (also with
   The manifest records kernel, ADT and DTB hashes and `rd=ufsroot0`; package
   validation confirmed the embedded components. This HFS-enabled image has
   not yet been booted on the phone.
+- Follow-up phone output shows HFS finds an in-filesystem journal at offset
+  `0x800000`, but journal-header update fails with `EINVAL` while the UFS
+  device was initialized read-only. The root mount path deliberately defaults
+  to read-only unless `ufsrw=1` is passed; HFS journal replay/update needs the
+  custom userdata partition writable. Packaged a follow-up image with that
+  explicit opt-in:
+  `/tmp/fp6-hfs-rw-39441508260/ufs-root/fp6-shim-ufs-root-rw.img`, SHA256
+  `74dda22095553a68ebd8cb61b2836b896440cb3908c728c02554fc075f839d30`.
+  Its write path remains bounded to the GPT partition selected by `ufsroot`
+  (`userdata` by default); it cannot address other UFS partitions. This
+  read-write image has not yet been tested on the phone.
