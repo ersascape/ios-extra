@@ -288,7 +288,8 @@ def build_fp6(seed=None, phys_base=None, mem_size=None):
     gic = node('gic', [
         ('AAPL,phandle', u32(gic_phandle)),
         ('compatible', cstr('arm,gic-v3')),
-        ('interrupt-controller', b''), ('virtual-timer-intid', u32(27)),
+        ('interrupt-controller', b''), ('#interrupt-cells', u32(3)),
+        ('virtual-timer-intid', u32(27)),
         ('reg', u64(0x17100000 - soc_base, 0x10000,
                     0x17180000 - soc_base, 0x200000)),
     ])

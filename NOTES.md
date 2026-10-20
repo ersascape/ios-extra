@@ -6,6 +6,24 @@ hashes, CI runs, raw numbers) is [docs/GPU_LOG.md](docs/GPU_LOG.md); the hardwar
 mainline reference is [docs/GPU_GMU_BOOT.md](docs/GPU_GMU_BOOT.md); the per-patch
 design is [docs/GPU_CX_EXPERIMENT.md](docs/GPU_CX_EXPERIMENT.md).
 
+## FP6 panic from probe image (2026-10-20)
+
+- User tested image `fp6-shim-touch-ufs-probe.img` from CI run 39423526775, SHA256
+  `f5abf0c8697aebef950f1d1fa6d997d6eae1d3a770caacd3b3377b0d26928198`. The phone
+  displayed a kernel data abort. Photo state: PC `0xfffffe0007948c14`, LR
+  `0xfffffe000793efc4`, ESR `0x96000005` (translation fault, level 1), FAR zero.
+- Symbolication against that run's exact `kernel.development.fp6` resolves PC to
+  `IOUserResources::resources()` and LR to `IODTMapInterruptsSharing`. This occurs
+  during IOKit device-tree interrupt mapping, before the optional UFS/GPIO/touch
+  probes in `IOKitBSDInit` run; those probes are not implicated by this trace.
+- Source inspection found FP6's generated GIC node had an `AAPL,phandle` and was
+  referenced by SPI0/TLMM interrupt-parent properties, but omitted `#interrupt-cells`.
+  XNU only indexes interrupt-controller phandles that provide that property, so
+  interrupt-parent resolution can return null and fault at address zero. Added
+  `#interrupt-cells = 3` to the FP6 GIC profile. The corrected ADT serializes and
+  dumps that property; a rebuilt image and phone retest are still pending. This is
+  a source-based diagnosis until the corrected build reaches the same boot stage.
+
 ## FP6 hardware bringup and pthread/gPanicBase fixes (2026-10-20)
 
 - On-device observation with packaged header v2 boot image (containing stock DTB):
