@@ -288,3 +288,12 @@ error::ResourceWarning -m unittest discover -s tests` (also with
   or serial. Work these subsystems one at a time; distinguish bootloader-provided
   framebuffer splash from an XNU display driver. Fairphone 6 is SM7635 (Snapdragon
   7s Gen 3), so the user's table's SM7450 label should not be used for this target.
+- Investigated the reported 5.5 MB size for run `39414717734`: GitHub records the
+  compressed `fp6-fastboot-boot` artifact as 5,626,548 bytes. Its extracted
+  `fp6-shim-boot.img` is 16,203,776 bytes (Android boot header v4), SHA256
+  `b855212859d798a7735030959eadb0b237571d018f990840624a9f28de3e9750`. Header
+  inspection confirms a 192,512-byte shim kernel and 16,003,456-byte XNU payload
+  ramdisk; DTB is intentionally provided by the device's vendor_boot. The payload
+  hash matches the successful CI build manifest. A local repack with the same
+  kernel/ADT produced a different shim binary, so the CI artifact is the verified
+  image to use; no phone boot performed.
