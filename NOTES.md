@@ -323,4 +323,6 @@ error::ResourceWarning -m unittest discover -s tests` (also with
   `tools/fp6-package.py` now requires a DTB and rejects header v4. CI publishes a
   fastboot image only when repository variable `FP6_STOCK_DTB_URL` is configured;
   without it, the workflow warns and skips the image artifact. The corrected local
-  image has not been booted; `fastboot devices` found no connected phone.
+  image was then booted on the phone; the user reports that all 8 CPUs came up.
+  The exact image SHA and boot log have not yet been provided, so this observation
+  is not attributed to a particular package.
