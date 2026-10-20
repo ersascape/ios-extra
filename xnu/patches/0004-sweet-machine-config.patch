@@ -7,16 +7,17 @@ index 8460893..9a748ea 100644
  SUPPORTED_ARM64_MACHINE_CONFIGS = NONE
  else
 -SUPPORTED_ARM64_MACHINE_CONFIGS = BCM2837 T6000 T8101 T8103 VMAPPLE
-+SUPPORTED_ARM64_MACHINE_CONFIGS = BCM2837 T6000 T8101 T8103 VMAPPLE SWEET PHOENIX
++SUPPORTED_ARM64_MACHINE_CONFIGS = BCM2837 T6000 T8101 T8103 VMAPPLE SWEET PHOENIX FP6
  
  endif
  
-@@ -61,6 +61,8 @@ MACHINE_FLAGS_ARM64_T8103 = -DARM64_BOARD_CONFIG_T8103                  -mcpu=ap
+@@ -61,6 +61,9 @@ MACHINE_FLAGS_ARM64_T8103 = -DARM64_BOARD_CONFIG_T8103                  -mcpu=ap
  MACHINE_FLAGS_ARM64_T6000 = -DARM64_BOARD_CONFIG_T6000 		-mcpu=apple-a14
  MACHINE_FLAGS_ARM64_VMAPPLE = -DARM64_BOARD_CONFIG_VMAPPLE              -march=armv8.5a
  MACHINE_FLAGS_ARM64_BCM2837 = -DARM64_BOARD_CONFIG_BCM2837
 +MACHINE_FLAGS_ARM64_SWEET = -DARM64_BOARD_CONFIG_SWEET                -march=armv8.2-a+crypto
 +MACHINE_FLAGS_ARM64_PHOENIX = -DARM64_BOARD_CONFIG_PHOENIX            -march=armv8.2-a+crypto
++MACHINE_FLAGS_ARM64_FP6 = -DARM64_BOARD_CONFIG_FP6                    -march=armv8.2-a+crypto
  
  
  #
@@ -25,7 +26,7 @@ index 8460893..9a748ea 100644
  export ARCH_STRING_FOR_CURRENT_MACHINE_CONFIG := $(shell echo $(CURRENT_ARCH_CONFIG) | tr A-Z a-z)
  ifneq ($(filter arm64,$(ARCH_STRING_FOR_CURRENT_MACHINE_CONFIG)),)
 +# sweet's Cortex-A76/A55 have no pointer authentication: stay plain arm64
-+ifeq ($(filter $(CURRENT_MACHINE_CONFIG),SWEET PHOENIX),)
++ifeq ($(filter $(CURRENT_MACHINE_CONFIG),SWEET PHOENIX FP6),)
  export ARCH_STRING_FOR_CURRENT_MACHINE_CONFIG := arm64e
  endif
 +endif
@@ -36,11 +37,19 @@ diff --git a/osfmk/arm64/proc_reg.h b/osfmk/arm64/proc_reg.h
 index 133b07f..e01c124 100644
 --- a/osfmk/arm64/proc_reg.h
 +++ b/osfmk/arm64/proc_reg.h
-@@ -213,6 +213,14 @@
+@@ -213,6 +213,22 @@
  /* D-Cache. */
  #define MMU_CLINE   6
  
 +#elif defined (SWEET) /* Qualcomm Kryo 470: Cortex-A76 + Cortex-A55 */
++
++/* I-Cache. */
++#define MMU_I_CLINE 6
++
++/* D-Cache. */
++#define MMU_CLINE   6
++
++#elif defined (FP6) /* Qualcomm SM7635: Kryo CPU cluster */
 +
 +/* I-Cache. */
 +#define MMU_I_CLINE 6
@@ -299,7 +308,7 @@ diff --git a/pexpert/pexpert/arm64/board_config.h b/pexpert/pexpert/arm64/board_
 index 9454534..88e524a 100644
 --- a/pexpert/pexpert/arm64/board_config.h
 +++ b/pexpert/pexpert/arm64/board_config.h
-@@ -97,6 +97,26 @@
+@@ -97,6 +97,34 @@
  #define CORE_NCTRS                     8 /* Placeholder; KPC is not enabled for this target */
  #endif  /* ARM64_BOARD_CONFIG_BCM2837 */
  
@@ -323,6 +332,55 @@ index 9454534..88e524a 100644
 +#define CORE_NCTRS                    8
 +#endif  /* ARM64_BOARD_CONFIG_PHOENIX */
 +
++#ifdef ARM64_BOARD_CONFIG_FP6
++#include <pexpert/arm64/FP6.h>
++#define MAX_L2_CLINE                  6
++#define MAX_CPUS                      8
++#define MAX_CPU_CLUSTERS               3
++#define CORE_NCTRS                    8
++#endif  /* ARM64_BOARD_CONFIG_FP6 */
++
  #ifdef ARM64_BOARD_CONFIG_VMAPPLE
  #include <pexpert/arm64/VMAPPLE.h>
  
+diff --git a/pexpert/pexpert/arm64/FP6.h b/pexpert/pexpert/arm64/FP6.h
+new file mode 100644
+index 0000000..0000000
+--- /dev/null
++++ b/pexpert/pexpert/arm64/FP6.h
+@@ -0,0 +1,35 @@
++/*
++ * Compile target for Fairphone (Gen. 6), Qualcomm SM7635 / Volcano.
++ *
++ * This header only describes the ARM64 build baseline and broad architectural
++ * features. It does not claim that XNU's interrupt, memory, storage, display,
++ * or power-management paths are ready to boot on FP6.
++ */
++#ifndef _PEXPERT_ARM64_FP6_H
++#define _PEXPERT_ARM64_FP6_H
++
++#define NO_MONITOR                1
++#define NO_ECORE                  1
++#define FP6                       1
++
++#define ARM_ARCH_TIMER
++#define __ARM_ARCH__              8
++#define __ARM_VMSA__              8
++#define __ARM_VFP__               4
++#define __ARM_COHERENT_CACHE__    1
++#define __ARM_DEBUG__             7
++#define __ARM_ENABLE_SWAP__       1
++#define __ARM_V8_CRYPTO_EXTENSIONS__ 1
++#define __ARM_PAN_AVAILABLE__     1
++#define __ARM_16K_PG__            1
++
++#define HAS_GIC_V3                1
++
++#ifndef ASSEMBLER
++#define PLATFORM_PANIC_LOG_DISABLED
++#endif
++
++#define GIC_SPURIOUS_IRQ          1023
++#define GICR_PE_SIZE              0x20000
++
++#endif /* _PEXPERT_ARM64_FP6_H */

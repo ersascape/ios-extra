@@ -1,6 +1,6 @@
 # ios-extra
 
-Driver playground for the XNU / iOS port on Qualcomm SM7150 phones: Redmi Note 10 Pro (`sweet`) and POCO X2 (`phoenix`). A Fairphone 6 / SM7635 source audit has begun; it is not yet a supported build target. See [the audit notes](docs/FAIRPHONE6.md).
+Driver playground for the XNU / iOS port on Qualcomm SM7150 phones: Redmi Note 10 Pro (`sweet`) and POCO X2 (`phoenix`). An experimental Fairphone 6 / SM7635 compile target is being validated; no boot support is claimed. See [the audit notes](docs/FAIRPHONE6.md).
 
 Start experiments here, build and test them, then port working changes into `ios-sweet`. This repository has its own Git history and remote.
 

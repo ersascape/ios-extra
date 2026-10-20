@@ -14,8 +14,11 @@ design is [docs/GPU_CX_EXPERIMENT.md](docs/GPU_CX_EXPERIMENT.md).
 - QCM6490 is Fairphone 5, not Fairphone 6. No QCM6490 code or FP5 target was
   added as part of this work.
 - No FP6 machine config, ADT profile, build, CI, or device test has been
-  performed. The current GPU investigation remains specific to SM7150 /
-  Adreno 618. Source audit details and limits are in
+  completed yet. An experimental `MACHINE_CONFIG=FP6` compile target now exists
+  in patch 0004, using an ARMv8.2+crypto baseline and the sourced 8-core / 3
+  cluster counts. LineageOS's `fp6.dts` leaves memory and reserved memory as
+  placeholders, so there is no FP6 ADT or boot image. The current GPU
+  investigation remains specific to SM7150 / Adreno 618. See
   [docs/FAIRPHONE6.md](docs/FAIRPHONE6.md).
 
 ## POCO X2 / Phoenix support (2026-10-20)
