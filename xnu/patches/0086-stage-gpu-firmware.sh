@@ -3,7 +3,7 @@
 # Stages the A6xx GMU firmware as a generated header; no firmware lives in git.
 set -euo pipefail
 
-[[ "${MACHINE_CONFIG:-}" == SWEET ]] || exit 0
+case "${MACHINE_CONFIG:-}" in SWEET|PHOENIX) ;; *) exit 0 ;; esac
 [[ -d bsd/dev ]] || exit 1
 
 # linux-firmware qcom/a630_gmu.bin, the image mainline Linux loads on A618.

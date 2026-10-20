@@ -8,6 +8,17 @@ design is [docs/GPU_CX_EXPERIMENT.md](docs/GPU_CX_EXPERIMENT.md).
 
 ## FP6 shim packaging (2026-10-20)
 
+- Patch audit: Phoenix edits to 0016 broke later patch contexts. Restored 0016
+  and placed board integration in 0099. A clean xnu-8796.141.3 replay applied
+  all 99 local patches and four selected Ventura harness patches (103/103).
+- Added explicit FP6/Phoenix MASTER configs and FP6 header export; FP6 shares
+  portable crypto/RNG and architecture CPU/GIC code with a one-CPU limit.
+  Sweet hardware driver registration remains disabled for FP6. These source
+  changes await full CI compilation and hardware validation.
+- Build preparation now selects the four applicable upstream patches, aborts
+  on every patch failure, stages portable dependencies for FP6/Phoenix and
+  defaults the workflow to FP6. Different targets have separate concurrency.
+
 - Inspected user-selected successful CI run `39371823683` at `4e7fdf0`.
   Artifact `12242266868` contains `kernel.development.sweet`, SHA256
   `18f69070e456841cc4d400f6d6438b7ede02eb2e6b0429d4b231da88e7d9eddc`,

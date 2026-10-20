@@ -1,19 +1,15 @@
 diff --git a/iokit/KernelConfigTables.cpp b/iokit/KernelConfigTables.cpp
 --- a/iokit/KernelConfigTables.cpp
 +++ b/iokit/KernelConfigTables.cpp
-@@ -34,6 +34,18 @@
+@@ -34,6 +34,14 @@
  
  const char * gIOKernelConfigTables =
      "("
-+#if defined(ARM64_BOARD_CONFIG_SWEET) || defined(ARM64_BOARD_CONFIG_PHOENIX)
++#if defined(ARM64_BOARD_CONFIG_SWEET)
 +    "   {"
 +    "     'IOClass'         = SweetPlatformExpert;"
 +    "     'IOProviderClass' = IOPlatformExpertDevice;"
-+#if defined(ARM64_BOARD_CONFIG_PHOENIX)
-+    "     'IONameMatch'     = 'xiaomi,phoenix';"
-+#else
 +    "     'IONameMatch'     = 'xiaomi,sweet';"
-+#endif
 +    "     'IOProbeScore'    = 10000:32;"
 +    "   },"
 +#endif
@@ -34,9 +30,9 @@ diff --git a/iokit/Kernel/arm/SweetPlatformExpert.cpp b/iokit/Kernel/arm/SweetPl
 new file mode 100644
 --- /dev/null
 +++ b/iokit/Kernel/arm/SweetPlatformExpert.cpp
-@@ -0,0 +1,94 @@
+@@ -0,0 +1,86 @@
 +/*
-+ * Minimal device-tree platform expert for SM7150 devices (sweet and phoenix).
++ * Minimal device-tree platform expert for Redmi Note 10 Pro (sweet).
 + * Uses XNU's normal platform, power-domain and nub initialization. Hardware
 + * interrupt and power-management services are supplied by separate drivers.
 + */
@@ -107,11 +103,7 @@ new file mode 100644
 +	if (name == NULL || maxLength <= 0) {
 +		return false;
 +	}
-+#if defined(PHOENIX)
-+	strlcpy(name, "phoenix", (size_t)maxLength);
-+#else
 +	strlcpy(name, "sweet", (size_t)maxLength);
-+#endif
 +	return true;
 +}
 +
@@ -121,11 +113,7 @@ new file mode 100644
 +	if (name == NULL || maxLength <= 0) {
 +		return false;
 +	}
-+#if defined(PHOENIX)
-+	strlcpy(name, "POCO X2", (size_t)maxLength);
-+#else
 +	strlcpy(name, "Redmi Note 10 Pro", (size_t)maxLength);
-+#endif
 +	return true;
 +}
 +#endif /* SWEET */

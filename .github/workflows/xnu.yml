@@ -13,7 +13,7 @@ on:
         description: xnu MACHINE_CONFIG / board profile
         type: choice
         required: true
-        default: SWEET
+        default: FP6
         options:
           - SWEET
           - PHOENIX
@@ -29,13 +29,14 @@ on:
       - "tools/mkadt.py"
       - "tools/mkpayload.py"
       - "tools/fp6-package.py"
+      - "tools/prepare-xnu-build.py"
       - "tools/mkbootv4.py"
       - "tools/unpack_bootv2.py"
       - "docs/FAIRPHONE6.md"
       - ".github/workflows/xnu.yml"
 
 concurrency:
-  group: xnu-${{ github.ref }}
+  group: xnu-${{ github.ref }}-${{ inputs.machine_config || vars.MACHINE_CONFIG || 'FP6' }}
   cancel-in-progress: true
 
 env:
@@ -43,7 +44,7 @@ env:
   DXB_SHA: 663906528d1cd5ea8fde7de6f16de73db9511549
   MACOS_VERSION: ${{ inputs.macos_version || '13.5' }}
   KERNEL_CONFIG: ${{ inputs.kernel_config || 'DEVELOPMENT' }}
-  MACHINE_CONFIG: ${{ inputs.machine_config || vars.MACHINE_CONFIG || 'SWEET' }}
+  MACHINE_CONFIG: ${{ inputs.machine_config || vars.MACHINE_CONFIG || 'FP6' }}
 
 jobs:
   build:
@@ -78,12 +79,9 @@ jobs:
           git init -q dxb
           git -C dxb fetch -q --depth 1 "$DXB_REPO" "$DXB_SHA"
           git -C dxb checkout -q FETCH_HEAD
-          # 12.5-14.3 use the top-level patches dir; ours go next to blacktop's
-          cp xnu/patches/*.patch xnu/patches/*.sh dxb/patches/
-          # libfirehose_kernel is built arm64e-only; the SWEET kernel is plain arm64
-          sed -i '' 's/ARCHS="x86_64 arm64e" VALID_ARCHS="x86_64 arm64e"/ARCHS="x86_64 arm64e arm64" VALID_ARCHS="x86_64 arm64e arm64"/' dxb/build.sh
-          grep -c 'VALID_ARCHS="x86_64 arm64e arm64"' dxb/build.sh
-          ls dxb/patches
+          test "$MACOS_VERSION" = 13.5
+          python3 tools/prepare-xnu-build.py dxb
+          echo "Building $MACHINE_CONFIG / $KERNEL_CONFIG at $GITHUB_SHA"
 
       - name: Deps
         run: |
@@ -157,7 +155,7 @@ jobs:
 
   fp6-boot:
     needs: build
-    if: ${{ (inputs.machine_config || vars.MACHINE_CONFIG || 'SWEET') == 'FP6' }}
+    if: ${{ (inputs.machine_config || vars.MACHINE_CONFIG || 'FP6') == 'FP6' }}
     runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@v4
