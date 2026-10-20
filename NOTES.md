@@ -570,3 +570,34 @@ error::ResourceWarning -m unittest discover -s tests` (also with
   booted. Current Android `userdata` is not the iOS HFS+ root image.
 - FP6 USB gadget/debug transport and active EPH86xx SPI/HID input remain
   unported; Sweet's SM7150 implementations are still guarded from FP6.
+
+## FP6 Qualcomm UFS SOC bring-up (2026-10-20)
+
+- Added and pushed commit `b1d8734` (`feat(fp6): initialize UFS power and SMMU
+  handoff`). Patch `0105-fp6-ufs-soc-basics.patch` adds FP6-only handling for
+  the UFS SMMU stream, the Qualcomm `broken-ahit-wa`, UFS power-mode query and
+  wake-up, fixed/descriptor sense parsing, and bounded readiness retries. The
+  FP6 ADT now includes SMMU base `0x15000000`, size `0x100000`, and UFS stream
+  ID `0x60`. The SMMU path preserves a pre-existing stream mapping and only
+  creates a bypass context for this stream when it is unmapped; it does not
+  alter global SMMU settings or other streams.
+- GitHub Actions run `39439447885` built the FP6 kernel successfully (build
+  job `118685115137`, 6m57s) and generated/uploaded the matching ADT. The
+  `fp6-boot` packaging step skipped because repository variable
+  `FP6_STOCK_DTB_URL` is unset.
+- Downloaded CI kernel SHA256
+  `9f7b6335a4d377779618832b22a49d8f69685ad1f133481218af11c61ecef3c7` and ADT
+  SHA256 `9d9957b903bb091d91ab688788facee0432f2ddc8ade82081ad48239d65bc467`.
+  Reused the exact stock FP6 DTB from the previous verified v2 boot image;
+  its SHA256 `16a9e60e441772b5cf491a6b51dbe4829f5895fa284bcfa342623bc5b2287dc5`
+  matches that image's manifest. Locally packaged the header-v2 UFS-root image
+  at `/tmp/fp6-soc-39439447885/ufs-root/fp6-shim-ufs-root.img`, 22,917,120
+  bytes, SHA256
+  `3f557a3bbe16056d8e53a67dba70de89ba7aa693659be74946c77e33f41be2ad`.
+  Its command line is `debug=0xc serial=3 cpus=8 keepsyms=1 -noprogress
+  rd=ufsroot0`; packaging verified the embedded kernel, payload and DTB.
+- Source/build/package results only. The new SMMU/UFS path has not been booted
+  on hardware; the image leaves userdata and all partitions untouched. Next
+  step is the user's temporary `fastboot boot` test, then use the resulting
+  console/panic or root mount observation to tune the stream mapping and UFS
+  command path.
