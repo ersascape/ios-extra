@@ -83,16 +83,18 @@ Local packaging uses LLVM clang, lld, llvm-objcopy, llvm-readelf and llvm-nm:
 
 ```sh
 python3 tools/fp6-package.py --kernel /path/to/kernel.development.fp6 \
-  --adt /path/to/fp6.adt --out shim/out/fp6 \
-  --commit SOURCE_SHA --ci-run RUN_ID
+  --adt /path/to/fp6.adt --dtb /path/to/fp6-stock.dtb \
+  --out shim/out/fp6 --commit SOURCE_SHA --ci-run RUN_ID
 ```
 
-This builds an unsigned Android v4 image. The installed vendor_boot and DTBO
-remain responsible for the bootloader-selected DTB; the package has no embedded
-DTB. The layout follows [AOSP's boot image header definition](https://android.googlesource.com/platform/system/tools/mkbootimg/+/refs/heads/main/include/bootimg/bootimg.h).
+For the tested FP6 boot path, use Android boot header v2 and embed the matching
+stock FP6 DTB. Supplying `--dtb` selects header v2 automatically. A header v4
+package without an embedded DTB is not the image used for the successful on-device
+shim boot recorded in NOTES.md. The layout follows [AOSP's boot image header definition](https://android.googlesource.com/platform/system/tools/mkbootimg/+/refs/heads/main/include/bootimg/bootimg.h).
 The runtime loader accepts an aligned SWEETXNU payload following vendor ramdisks.
-A missing framebuffer or rejected memory map halts the FP6 loader. Neither ABL
-acceptance nor the runtime handoff has been measured on a phone yet.
+A missing framebuffer or rejected memory map halts the FP6 loader. The v2 image
+repackaged from CI run 39414717734 is structurally verified but has not itself
+been booted on the phone.
 
 After verifying SHA256SUMS, a temporary device test uses `fastboot devices`
 (exactly one phone) and `fastboot boot fp6-shim-boot.img`. Record the displayed

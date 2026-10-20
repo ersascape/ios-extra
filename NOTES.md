@@ -288,12 +288,14 @@ error::ResourceWarning -m unittest discover -s tests` (also with
   or serial. Work these subsystems one at a time; distinguish bootloader-provided
   framebuffer splash from an XNU display driver. Fairphone 6 is SM7635 (Snapdragon
   7s Gen 3), so the user's table's SM7450 label should not be used for this target.
-- Investigated the reported 5.5 MB size for run `39414717734`: GitHub records the
-  compressed `fp6-fastboot-boot` artifact as 5,626,548 bytes. Its extracted
-  `fp6-shim-boot.img` is 16,203,776 bytes (Android boot header v4), SHA256
-  `b855212859d798a7735030959eadb0b237571d018f990840624a9f28de3e9750`. Header
-  inspection confirms a 192,512-byte shim kernel and 16,003,456-byte XNU payload
-  ramdisk; DTB is intentionally provided by the device's vendor_boot. The payload
-  hash matches the successful CI build manifest. A local repack with the same
-  kernel/ADT produced a different shim binary, so the CI artifact is the verified
-  image to use; no phone boot performed.
+- Correction after reviewing the earlier FP6 boot notes: the known on-device path used
+  Android boot header v2 with the stock DTB embedded. CI run `39414717734` uploaded a
+  5,626,548-byte compressed artifact, but that artifact expands to a 16,203,776-byte
+  header v4 image without a DTB; it is not the previously tested packaging format.
+  Repacked that run's successful kernel and matching ADT with `/tmp/fp6-stock.dtb`
+  using `tools/fp6-package.py --dtb`, which selects header v2. The resulting image is
+  22,896,640 bytes, SHA256 `3dcc03f79b4fb6b775ebbb1612509a772e54b78d45301e20bdd72ce95861e59e`;
+  unpack validation confirmed the 192,512-byte shim kernel, 16,003,456-byte XNU
+  payload and embedded DTB exactly match their inputs. This rebuilt v2 image has not
+  been booted. The current CI packaging job still needs a reproducible way to obtain
+  the stock DTB before it can publish this corrected format.
