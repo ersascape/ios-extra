@@ -14,6 +14,36 @@
   boot are still needed. User previously reported eight CPUs up, but did not
   provide the startup log that would verify each per-core PSCI and IPI message.
 
+## FP6 boot log repetition (2026-10-20)
+
+- The user reports repeated launch messages for `bluetoothd`, `xpcproxy`, and
+  different AKS clients, alongside repeated HFS `set hardlink bit` messages
+  with the same CNID/inoid. These are separate symptoms: process-spawn logs do
+  not establish why a service is restarting, while HFS patch 0041 explains the
+  repeated link line as an in-memory flag repair that is emitted again on each
+  lookup; it does not persistently repair the catalog record. Follow-up
+  observation: AKS entries for `backboardd`, `familycircled`, and `securityd`
+  confirm those processes started and reached AKS calls; the earlier inference
+  that Backboard had not started was incorrect. SpringBoard/UI startup remains
+  unconfirmed.
+- Extended patch 0041's existing SWEET log limiter to FP6. It caps that
+  diagnostic at the first eight reports to prevent repeated catalog lookups
+  from flooding USB/console logs. This only limits logging; it does not fix
+  catalog metadata or the daemon restart causes. CI/build and phone validation
+  are pending.
+
+## FP6 SWEET userspace-enablement patch audit (2026-10-20)
+
+- Corrected the initial source audit: the permissive `Sandbox` MAC policy from
+  patch 0050 is compiled for FP6 because patch 0099 widens the enclosing
+  `sweet_amfi.c` board guard; patch 0035 also calls `sweet_amfi_policy_register`
+  for FP6. The FP6 `MASTER.arm64.fp6` config introduced by patch 0099 already
+  omits `config_ext_resolver`, matching the effective SWEET configuration from
+  patch 0057. Neither behavior needs another source change.
+- Keep the HFS diagnostic limiter in patch 0041 as the only source change in
+  this build. It only caps repeated hardlink repair messages; it cannot explain
+  why the SpringBoard UI has not appeared.
+
 ## FP6 watchdogd service discovery (2026-10-20)
 
 - The FP6 DT/ADT does not expose a verified APSS/MSM watchdog resource, so do
