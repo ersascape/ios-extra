@@ -32,9 +32,10 @@ design is [docs/GPU_CX_EXPERIMENT.md](docs/GPU_CX_EXPERIMENT.md).
 - Corrected the config scope: SWEET HFS is machine-specific; FP6 no longer
   enables Sweet HFS or its bundled pthread provider. FP6 still stages the
   portable crypto implementation, with compiler include paths enabled for
-  FP6. A clean local replay now applies all 99 repository patches and the four
-  selected Ventura harness patches. This is patch validation only; a full CI
-  build and phone boot are still pending.
+  FP6. Run `39374822879` reached patch 0031, which requires staged HFS source
+  even when that filesystem is disabled. Restored HFS source staging for FP6;
+  this stages files for later patch contexts but does not enable HFS in its
+  machine config. Retry CI after this fix. Full build and phone boot are pending.
 
 - Local LLVM build now links the shim and packages an unsigned Android v4 image.
   The local packaging check used placeholder payload bytes only: shim and ramdisk
