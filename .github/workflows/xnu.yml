@@ -8,7 +8,7 @@ on:
         default: "13.5"
       kernel_config:
         description: RELEASE / DEVELOPMENT / DEBUG
-        default: DEBUG
+        default: DEVELOPMENT
       machine_config:
         description: xnu MACHINE_CONFIG / board profile
         type: choice
@@ -45,7 +45,7 @@ env:
   DXB_REPO: https://github.com/blacktop/darwin-xnu-build
   DXB_SHA: 663906528d1cd5ea8fde7de6f16de73db9511549
   MACOS_VERSION: ${{ inputs.macos_version || '13.5' }}
-  KERNEL_CONFIG: ${{ inputs.kernel_config || 'DEBUG' }}
+  KERNEL_CONFIG: ${{ inputs.kernel_config || 'DEVELOPMENT' }}
   MACHINE_CONFIG: ${{ inputs.machine_config || vars.MACHINE_CONFIG || 'FP6' }}
 
 jobs:

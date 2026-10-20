@@ -41,9 +41,15 @@ design is [docs/GPU_CX_EXPERIMENT.md](docs/GPU_CX_EXPERIMENT.md).
 - Patch 0101 also hooks the existing 4 MiB in-memory console ring for FP6 from
   the first serial-console output, before UFS root setup can panic. This gives
   the USB log sender access to root-selection diagnostics. A separate USB
-  debug boot image uses a `DEBUG` XNU build and `fp6usb=2`; the ordinary RAM-disk
-  image keeps USB disabled. Patch application/build and a phone test are
-  pending.
+  debug boot image uses `fp6usb=2`; the ordinary RAM-disk image keeps USB
+  disabled. Both use `debug=0xc keepsyms=1` for runtime diagnostics.
+- CI run 39427603634 confirmed the patch series applied and the FP6 ADT
+  generated, but the compile failed in seven existing `DEBUG`-profile units
+  (DTrace `MUTEX_HELD`, ARM `bad_page_cnt`, scheduler `max_unsafe_rt_quanta`,
+  and VM `uple_create_btref`). No errors were reported from the USB changes.
+  The workflow default is restored to `DEVELOPMENT`, which has built previously;
+  the diagnostic boot flags and USB debug image remain enabled. A new build and
+  phone test are pending.
 
 ## FP6 hardware bringup and pthread/gPanicBase fixes (2026-10-20)
 
