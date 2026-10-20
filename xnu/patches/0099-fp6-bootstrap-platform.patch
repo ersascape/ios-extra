@@ -1,3 +1,20 @@
+diff --git a/bsd/dev/sweet_sample.c b/bsd/dev/sweet_sample.c
+index b40eccd..d5978c3 100644
+--- a/bsd/dev/sweet_sample.c
++++ b/bsd/dev/sweet_sample.c
+@@ -12,6 +12,7 @@
+  *
+  * First sample 90 s after start, then every 120 s, 40 samples at most.
+  */
++#if defined(ARM64_BOARD_CONFIG_SWEET)
+ #include <sys/param.h>
+ #include <sys/systm.h>
+ #include <sys/proc.h>
+@@ -86,3 +87,4 @@ sweet_sample_start(void)
+ 		thread_deallocate(thread);
+ 	}
+ }
++#endif /* ARM64_BOARD_CONFIG_SWEET */
 diff --git a/bsd/kern/kern_trustcache.c b/bsd/kern/kern_trustcache.c
 index 9066367..0ec93ff 100644
 --- a/bsd/kern/kern_trustcache.c
@@ -847,6 +864,65 @@ index 24f1abc..aaf2fad 100644
  		sleh_interrupt_handler_prologue(state, DBG_INTR_TYPE_TIMER);
  		cdp->cpu_decrementer = -1; /* Large */
  		INTERRUPT_MASKED_DEBUG_START(rtclock_intr, DBG_INTR_TYPE_TIMER);
+diff --git a/osfmk/arm64/start.s b/osfmk/arm64/start.s
+index 023086f..8c8b1cc 100644
+--- a/osfmk/arm64/start.s
++++ b/osfmk/arm64/start.s
+@@ -143,7 +143,7 @@ LEXT(reset_vector)
+ 	adrp	x19, EXT(ResetHandlerData)@page			// Get address of the reset handler data
+ 	add		x19, x19, EXT(ResetHandlerData)@pageoff
+ 	mrs		x15, MPIDR_EL1						// Load MPIDR to get CPU number
+-#if HAS_CLUSTER || defined(SWEET)
++#if HAS_CLUSTER || defined(SWEET) || defined(FP6)
+ 	and		x0, x15, #0xFFFF					// Full Aff1:Aff0 (SWEET: core in Aff1)
+ #else
+ 	and		x0, x15, #0xFF						// CPU number is in MPIDR Affinity Level 0
+@@ -279,7 +279,7 @@ LEXT(LowExceptionVectorBase)
+ LEXT(bootstrap_instructions)
+ 
+ #endif /* defined(KERNEL_INTEGRITY_KTRR) || defined(KERNEL_INTEGRITY_CTRR) */
+-#if defined(SWEET)
++#if (defined(SWEET) || defined(FP6))
+ /* PSCI CPU_ON entry (physical): x0=context_id, no stack, MMU/caches off.
+  * Keep this separate from __start (which requires x0=boot_args PA).
+  * Firmware may return at EL1 or EL2; check before accessing EL1 state.
+@@ -327,7 +327,7 @@ Lsweet_secondary_el1:
+ 	/* x0 is deliberately unused; reset_vector selects CPU data by MPIDR. */
+ 	msr		SPSel, #1
+ 	b		EXT(LowResetVectorBase)
+-#endif /* SWEET */
++#endif /* SWEET || FP6 */
+ 
+ 	.align 2
+ 	.globl EXT(resume_idle_cpu)
+@@ -793,11 +793,11 @@ common_start:
+ 	ic		iallu
+ #endif
+ 
+-#if defined(SWEET)
++#if (defined(SWEET) || defined(FP6))
+ 	/* Complete local TLB/I-cache invalidation before enabling the MMU. */
+ 	dsb		sy
+ 	isb
+-#endif
++#endif /* SWEET || FP6 */
+ 
+ 	/* If x21 is not 0, then this is either the start_cpu path or
+ 	 * the resume_idle_cpu path.  cpu_ttep should already be
+@@ -837,11 +837,11 @@ common_start:
+ 	MSR_SCTLR_EL1_X0
+ 	isb		sy
+ 
+-#if !VMAPPLE && !defined(SWEET)
++#if !VMAPPLE && !defined(SWEET) && !defined(FP6)
+ 	MOV64   x1, SCTLR_EL1_DEFAULT
+ 	cmp		x0, x1
+ 	bne		.
+-#endif /* !VMAPPLE && !SWEET */
++#endif /* !VMAPPLE && !SWEET && !FP6 */
+ 
+ #if (!CONFIG_KERNEL_INTEGRITY || (CONFIG_KERNEL_INTEGRITY && !defined(KERNEL_INTEGRITY_WT)))
+ 	/* Watchtower
 diff --git a/osfmk/prng/entropy.c b/osfmk/prng/entropy.c
 index 42286ed..ed67975 100644
 --- a/osfmk/prng/entropy.c

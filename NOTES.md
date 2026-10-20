@@ -36,6 +36,16 @@ design is [docs/GPU_CX_EXPERIMENT.md](docs/GPU_CX_EXPERIMENT.md).
   even when that filesystem is disabled. Restored HFS source staging for FP6;
   this stages files for later patch contexts but does not enable HFS in its
   machine config. Retry CI after this fix. Full build and phone boot are pending.
+- Inspected failed CI run `39375193145` at `552b6b2`. All compilation units
+  succeeded; the final link `kernel.development.fp6.unstripped` failed on two
+  undefined symbols: `_sweet_sample_task` from `sweet_sample.o` (unconditionally
+  compiled by bsd/conf/files while its implementation in osfmk/kern/exception.c
+  was guarded by ARM64_BOARD_CONFIG_SWEET) and `_sweet_secondary_entry` from
+  `SweetCPU.cpo` (PSCI CPU_ON stub in osfmk/arm64/start.s was guarded by SWEET).
+  In patch 0099, guarded `bsd/dev/sweet_sample.c` under ARM64_BOARD_CONFIG_SWEET
+  and added FP6 guards to `osfmk/arm64/start.s` for `sweet_secondary_entry`, MPIDR
+  Aff1 extraction, TLB/cache invalidation and SCTLR check bypass. Patch 0099
+  verified to apply cleanly against baseline `b097596`. Ready to commit and push.
 
 - Local LLVM build now links the shim and packages an unsigned Android v4 image.
   The local packaging check used placeholder payload bytes only: shim and ramdisk
