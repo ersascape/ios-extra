@@ -19,7 +19,7 @@ def main():
     ap.add_argument('--out', required=True, type=Path)
     ap.add_argument('--dtb', type=Path, default=None)
     ap.add_argument('--header-version', default=None)
-    ap.add_argument('--cmdline', default='debug=0xc serial=3 cpus=1 keepsyms=1 -noprogress')
+    ap.add_argument('--cmdline', default='debug=0xc serial=3 cpus=8 keepsyms=1 -noprogress')
     ap.add_argument('--image-name', default='fp6-shim-boot.img')
     ap.add_argument('--commit', default='local')
     ap.add_argument('--ci-run', default='local')

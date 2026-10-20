@@ -288,6 +288,17 @@ error::ResourceWarning -m unittest discover -s tests` (also with
   or serial. Work these subsystems one at a time; distinguish bootloader-provided
   framebuffer splash from an XNU display driver. Fairphone 6 is SM7635 (Snapdragon
   7s Gen 3), so the user's table's SM7450 label should not be used for this target.
+- SMP source review: LineageOS `qcom/volcano.dtsi` has eight CPU nodes with MPIDRs
+  `0x000` through `0x700` and a 4+3+1 cpu-map. The generated FP6 ADT matches those
+  IDs. Existing PSCI CPU_ON, secondary reset entry, redistributor lookup and SGI
+  startup path are present in patch 0099; enabled its ceiling for all eight CPUs
+  and changed the generated FP6 image command line to `cpus=8`. This is source
+  inspection only until the next CI result and a phone boot; each secondary must
+  report initialized/SGI-ready before XNU publishes all CPUs initialized.
+- Separate boot observations reported by the user: XNU waits for
+  `IOProviderClass IOMedia AppleHFS`, and the boot picker failed to write its
+  reason to NVRAM. Neither observation verifies secondary CPU startup. Root media
+  publication and NVRAM persistence remain separate issues.
 - Correction after reviewing the earlier FP6 boot notes: the known on-device path used
   Android boot header v2 with the stock DTB embedded. CI run `39414717734` uploaded a
   5,626,548-byte compressed artifact, but that artifact expands to a 16,203,776-byte

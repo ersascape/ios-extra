@@ -951,7 +951,7 @@ index a1f2a91..f68bff7 100644
 -#if defined(SWEET)
 -	/* Opt in to SMP: cpus=N (N <= SWEET_SMP_MAX_CPUS; cores 6-7 are the A76s). */
 +#if (defined(SWEET) || defined(FP6))
-+	/* Board-specific bring-up ceiling; FP6 remains single-CPU. */
++	/* Board-specific bring-up ceiling; FP6 exposes all eight Volcano CPUs. */
  	if (!cpus_boot_arg_present || cpu_boot_arg == 0) {
  		cpu_boot_arg = 1;
  	}
@@ -1350,10 +1350,10 @@ index 3ab81a3..19e8673 100644
 +/* Source: LineageOS sm7635 kernel 9535e0f0885d3d4b91c38054541e16019d1e64bd,
 + * include/linux/irqchip/arm-gic-v3.h; vendor qcom/volcano.dtsi.
 + * Virtual timer is PPI 11 => INTID 27. SGI 1 is this port's software IPI
-+ * choice. One CPU is a bring-up limit, not the hardware core count. */
++ * choice. FP6 uses the eight CPU nodes supplied by the Volcano ADT. */
 +#define QCOM_VTIMER_INTID 27
 +#define QCOM_IPI_SGI 1
-+#define QCOM_BOOT_MAX_CPUS 1
++#define QCOM_BOOT_MAX_CPUS 8
 +/* GICv3 register definitions; see GICv3 spec (Arm IHI 0069G) */
 +#define GICD_CTLR                 0x0
 +
