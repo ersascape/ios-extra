@@ -16,11 +16,14 @@ design is [docs/GPU_CX_EXPERIMENT.md](docs/GPU_CX_EXPERIMENT.md).
 - An experimental `MACHINE_CONFIG=FP6` compile target exists in patch 0004,
   using an ARMv8.2+crypto baseline and the sourced 8-core / 3 cluster counts.
   `tools/mkadt.py --device fp6` now generates an FP6 ADT profile with sourced
-  CPU affinity/topology, GICv3 and UFS ranges, and Fairphone identity. It
-  requires caller-provided RAM base/size and omits display/framebuffer data;
-  the LineageOS board DTS leaves RAM placeholders and reserved-memory empty.
-  Profile generation is source-based only. There has been no FP6 XNU build,
-  CI validation, boot-image build, or phone observation. See
+  CPU affinity/topology, GICv3 and UFS ranges, Fairphone identity, and the
+  upstream Linux FP6 framebuffer address and dimensions. It requires
+  caller-provided usable RAM base/size because the LineageOS DTS leaves memory
+  as `<0 0 0 0>`; the upstream board DTS relies on bootloader memory discovery.
+  The XNU workflow now accepts `MACHINE_CONFIG=FP6` and emits a separate ADT
+  artifact when RAM inputs are provided. A local serialization smoke build
+  used dummy RAM values only; no device values are known. There has been no FP6
+  XNU build, CI validation, boot-image build, or phone observation. See
   [docs/FAIRPHONE6.md](docs/FAIRPHONE6.md).
 - Persistent LineageOS source checkouts are available under `/home/ersa/Dev`:
   `android_kernel_fairphone_sm7635` and

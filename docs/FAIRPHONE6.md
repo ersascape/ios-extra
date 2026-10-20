@@ -34,9 +34,12 @@ An experimental `FP6` XNU machine config has been added for a kernel compile.
 It uses a conservative ARM64 instruction baseline and records the source CPU
 count/cluster count. `tools/mkadt.py --device fp6` now emits an FP6 ADT profile
 with the Volcano CPU affinity IDs/topology, GICv3 and UFS register ranges, and
-Fairphone identity. It requires explicit `--dram-base` and `--dram-size`
-arguments, because the published FP6 DTS leaves the memory range empty. It
-omits framebuffer/display nodes rather than borrowing Sweet values.
+Fairphone identity. It includes the upstream FP6 simple-framebuffer address,
+dimensions and stride. It requires explicit `--dram-base` and `--dram-size`
+arguments, because the LineageOS Volcano DTS has `reg = <0 0 0 0>` for RAM and
+the upstream board DTS leaves RAM discovery to the bootloader. The upstream
+board source reserves the splash area containing the framebuffer, but that
+does not define the usable RAM range for XNU.
 
 Example syntax (the values below are deliberately not supplied):
 
@@ -46,10 +49,18 @@ python3 tools/mkadt.py /tmp/fp6.adt --device fp6 \
 ```
 
 This is an ADT generation profile, not a boot-ready ADT or image. Runtime RAM
-ownership, the exact timer/interrupt handoff, CPU startup, live framebuffer,
-and storage handoff still need validation against the phone's bootloader data.
+ownership, the exact timer/interrupt handoff, CPU startup, live framebuffer
+handoff and storage handoff still need validation against the phone's
+bootloader data.
 The FP6 XNU machine config has not yet been validated by CI, and this profile
 must not be used for a phone boot until those inputs are confirmed.
+
+The `xnu` GitHub Actions workflow accepts `FP6` as a machine config. A manual
+FP6 run must also provide `fp6_dram_base` and `fp6_dram_size`; it publishes the
+generated `fp6-adt` artifact separately. On push, the workflow uses the
+`MACHINE_CONFIG`, `FP6_DRAM_BASE`, and `FP6_DRAM_SIZE` repository variables if
+set (otherwise the existing SWEET default applies). CI has not run this
+workflow for FP6 yet.
 
 Source references inspected from LineageOS repositories at device-tree commit
 `f32428a`, device configuration commit `564f00b`, and kernel commit

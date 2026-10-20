@@ -283,9 +283,14 @@ def build_fp6(seed=None, phys_base=None, mem_size=None):
     # source-DT facts; interrupt routing, live ownership and startup are not
     # yet validated for this XNU port.
     soc_base = 0x01000000
+    display = node('disp0', [
+        ph(), ('device_type', cstr('display-subsystem')),
+        ('compatible', cstr('sweet,display')),
+        ('canvas-width', u32(1116)), ('canvas-height', u32(2484)),
+    ])
     arm_io = node('arm-io', [
-        ph(), ('device_type', cstr('fp6-io')),
-        ('compatible', cstr('fp6-io') + cstr('arm-io')),
+        ph(), ('device_type', cstr('sweet-io')),
+        ('compatible', cstr('sweet-io') + cstr('arm-io')),
         ('#address-cells', u32(2)), ('#size-cells', u32(2)),
         ('ranges', u64(0, soc_base, 0x100000000 - soc_base)),
     ], [node('gic', [
@@ -293,8 +298,16 @@ def build_fp6(seed=None, phys_base=None, mem_size=None):
         ('interrupt-controller', b''), ('virtual-timer-intid', u32(27)),
         ('reg', u64(0x17100000 - soc_base, 0x10000,
                     0x17180000 - soc_base, 0x200000)),
-    ]), node('wdt', [ph(), ('no-pmu', u32(1))])])
-    ufs = node('fp6-ufs', [
+    ]), node('wdt', [ph(), ('no-pmu', u32(1))]), display])
+    # Fairphone's upstream sm7635-fairphone-fp6.dts defines a simple
+    # framebuffer at 0xe3940000, 1116x2484x4 bytes, and reserves the containing
+    # 0x2b00000 splash region so ABL leaves the display active.
+    fb_base, fb_size = 0xe3940000, 1116 * 2484 * 4
+    fbcon = node('sweet-fbcon', [
+        ph(), ('reg', u64(fb_base, fb_size)),
+        ('width', u32(1116)), ('height', u32(2484)), ('stride', u32(1116 * 4)),
+    ])
+    ufs = node('sweet-ufs', [
         ph(), ('compatible', cstr('qcom,ufshc')),
         ('reg', u64(0x01d84000, 0x3000)),
     ])
@@ -312,7 +325,7 @@ def build_fp6(seed=None, phys_base=None, mem_size=None):
         ('target-sub-type', cstr('SM7635')),
         ('manufacturer', cstr('Fairphone')), ('#address-cells', u32(2)),
         ('#size-cells', u32(2)),
-    ], [chosen, defaults, cpus, arm_io, buttons] + product + [ufs])
+    ], [chosen, defaults, cpus, arm_io, fbcon, buttons] + product + [ufs])
 
 
 if __name__ == '__main__':
