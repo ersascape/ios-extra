@@ -31,6 +31,7 @@ void con_get_framebuffer(uint64_t *base, uint32_t *width, uint32_t *height, uint
 
 void con_clear(uint32_t bg)
 {
+	if (!con_fb) { con_bg = bg; row = 0; return; }
 	for (uint32_t y = 0; y < con_height; y++) {
 		volatile uint32_t *line = con_fb + y * (con_stride / 4);
 		for (uint32_t x = 0; x < con_width; x++)
@@ -42,6 +43,7 @@ void con_clear(uint32_t bg)
 
 static void put_char(int col, char ch, uint32_t fg)
 {
+	if (!con_fb) return;
 	if (ch < 0x20 || ch > 0x7e)
 		ch = '?';
 	const unsigned char *g = font8x16[ch - 0x20];

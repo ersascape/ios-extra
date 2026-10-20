@@ -28,6 +28,9 @@ on:
       - "shim/**"
       - "tools/mkadt.py"
       - "tools/mkpayload.py"
+      - "tools/fp6-package.py"
+      - "tools/mkbootv4.py"
+      - "tools/unpack_bootv2.py"
       - "docs/FAIRPHONE6.md"
       - ".github/workflows/xnu.yml"
 
@@ -151,3 +154,38 @@ jobs:
           name: xnu-kernel
           path: out/
           if-no-files-found: warn
+
+  fp6-boot:
+    needs: build
+    if: ${{ (inputs.machine_config || vars.MACHINE_CONFIG || 'SWEET') == 'FP6' }}
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/download-artifact@v4
+        with:
+          name: xnu-kernel
+          path: ci-kernel
+      - uses: actions/download-artifact@v4
+        with:
+          name: fp6-adt
+          path: ci-adt
+      - name: Install shim toolchain
+        run: sudo apt-get update && sudo apt-get install -y clang lld llvm
+      - name: Package FP6 temporary boot image
+        env:
+          SOURCE_COMMIT: ${{ github.sha }}
+          CI_RUN: ${{ github.run_id }}
+        run: |
+          kernel="ci-kernel/kernel.$(printf '%s' "$KERNEL_CONFIG" | tr '[:upper:]' '[:lower:]').fp6"
+          test -f "$kernel"
+          python3 tools/fp6-package.py --kernel "$kernel" --adt ci-adt/fp6.adt \
+            --out fp6-boot --commit "$SOURCE_COMMIT" --ci-run "$CI_RUN"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: fp6-fastboot-boot
+          path: |
+            fp6-boot/fp6-shim-boot.img
+            fp6-boot/SHA256SUMS
+            fp6-boot/manifest.json
+          if-no-files-found: error
+          retention-days: 7

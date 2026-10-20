@@ -6,6 +6,25 @@ hashes, CI runs, raw numbers) is [docs/GPU_LOG.md](docs/GPU_LOG.md); the hardwar
 mainline reference is [docs/GPU_GMU_BOOT.md](docs/GPU_GMU_BOOT.md); the per-patch
 design is [docs/GPU_CX_EXPERIMENT.md](docs/GPU_CX_EXPERIMENT.md).
 
+## FP6 shim packaging (2026-10-20)
+
+- Local LLVM build now links the shim and packages an unsigned Android v4 image.
+  The local packaging check used placeholder payload bytes only: shim and ramdisk
+  unpack byte-for-byte. This is not a tested XNU boot image or a phone observation.
+- `tools/fp6-package.py` consumes a kernel and ADT from the same CI run, builds
+  the FP6 shim, verifies packaged components and writes hashes/provenance.
+  The new `fp6-boot` CI job uploads `fp6-fastboot-boot` after an FP6 kernel build.
+  Its first CI execution remains pending. Pushes still use the repository's
+  MACHINE_CONFIG variable (default SWEET); select FP6 for a manual run.
+- FP6 shim failures halt instead of entering Sweet diagnostic probes. Missing
+  runtime framebuffer leaves the display untouched. The loader searches aligned
+  payload headers after possible vendor ramdisks and validates segment extents.
+- Header v4 relies on the installed vendor_boot/DTBO and ABL for the runtime FDT.
+  Acceptance by FP6 ABL, live framebuffer availability and XNU handoff remain
+  unmeasured. No flashing or phone commands were performed.
+- User wants the new run's matching kernel/ADT, followed by driver bring-up one
+  kext at a time after a working initial boot. Do not use the older kernel run.
+
 ## Fairphone 6 platform audit (2026-10-20)
 
 - Began a source-only audit for Fairphone (Gen. 6), device name `FP6`.

@@ -374,10 +374,19 @@ static uint32_t to_us(uint64_t ticks)
 void shim_main(uint64_t dtb)
 {
 	struct mmu_info mi;
-	struct fdt_fb fb;
+	struct fdt_fb fb = {0};
+	int volcano = fdt_root_compatible(dtb, "qcom,volcano") ||
+		fdt_root_compatible(dtb, "fairphone,fp6");
+#ifdef SHIM_FP6
+	volcano = 1;
+#endif
 
 	if (fdt_framebuffer(dtb, &fb))
 		con_set_framebuffer(fb.base, fb.width, fb.height, fb.stride);
+	else if (volcano) {
+		/* Do not touch the Sweet framebuffer or its MMIO on FP6. */
+		con_fb = 0;
+	}
 
 	/* An xnu payload in the ramdisk means: boot it (MMU stays off). */
 	stage = "loader";
@@ -385,6 +394,10 @@ void shim_main(uint64_t dtb)
 	con_str("SHIM", "sweet milestone 4: xnu loader");
 	con_skip();
 	const char *why = loader_boot(dtb);
+	if (volcano) {
+		con_str("FP6", why);
+		for (;;) __asm__ volatile("wfe");
+	}
 	con_str("LOADER", why);
 	con_skip();
 

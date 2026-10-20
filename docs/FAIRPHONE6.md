@@ -71,3 +71,31 @@ Source references inspected from LineageOS repositories at device-tree commit
 - [Fairphone Gen. 6 ODM source instructions](https://code.fairphone.com/projects/fairphone-gen-6/odm.html)
 - [Mainline Fairphone 6 device tree](https://linux.googlesource.com/linux/kernel/git/torvalds/linux/+/7711f4417f1870e4bfbee1a7d501f789255bc7aa/arch/arm64/boot/dts/qcom/milos-fairphone-fp6.dts)
 - [Fairphone 6 kernel source repository](https://github.com/fp6-aosp/android_kernel_fairphone_sm7635)
+
+## Temporary boot image packaging
+
+For a completed FP6 CI run, download `fp6-fastboot-boot`. It contains
+`fp6-shim-boot.img`, `SHA256SUMS`, and a manifest with source and input hashes.
+The packaging job uses that run's kernel and ADT. It requires a successful FP6
+kernel build; a SWEET run does not produce this artifact.
+
+Local packaging uses LLVM clang, lld, llvm-objcopy, llvm-readelf and llvm-nm:
+
+```sh
+python3 tools/fp6-package.py --kernel /path/to/kernel.development.fp6 \
+  --adt /path/to/fp6.adt --out shim/out/fp6 \
+  --commit SOURCE_SHA --ci-run RUN_ID
+```
+
+This builds an unsigned Android v4 image. The installed vendor_boot and DTBO
+remain responsible for the bootloader-selected DTB; the package has no embedded
+DTB. The layout follows [AOSP's boot image header definition](https://android.googlesource.com/platform/system/tools/mkbootimg/+/refs/heads/main/include/bootimg/bootimg.h).
+The runtime loader accepts an aligned SWEETXNU payload following vendor ramdisks.
+A missing framebuffer or rejected memory map halts the FP6 loader. Neither ABL
+acceptance nor the runtime handoff has been measured on a phone yet.
+
+After verifying SHA256SUMS, a temporary device test uses `fastboot devices`
+(exactly one phone) and `fastboot boot fp6-shim-boot.img`. Record the displayed
+shim status and bootloader response. This initial image has no root filesystem
+and does not establish userspace or driver support. Do not use the Sweet GPU
+phone-test helper for FP6.

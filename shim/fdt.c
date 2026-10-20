@@ -183,3 +183,42 @@ int fdt_framebuffer(uintptr_t fdt, struct fdt_fb *fb)
 	}
 	return 0;
 }
+
+int fdt_root_compatible(uintptr_t fdt, const char *compatible)
+{
+	if (!fdt || be32(fdt) != FDT_MAGIC) return 0;
+	uintptr_t p = fdt + be32(fdt + 8), end = p + be32(fdt + 36);
+	uintptr_t strings = fdt + be32(fdt + 12);
+	int depth = -1;
+	while (p + 4 <= end) {
+		uint32_t tok = be32(p); p += 4;
+		if (tok == FDT_BEGIN_NODE) {
+			depth++;
+			p = align4(skip_str(p));
+		} else if (tok == FDT_END_NODE) {
+			if (depth == 0) return 0;
+			depth--;
+		} else if (tok == FDT_PROP) {
+			uint32_t len = be32(p), nameoff = be32(p + 4);
+			uintptr_t val = p + 8;
+			if (depth == 0 && streq((const char *)(strings + nameoff), "compatible")) {
+				uint32_t off = 0;
+				while (off < len) {
+					const char *s = (const char *)(val + off);
+					uint32_t n = 0;
+					while (off + n < len && s[n]) n++;
+					if (n == 0 || off + n >= len) return 0;
+					uint32_t i = 0;
+					while (i < n && compatible[i] && s[i] == compatible[i]) i++;
+					if (i == n && !compatible[i]) return 1;
+					off += n + 1;
+				}
+				return 0;
+			}
+			p = align4(val + len);
+		} else if (tok == FDT_NOP) continue;
+		else if (tok == FDT_END) break;
+		else return 0;
+	}
+	return 0;
+}

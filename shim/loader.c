@@ -214,20 +214,43 @@ const char *loader_boot(uintptr_t dtb)
 		return "no initrd in /chosen";
 	con_hex2("INITRD", "lo=", rd_start, "hi=", rd_end);
 
-	const struct payload *p = (const struct payload *)rd_start;
+	if (rd_end <= rd_start || rd_end - rd_start < sizeof(struct payload))
+		return "bad initrd range";
+	/* v4 ABL may prepend vendor ramdisks to the generic payload. */
+	uint64_t payload_start = (rd_start + 7) & ~7UL;
+	while (payload_start <= rd_end - sizeof(struct payload) &&
+	       !magic_ok((const char *)payload_start)) payload_start += 8;
+	if (payload_start > rd_end - sizeof(struct payload))
+		return "no aligned SWEETXNU payload";
+	uint64_t payload_size = rd_end - payload_start;
+	const struct payload *p = (const struct payload *)payload_start;
 	if (!magic_ok(p->magic))
 		return "no SWEETXNU payload";
 	if (p->version != 1 || (p->adt_off & 7) || (rd_start & 7))
 		return "bad payload header";
-	if (p->adt_size > 0xffffffffUL || p->adt_off + p->adt_size > rd_end - rd_start)
+	if (p->adt_size > 0xffffffffUL || p->adt_off > payload_size || p->adt_size > payload_size - p->adt_off)
 		return "bad payload ADT range";
 
+	if (p->nsegs > (payload_size - sizeof(*p)) / sizeof(struct payload_seg))
+		return "bad segment table";
+	for (uint32_t i = 0; i < p->nsegs; i++) {
+		const struct payload_seg *s = &p->segs[i];
+		if (s->file_off > payload_size || s->file_size > payload_size - s->file_off ||
+		    s->file_size > s->vmsize || s->vmaddr < p->virt_base ||
+		    s->vmaddr > p->kernel_end || s->vmsize > p->kernel_end - s->vmaddr ||
+		    (s->file_off & 7) || (s->vmaddr & 7) || (s->vmsize & 7))
+			return "bad payload segment";
+	}
+	if (p->kernel_end < p->virt_base ||
+	    p->kernel_end - p->virt_base > UINT64_MAX - p->adt_size - PAGE_16K * 2 ||
+	    p->entry_va < p->virt_base || p->entry_va >= p->kernel_end)
+		return "bad kernel extent";
+	uint64_t need = p->kernel_end - p->virt_base + p->adt_size + PAGE_16K * 2;
 	uint64_t phys_base = p->phys_base, mem_size = p->mem_size;
 	struct fdt_fb fb = {0};
 	if (!phys_base && !mem_size) {
 		if (p->kernel_end < p->virt_base)
 			return "bad kernel range";
-		uint64_t need = p->kernel_end - p->virt_base + p->adt_size + PAGE_16K * 2;
 		if (!choose_runtime_ram(dtb, rd_start, rd_end, need,
 					&phys_base, &mem_size, &fb))
 			return "no free RAM range in bootloader FDT";
@@ -237,6 +260,8 @@ const char *loader_boot(uintptr_t dtb)
 	} else if (!phys_base || !mem_size) {
 		return "incomplete payload RAM range";
 	}
+	if (mem_size < need || phys_base > UINT64_MAX - mem_size)
+		return "kernel exceeds RAM range";
 	uint64_t pa_of_va_base = phys_base - p->virt_base;	/* pa = va + this */
 	con_hex2("PHYS", "base=", phys_base, "size=", mem_size);
 	con_hex("VIRT", p->virt_base);
@@ -249,7 +274,7 @@ const char *loader_boot(uintptr_t dtb)
 	for (uint32_t i = 0; i < p->nsegs; i++) {
 		const struct payload_seg *s = &p->segs[i];
 		uintptr_t dst = s->vmaddr + pa_of_va_base;
-		copy64(dst, rd_start + s->file_off, s->file_size);
+		copy64(dst, payload_start + s->file_off, s->file_size);
 		if (s->vmsize > s->file_size)
 			zero64(dst + ((s->file_size + 7) & ~7UL), s->vmsize - ((s->file_size + 7) & ~7UL));
 	}
@@ -257,7 +282,7 @@ const char *loader_boot(uintptr_t dtb)
 
 	/* ADT, then boot_args, behind the kernel; everything below topOfKernelData is ours. */
 	uintptr_t adt_pa = p->kernel_end + pa_of_va_base;
-	copy64(adt_pa, rd_start + p->adt_off, p->adt_size);
+	copy64(adt_pa, payload_start + p->adt_off, p->adt_size);
 	if (!p->phys_base) {
 		uint64_t rd_pa = 0, rd_size = 0;
 		if (p->nsegs) {
