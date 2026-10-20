@@ -1,6 +1,6 @@
 # ios-extra — current state
 
-Last updated 2026-10-20 after Phoenix source inspection and support edits. Read [HANDOFF.md](HANDOFF.md) for how to
+Last updated 2026-10-20 after adding the FP6 ADT profile. Read [HANDOFF.md](HANDOFF.md) for how to
 continue and [AGENTS.md](AGENTS.md) for the rules. The per-step history (images,
 hashes, CI runs, raw numbers) is [docs/GPU_LOG.md](docs/GPU_LOG.md); the hardware and
 mainline reference is [docs/GPU_GMU_BOOT.md](docs/GPU_GMU_BOOT.md); the per-patch
@@ -13,13 +13,20 @@ design is [docs/GPU_CX_EXPERIMENT.md](docs/GPU_CX_EXPERIMENT.md).
   `milos-fairphone-fp6.dts` with `fairphone,fp6` and `qcom,milos` compatibles.
 - QCM6490 is Fairphone 5, not Fairphone 6. No QCM6490 code or FP5 target was
   added as part of this work.
-- No FP6 machine config, ADT profile, build, CI, or device test has been
-  completed yet. An experimental `MACHINE_CONFIG=FP6` compile target now exists
-  in patch 0004, using an ARMv8.2+crypto baseline and the sourced 8-core / 3
-  cluster counts. LineageOS's `fp6.dts` leaves memory and reserved memory as
-  placeholders, so there is no FP6 ADT or boot image. The current GPU
-  investigation remains specific to SM7150 / Adreno 618. See
+- An experimental `MACHINE_CONFIG=FP6` compile target exists in patch 0004,
+  using an ARMv8.2+crypto baseline and the sourced 8-core / 3 cluster counts.
+  `tools/mkadt.py --device fp6` now generates an FP6 ADT profile with sourced
+  CPU affinity/topology, GICv3 and UFS ranges, and Fairphone identity. It
+  requires caller-provided RAM base/size and omits display/framebuffer data;
+  the LineageOS board DTS leaves RAM placeholders and reserved-memory empty.
+  Profile generation is source-based only. There has been no FP6 XNU build,
+  CI validation, boot-image build, or phone observation. See
   [docs/FAIRPHONE6.md](docs/FAIRPHONE6.md).
+- Persistent LineageOS source checkouts are available under `/home/ersa/Dev`:
+  `android_kernel_fairphone_sm7635` and
+  `android_kernel_fairphone_sm7635-modules`. The device tree and vendor DTS
+  reference remain under `/tmp/lineage-fp6-device` and
+  `/tmp/lineage-fp6-devicetrees`.
 
 ## POCO X2 / Phoenix support (2026-10-20)
 

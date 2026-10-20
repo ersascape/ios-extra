@@ -32,12 +32,24 @@ It is not QCM6490; QCM6490 is used by Fairphone 5.
 
 An experimental `FP6` XNU machine config has been added for a kernel compile.
 It uses a conservative ARM64 instruction baseline and records the source CPU
-count/cluster count. CI has not yet validated this configuration. This does
-not make the result bootable: no FP6 ADT profile or boot package has been
-created. Boot-time memory ownership, CPU startup and topology mapping, GIC/timer
-setup, storage handoff, framebuffer ownership, and the SM7635 GPU/GMU sequence
-remain unverified for this XNU port. Do not temporary-boot this compile-target
-image on a phone.
+count/cluster count. `tools/mkadt.py --device fp6` now emits an FP6 ADT profile
+with the Volcano CPU affinity IDs/topology, GICv3 and UFS register ranges, and
+Fairphone identity. It requires explicit `--dram-base` and `--dram-size`
+arguments, because the published FP6 DTS leaves the memory range empty. It
+omits framebuffer/display nodes rather than borrowing Sweet values.
+
+Example syntax (the values below are deliberately not supplied):
+
+```sh
+python3 tools/mkadt.py /tmp/fp6.adt --device fp6 \
+  --dram-base 0x... --dram-size 0x...
+```
+
+This is an ADT generation profile, not a boot-ready ADT or image. Runtime RAM
+ownership, the exact timer/interrupt handoff, CPU startup, live framebuffer,
+and storage handoff still need validation against the phone's bootloader data.
+The FP6 XNU machine config has not yet been validated by CI, and this profile
+must not be used for a phone boot until those inputs are confirmed.
 
 Source references inspected from LineageOS repositories at device-tree commit
 `f32428a`, device configuration commit `564f00b`, and kernel commit

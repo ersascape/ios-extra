@@ -69,10 +69,14 @@ def node(name, props=(), children=()):
     return n
 
 
-def build(seed=None, qemu=False, highmem=False, device='sweet'):
+def build(seed=None, qemu=False, highmem=False, device='sweet', fp6_ram=None):
     """qemu=True: same tree, but with QEMU virt's GIC addresses and CNTFRQ (tools/qemu-sweet.py)."""
-    if device not in ('sweet', 'phoenix'):
+    if device not in ('sweet', 'phoenix', 'fp6'):
         raise ValueError(f'unsupported device profile: {device}')
+    if device == 'fp6':
+        if fp6_ram is None:
+            raise ValueError('FP6 requires --dram-base and --dram-size from a trusted device memory map')
+        return build_fp6(seed=seed, phys_base=fp6_ram[0], mem_size=fp6_ram[1])
     phys_base, mem_size = (HIGH_PHYS_BASE, HIGH_MEM_SIZE) if highmem else (PHYS_BASE, MEM_SIZE)
     gicd, gicr, timebase = (QEMU_GICD, QEMU_GICR, QEMU_TIMEBASE) if qemu else (GICD, GICR, TIMEBASE)
     seed = seed if seed is not None else os.urandom(64)
@@ -230,16 +234,102 @@ def build(seed=None, qemu=False, highmem=False, device='sweet'):
     ], [chosen, defaults, cpus, arm_io, fbcon, buttons] + product + ([] if qemu else [ufs]))
 
 
+def build_fp6(seed=None, phys_base=None, mem_size=None):
+    """Source-based FP6 profile; RAM is supplied from the phone's runtime map.
+
+    Board facts are from LineageOS volcano.dtsi/fp6.dts. This is a bootstrap
+    ADT profile, not a boot-ready device tree: framebuffer and other runtime
+    ownership data are intentionally absent until measured on-device.
+    """
+    if not phys_base or not mem_size:
+        raise ValueError('FP6 RAM base and size must be non-zero')
+    seed = seed if seed is not None else os.urandom(64)
+    phandle = iter(range(1, 1000))
+    ph = lambda: ('AAPL,phandle', u32(next(phandle)))
+    chosen = node('chosen', [
+        ph(), ('dram-base', u64(phys_base)), ('dram-size', u64(mem_size)),
+        ('random-seed', seed), ('debug-enabled', u32(1)),
+        ('firmware-version', cstr('fp6-shim')),
+        ('system-firmware-version', cstr('fp6-shim')),
+        ('boot-manifest-hash', BOOT_MANIFEST_HASH),
+        ('crypto-hash-method', cstr('sha2-384')),
+        # Synthetic identifiers keep this development profile separate from
+        # Sweet/Phoenix. The bundled iOS userland identity remains D22AP.
+        ('unique-chip-id', struct.pack('<Q', 0x4650360000000001)),
+        ('chip-id', u32(0x7635)),
+    ], [node('memory-map', [ph()]),
+        node('asmb', [ph(), ('lp-sip0', u64(0x6f)), ('lp-sip1', u32(1))])])
+
+    # CPU affinity values, Kryo compatibility and 4/3/1 cluster membership
+    # match Qualcomm's published Volcano DTS. Frequencies and cache topology
+    # are omitted because they are not required to identify the boot CPUs.
+    cpu_nodes = []
+    for core in range(8):
+        cluster = 0 if core < 4 else 1 if core < 7 else 2
+        cpu_nodes.append(node(f'cpu{core}', [
+            ph(), ('device_type', cstr('cpu')),
+            ('compatible', cstr('qcom,kryo') + cstr('ARM,v8')),
+            ('reg', u32(core << 8)), ('cpu-id', u32(core)),
+            ('cluster-id', u32(cluster)), ('cluster-type', u32(0)),
+            ('die-cluster-id', u32(0)),
+            ('cluster-core-id', u32(core if cluster == 0 else core - (4 if cluster == 1 else 7))),
+            ('state', cstr('running' if core == 0 else 'stopped')),
+            ('timebase-frequency', u32(19200000)),
+        ]))
+    cpus = node('cpus', [ph(), ('#address-cells', u32(1)),
+                         ('#size-cells', u32(0))], cpu_nodes)
+
+    # Addresses and sizes are from Volcano's GIC and UFS nodes. These are
+    # source-DT facts; interrupt routing, live ownership and startup are not
+    # yet validated for this XNU port.
+    soc_base = 0x01000000
+    arm_io = node('arm-io', [
+        ph(), ('device_type', cstr('fp6-io')),
+        ('compatible', cstr('fp6-io') + cstr('arm-io')),
+        ('#address-cells', u32(2)), ('#size-cells', u32(2)),
+        ('ranges', u64(0, soc_base, 0x100000000 - soc_base)),
+    ], [node('gic', [
+        ph(), ('compatible', cstr('arm,gic-v3')),
+        ('interrupt-controller', b''), ('virtual-timer-intid', u32(27)),
+        ('reg', u64(0x17100000 - soc_base, 0x10000,
+                    0x17180000 - soc_base, 0x200000)),
+    ]), node('wdt', [ph(), ('no-pmu', u32(1))])])
+    ufs = node('fp6-ufs', [
+        ph(), ('compatible', cstr('qcom,ufshc')),
+        ('reg', u64(0x01d84000, 0x3000)),
+    ])
+    defaults = node('defaults', [ph(), ('no-effaceable-storage', u32(1))])
+    buttons = node('buttons', [
+        ph(), ('button-names', cstr('volup') + cstr('voldown') + cstr('hold')),
+        ('home-button-type', u32(2)), ('opposed-power-vol-buttons', u32(1)),
+    ])
+    product_props = d22ap_product()
+    product = [node('product', [ph()] + product_props)] if product_props else []
+    return node('device-tree', [
+        ph(), ('compatible', cstr('FP6') + cstr('fairphone,fp6') +
+               cstr('qcom,volcano') + cstr('qcom,sm7635') + cstr('AppleARM')),
+        ('model', cstr('FP6')), ('target-type', cstr('FP6')),
+        ('target-sub-type', cstr('SM7635')),
+        ('manufacturer', cstr('Fairphone')), ('#address-cells', u32(2)),
+        ('#size-cells', u32(2)),
+    ], [chosen, defaults, cpus, arm_io, buttons] + product + [ufs])
+
+
 if __name__ == '__main__':
     import argparse
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('output')
     parser.add_argument('--qemu', action='store_true')
     parser.add_argument('--highmem', action='store_true')
-    parser.add_argument('--device', choices=('sweet', 'phoenix'), default='sweet')
+    parser.add_argument('--device', choices=('sweet', 'phoenix', 'fp6'), default='sweet')
+    parser.add_argument('--dram-base', type=lambda v: int(v, 0),
+                        help='FP6 RAM base in bytes (required for --device fp6)')
+    parser.add_argument('--dram-size', type=lambda v: int(v, 0),
+                        help='FP6 RAM size in bytes (required for --device fp6)')
     parser.add_argument('--dump', action='store_true')
     args = parser.parse_args()
-    root = build(qemu=args.qemu, highmem=args.highmem, device=args.device)
+    fp6_ram = (args.dram_base, args.dram_size) if args.device == 'fp6' and args.dram_base is not None and args.dram_size is not None else None
+    root = build(qemu=args.qemu, highmem=args.highmem, device=args.device, fp6_ram=fp6_ram)
     blob = adt.serialize(root)
     open(args.output, 'wb').write(blob)
     if args.dump:
