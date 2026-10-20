@@ -17,7 +17,8 @@ def main():
     ap.add_argument('--kernel', required=True, type=Path)
     ap.add_argument('--adt', required=True, type=Path)
     ap.add_argument('--out', required=True, type=Path)
-    ap.add_argument('--dtb', type=Path, default=None)
+    ap.add_argument('--dtb', required=True, type=Path,
+                    help='matching stock FP6 DTB; required for the tested header-v2 boot path')
     ap.add_argument('--ramdisk', type=Path, default=None,
                     help='static Mach-O init image to boot from md0 instead of waiting for UFS/HFS')
     ap.add_argument('--header-version', default=None)
@@ -34,10 +35,11 @@ def main():
                                     str(args.ramdisk) if args.ramdisk else None)
     payload_path = out / 'fp6-payload.bin'
     payload_path.write_bytes(payload)
-    hdr_ver = args.header_version or ('2' if args.dtb else '4')
+    hdr_ver = args.header_version or '2'
+    if hdr_ver != '2':
+        ap.error('FP6 fastboot boot images must use Android boot header v2')
     env = dict(os.environ, SHIM_BOOT_HEADER_VERSION=hdr_ver, SHIM_CPPFLAGS='-DSHIM_FP6=1')
-    if args.dtb:
-        env['SHIM_DTB'] = str(args.dtb.resolve())
+    env['SHIM_DTB'] = str(args.dtb.resolve())
     subprocess.run(['bash', str(ROOT / 'shim/build.sh'), str(payload_path)], env=env, check=True)
     image = out / args.image_name
     shutil.copyfile(ROOT / 'shim/out/shim-boot.img', image)
@@ -47,12 +49,15 @@ def main():
             raise RuntimeError('packaged payload mismatch')
         if (out / 'check/kernel').read_bytes() != (ROOT / 'shim/out/Image').read_bytes():
             raise RuntimeError('packaged shim mismatch')
+        if (out / 'check/dtb').read_bytes() != args.dtb.read_bytes():
+            raise RuntimeError('embedded DTB mismatch')
     sha = hashlib.sha256(image.read_bytes()).hexdigest()
     (out / 'SHA256SUMS').write_text(f'{sha}  {image.name}\n')
     manifest = dict(source_commit=args.commit, ci_run=args.ci_run, image=image.name,
                     sha256=sha, cmdline=cmdline, payload=info,
                     kernel_sha256=hashlib.sha256(args.kernel.read_bytes()).hexdigest(),
                     adt_sha256=hashlib.sha256(args.adt.read_bytes()).hexdigest(),
+                    dtb_sha256=hashlib.sha256(args.dtb.read_bytes()).hexdigest(),
                     hardware_tested=False)
     (out / 'manifest.json').write_text(json.dumps(manifest, indent=2) + '\n')
     print(image, sha)

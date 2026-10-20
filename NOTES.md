@@ -313,5 +313,14 @@ error::ResourceWarning -m unittest discover -s tests` (also with
   22,896,640 bytes, SHA256 `3dcc03f79b4fb6b775ebbb1612509a772e54b78d45301e20bdd72ce95861e59e`;
   unpack validation confirmed the 192,512-byte shim kernel, 16,003,456-byte XNU
   payload and embedded DTB exactly match their inputs. This rebuilt v2 image has not
-  been booted. The current CI packaging job still needs a reproducible way to obtain
-  the stock DTB before it can publish this corrected format.
+  been booted. CI run `39417320648` repeated the same v4/no-DTB mistake. The user
+  tested its image and ABL rejected it with `Failed to load/authenticate boot image:
+  Invalid Parameter`. Confirmed the header version at offset 40 is 4 and there is no
+  embedded DTB. Repacked this run's eight-CPU kernel and matching ADT with the local
+  stock DTB and RAM-disk init: `/tmp/fp6-repack/fp6-shim-boot.img`, 22,913,024 bytes,
+  SHA256 `4a528a4cec90f772685fd740484636b2fc8c61b23d0d840e825872e4c8a896e0`.
+  Package validation confirms header v2 and exact kernel, payload, and DTB bytes.
+  `tools/fp6-package.py` now requires a DTB and rejects header v4. CI publishes a
+  fastboot image only when repository variable `FP6_STOCK_DTB_URL` is configured;
+  without it, the workflow warns and skips the image artifact. The corrected local
+  image has not been booted; `fastboot devices` found no connected phone.

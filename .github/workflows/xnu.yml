@@ -177,16 +177,21 @@ jobs:
           clang -target arm64-apple-ios16.0 -c tools/sweet-init.S -o fp6-boot/init.o
           python3 tools/mkinit.py fp6-boot/init.o fp6-boot/init
       - name: Package FP6 temporary boot image
+        if: ${{ vars.FP6_STOCK_DTB_URL != '' }}
         env:
           SOURCE_COMMIT: ${{ github.sha }}
           CI_RUN: ${{ github.run_id }}
+          FP6_STOCK_DTB_URL: ${{ vars.FP6_STOCK_DTB_URL }}
         run: |
           kernel="ci-kernel/kernel.$(printf '%s' "$KERNEL_CONFIG" | tr '[:upper:]' '[:lower:]').fp6"
           test -f "$kernel"
+          curl --fail --location --retry 3 "$FP6_STOCK_DTB_URL" -o fp6-boot/fp6-stock.dtb
+          test -s fp6-boot/fp6-stock.dtb
           python3 tools/fp6-package.py --kernel "$kernel" --adt ci-adt/fp6.adt \
-            --ramdisk fp6-boot/init \
+            --dtb fp6-boot/fp6-stock.dtb --ramdisk fp6-boot/init \
             --out fp6-boot --commit "$SOURCE_COMMIT" --ci-run "$CI_RUN"
       - uses: actions/upload-artifact@v4
+        if: ${{ vars.FP6_STOCK_DTB_URL != '' }}
         with:
           name: fp6-fastboot-boot
           path: |
@@ -195,3 +200,6 @@ jobs:
             fp6-boot/manifest.json
           if-no-files-found: error
           retention-days: 7
+      - name: Explain missing FP6 stock DTB
+        if: ${{ vars.FP6_STOCK_DTB_URL == '' }}
+        run: echo '::warning::Skipped fastboot image: set the repository variable FP6_STOCK_DTB_URL to a direct URL for the matching stock FP6 DTB.'

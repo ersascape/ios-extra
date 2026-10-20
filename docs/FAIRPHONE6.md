@@ -89,13 +89,15 @@ python3 tools/fp6-package.py --kernel /path/to/kernel.development.fp6 \
 ```
 
 For the tested FP6 boot path, use Android boot header v2 and embed the matching
-stock FP6 DTB. Supplying `--dtb` selects header v2 automatically. A header v4
-package without an embedded DTB is not the image used for the successful on-device
-shim boot recorded in NOTES.md. The layout follows [AOSP's boot image header definition](https://android.googlesource.com/platform/system/tools/mkbootimg/+/refs/heads/main/include/bootimg/bootimg.h).
+stock FP6 DTB. `--dtb` is required and selects header v2. Header v4 without an
+embedded DTB was rejected by the phone's bootloader with `Invalid Parameter`.
+The layout follows [AOSP's boot image header definition](https://android.googlesource.com/platform/system/tools/mkbootimg/+/refs/heads/main/include/bootimg/bootimg.h).
 The runtime loader accepts an aligned SWEETXNU payload following vendor ramdisks.
 A missing framebuffer or rejected memory map halts the FP6 loader. The v2 image
-repackaged from CI run 39414717734 is structurally verified but has not itself
-been booted on the phone.
+repackaged from CI run 39417320648 is structurally verified but has not itself
+been booted on the phone. CI only publishes this boot artifact when the repository
+variable `FP6_STOCK_DTB_URL` points to a direct download of the matching stock DTB;
+otherwise it skips the artifact instead of producing an unusable image.
 
 After verifying SHA256SUMS, a temporary device test uses `fastboot devices`
 (exactly one phone) and `fastboot boot fp6-shim-boot.img`. Record the displayed
