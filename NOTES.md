@@ -107,6 +107,19 @@ design is [docs/GPU_CX_EXPERIMENT.md](docs/GPU_CX_EXPERIMENT.md).
   SHA256 `3b9100a82b7576f8f9ebf6d4c7ea66593e9ce0cf3e88f3fcfed383d5e37825c5`.
   Command line includes `rd=ufsroot0 fp6usb=2`. It has not been booted; no
   UFS behavior or failure-stage report has yet been observed on hardware.
+- The user tested that image and reported panic detail `0x2102` at SCSI
+  completion. Decoding patch 0102's packed value gives opcode `0x00` (TEST UNIT
+  READY), OCS `0`, response UPIU `0x21`, and SCSI status `0x02` (CHECK
+  CONDITION). The request completed at the UFS transport level; this alone does
+  not identify the media condition, and the panicked-task pointer is not a
+  fault diagnosis. Linux's UFS definitions confirm that sense data is embedded
+  in the response UPIU, so the follow-up does not issue a separate REQUEST
+  SENSE command.
+- Patch 0103 decodes the embedded sense key/ASC/ASCQ and reports them in the
+  panic detail. It retries TEST UNIT READY for up to 3 seconds only for UNIT
+  ATTENTION or NOT READY / becoming ready; other SCSI errors remain failures.
+  This change still needs CI compilation and a phone retest before claiming UFS
+  root works.
 
 ## FP6 hardware bringup and pthread/gPanicBase fixes (2026-10-20)
 

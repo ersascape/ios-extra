@@ -1,0 +1,59 @@
+--- a/bsd/dev/sweet_ufs.c
++++ b/bsd/dev/sweet_ufs.c
+@@ -79,6 +79,7 @@
+ #define CMD_TIMEOUT_NS  (5ull * NSEC_PER_SEC)
+ #define CMD_SPIN_NS     (50ull * NSEC_PER_USEC)
+ #define CMD_SLEEP_NS    (200ull * NSEC_PER_USEC)
++#define UFS_SENSE_DATA_OFFSET   34
+ 
+ struct utrd {
+ 	uint32_t dw0, dw1, dw2, dw3;
+@@ -259,7 +260,7 @@
+ 	}
+ 
+ 	uint32_t ocs = utrd->dw2 & 0xff;
+-	if (ocs || ucd->resp[0] != 0x21 || ucd->resp[6] || ucd->resp[7]) {
++	if (ocs || ucd->resp[0] != 0x21 || ucd->resp[6]) {
+ 		ufs_error_stage = "SCSI completion";
+ 		ufs_error_detail = ((uint32_t)cdb[0] << 24) | (ocs << 16) |
+ 		    ((uint32_t)ucd->resp[0] << 8) | ucd->resp[7];
+@@ -267,6 +268,25 @@
+ 		    cdb[0], ocs, ucd->resp[0], ucd->resp[6], ucd->resp[7]);
+ 		return EIO;
+ 	}
++	if (ucd->resp[7] != 0) {
++		uint16_t sense_len = ((uint16_t)ucd->resp[32] << 8) | ucd->resp[33];
++		uint8_t key = 0xff, asc = 0xff, ascq = 0xff;
++		if (sense_len >= 14 && UFS_SENSE_DATA_OFFSET + 13 < sizeof(ucd->resp)) {
++			key = ucd->resp[UFS_SENSE_DATA_OFFSET + 2] & 0x0f;
++			asc = ucd->resp[UFS_SENSE_DATA_OFFSET + 12];
++			ascq = ucd->resp[UFS_SENSE_DATA_OFFSET + 13];
++		}
++		ufs_error_stage = "SCSI check condition";
++		ufs_error_detail = ((uint32_t)cdb[0] << 24) | ((uint32_t)key << 16) |
++		    ((uint32_t)asc << 8) | ascq;
++		printf("QCOM UFS: command 0x%02x check condition: status 0x%x sense_len %u key 0x%x ASC/ASCQ 0x%02x/0x%02x\n",
++		    cdb[0], ucd->resp[7], sense_len, key, asc, ascq);
++		/* Media may report UNIT ATTENTION or becoming-ready after handoff. */
++		if (cdb[0] == 0x00 && (key == 0x06 || (key == 0x02 && asc == 0x04))) {
++			return EAGAIN;
++		}
++		return EIO;
++	}
+ 	return 0;
+ }
+ 
+@@ -659,8 +679,11 @@
+ 	if (!error) {
+ 		ufs_error_stage = "TEST UNIT READY";
+ 		static const uint8_t tur[6] = { 0x00 };
+-		/* The first command after the bootloader may report a unit attention. */
+-		for (int i = 0; i < 3 && (error = ufs_scsi(tur, sizeof(tur), 0, false)); i++) {
++		/* Retry transient UNIT ATTENTION / becoming-ready sense after handoff. */
++		error = ufs_scsi(tur, sizeof(tur), 0, false);
++		for (int i = 0; error == EAGAIN && i < 30; i++) {
++			delay(100000);
++			error = ufs_scsi(tur, sizeof(tur), 0, false);
+ 		}
+ 	}
+ 	if (!error) {
