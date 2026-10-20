@@ -74,6 +74,23 @@
   `unentitled_ios_sim_launch=1 launchd_unsecure_cache=1`. Phone validation is
   pending.
 
+## FP6 MKB/keybag initialization (2026-10-20)
+
+- After the AMFI/platform image, the user reports `hfs: set hardlink bit` lines,
+  then a fatal keybag error during `MKB_INIT`, followed by
+  `Halt/Restart Timed Out @IOPlatformExpert.cpp`. HFS's link-chain repair is
+  informational here; the fatal MKB init is the active blocker. The restart
+  timeout is secondary: this FP6 bring-up does not yet provide a working
+  platform restart implementation.
+- Source audit found the existing built-in `AppleKeyStore`/libaks test service
+  is compiled and registered only for SWEET. FP6 therefore has no service to
+  satisfy keybagd's `aks_get_system` path. The ADT builder already sets
+  `/defaults/no-effaceable-storage`, and `mkiosroot.sh` adds the plain system
+  keybag plist; those are the established SWEET keybag prerequisites.
+- Extending the built-in no-passcode AppleKeyStore service and IOKit match entry
+  to FP6. This is a development stub, not SEP-backed keybag security. CI and
+  phone validation are pending.
+
 Last updated 2026-10-20 after adding the FP6 ADT profile. Read [HANDOFF.md](HANDOFF.md) for how to
 continue and [AGENTS.md](AGENTS.md) for the rules. The per-step history (images,
 hashes, CI runs, raw numbers) is [docs/GPU_LOG.md](docs/GPU_LOG.md); the hardware and

@@ -662,7 +662,7 @@ diff --git a/iokit/KernelConfigTables.cpp b/iokit/KernelConfigTables.cpp
 index 92f3e26..bbb831e 100644
 --- a/iokit/KernelConfigTables.cpp
 +++ b/iokit/KernelConfigTables.cpp
-@@ -34,11 +34,27 @@
+@@ -34,11 +34,28 @@
  
  const char * gIOKernelConfigTables =
      "("
@@ -674,6 +674,8 @@ index 92f3e26..bbb831e 100644
 +    "     'IONameMatch' = 'qcom,volcano'; 'IOProbeScore' = 10000:32; },"
 +    "   { 'IOClass' = QcomCPU; 'IOProviderClass' = IOPlatformDevice;"
 +    "     'IONameMatch' = 'qcom,kryo'; 'IOProbeScore' = 10000:32; },"
++    "   { 'IOClass' = AppleKeyStore; 'IOProviderClass' = IOResources;"
++    "     'IOMatchCategory' = AppleKeyStore; },"
 +    "   { 'IOClass' = SweetPlatformExpert; 'IOProviderClass' = IOPlatformExpertDevice;"
 +    "     'IONameMatch' = 'fairphone,fp6'; 'IOProbeScore' = 9000:32; },"
 +    "   { 'IOClass' = SweetCPU; 'IOProviderClass' = IOPlatformDevice;"
