@@ -49,6 +49,22 @@
   It retains `rd=ufsroot0 ufsrw=1 fp6usb=2`; header-v2 packaging completed.
   This development bypass has not yet been tested on the phone.
 
+## FP6 boot-task platform classification (2026-10-20)
+
+- The user booted the unentitled image and reports a new panic:
+  `boot task is not a platform binary /sbin/fsck`. The iOS platform rejection
+  was bypassed and launchd advanced to its boot-task sequence.
+- Source inspection found patch 0035 registers the built-in AMFI MAC policy
+  from `bsd_init.c` only under `ARM64_BOARD_CONFIG_SWEET`. Patch 0099 compiles
+  the AMFI implementation for FP6, but does not register its MAC policy there.
+  As a result, its `vnode_check_signature` hook never marks root-filesystem
+  binaries `CS_PLATFORM_BINARY`; the boot-task check rejects `/sbin/fsck`.
+- Extended patch 0035's policy-registration guard to include FP6. This is the
+  targeted source fix and still requires CI. The next image should also include
+  `launchd_unsecure_cache=1`, as the known-good SWEET userspace boot args do;
+  that independently lets launchd use its job cache without AMFI's trust-cache
+  service. No new image is available yet.
+
 Last updated 2026-10-20 after adding the FP6 ADT profile. Read [HANDOFF.md](HANDOFF.md) for how to
 continue and [AGENTS.md](AGENTS.md) for the rules. The per-step history (images,
 hashes, CI runs, raw numbers) is [docs/GPU_LOG.md](docs/GPU_LOG.md); the hardware and
