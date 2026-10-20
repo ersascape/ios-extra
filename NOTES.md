@@ -29,8 +29,25 @@
   stock DTB SHA256 `16a9e60e441772b5cf491a6b51dbe4829f5895fa284bcfa342623bc5b2287dc5`.
   Command line is `debug=0xc serial=3 cpus=8 keepsyms=1 -noprogress rd=ufsroot0
   ufsrw=1 fp6usb=2`. This opts in to writes to userdata for the HFS journal;
-  it has not been boot-tested and root authentication continuation is not yet
-  verified on hardware.
+  The user boot-tested it and confirmed root authentication was passed far
+  enough to reach launchd; launchd then failed with the wrong-platform reason
+  below.
+
+## FP6 launchd platform rejection (2026-10-20)
+
+- On the first `fp6-shim-ufs-root-rw.img` test, the user reports that root mount
+  progressed to launchd, then panicked:
+  `unexpected SIGKILL of launchd (CS_KILLED) with reason namespace 9 code 0xe`.
+  XNU `bsd/sys/reason.h` maps namespace 9 to `OS_REASON_EXEC`; code 14 (`0xe`)
+  is `EXEC_EXIT_REASON_WRONG_PLATFORM`. This is the macOS-targeted kernel
+  rejecting the iOS platform binary, not a code-signature validation failure.
+- Reused the DEVELOPMENT boot argument
+  `unentitled_ios_sim_launch=1` from the existing SWEET iOS userspace bring-up
+  and locally repackaged the same CI kernel/ADT/stock DTB. New image:
+  `/tmp/fp6-unentitled-394446/ufs-root/fp6-shim-ufs-root-rw-unentitled.img`,
+  SHA256 `ae4b86c91208e56a28d9230a80b6262f6a824431b41ff25d74e2daafe0628b82`.
+  It retains `rd=ufsroot0 ufsrw=1 fp6usb=2`; header-v2 packaging completed.
+  This development bypass has not yet been tested on the phone.
 
 Last updated 2026-10-20 after adding the FP6 ADT profile. Read [HANDOFF.md](HANDOFF.md) for how to
 continue and [AGENTS.md](AGENTS.md) for the rules. The per-step history (images,
