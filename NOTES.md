@@ -8,6 +8,14 @@ design is [docs/GPU_CX_EXPERIMENT.md](docs/GPU_CX_EXPERIMENT.md).
 
 ## FP6 shim packaging (2026-10-20)
 
+- Inspected user-selected successful CI run `39371823683` at `4e7fdf0`.
+  Artifact `12242266868` contains `kernel.development.sweet`, SHA256
+  `18f69070e456841cc4d400f6d6438b7ede02eb2e6b0429d4b231da88e7d9eddc`,
+  and no FP6 ADT artifact. A source commit mentioning FP6 did not select FP6
+  for this push build. Do not package that kernel for FP6.
+- Dispatched run `39372737713` explicitly with `machine_config=FP6`,
+  DEVELOPMENT, from main after `b08556b`. Result and artifacts are pending.
+
 - Local LLVM build now links the shim and packages an unsigned Android v4 image.
   The local packaging check used placeholder payload bytes only: shim and ramdisk
   unpack byte-for-byte. This is not a tested XNU boot image or a phone observation.
