@@ -90,6 +90,9 @@
 - Extending the built-in no-passcode AppleKeyStore service and IOKit match entry
   to FP6. This is a development stub, not SEP-backed keybag security. CI and
   phone validation are pending.
+- First CI run `39449649400` failed before compilation because the modified
+  patch 0099 hunk count was short by one line (`corrupt patch at line 696`).
+  Corrected its hunk header; retry pending.
 
 Last updated 2026-10-20 after adding the FP6 ADT profile. Read [HANDOFF.md](HANDOFF.md) for how to
 continue and [AGENTS.md](AGENTS.md) for the rules. The per-step history (images,

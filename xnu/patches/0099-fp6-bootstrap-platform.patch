@@ -662,7 +662,7 @@ diff --git a/iokit/KernelConfigTables.cpp b/iokit/KernelConfigTables.cpp
 index 92f3e26..bbb831e 100644
 --- a/iokit/KernelConfigTables.cpp
 +++ b/iokit/KernelConfigTables.cpp
-@@ -34,11 +34,28 @@
+@@ -34,11 +34,29 @@
  
  const char * gIOKernelConfigTables =
      "("
