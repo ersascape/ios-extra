@@ -1,5 +1,27 @@
 # ios-extra — current state
 
+## FP6 `mount[3]` boot-task panic (2026-10-20)
+
+- The latest phone photo shows `mount[3] exited -- no exit reason available --
+  (signal 0, exit status 1)`. The backtrace resolves in the exact CI kernel
+  (`39468219112`, text base `0xfffffe0007004000`) through
+  `proc_prepareexit`/`proc_handle_critical_exit`; this is launchd panicking
+  because the required `mount -P 1` task returned failure, not a SweetFB or
+  SweetSurface fault. Those services registering confirms matching only.
+- The known SWEET `mount -P 1` failure was fixed by supplying a writable HFS
+  root; the FP6 launchd-fix package omitted `ufsrw=1 rootrw=1`. The exact
+  mount subcommand failure is not in this photo, so read/write root is the
+  leading source-based diagnosis, not confirmed phone evidence. The packaged
+  IPSW-product ADT does contain `/chosen/boot-manifest-hash`, so the earlier
+  missing-hash failure is not explained by that ADT omission.
+- Repacked the same CI kernel, D22AP-product ADT, and stock DTB, changing only
+  boot arguments to add `ufsrw=1 rootrw=1 fp6usb=2 launchd_unsecure_cache=1`
+  while retaining `unentitled_ios_sim_launch=1`. Header-v2 package:
+  `/tmp/fp6-mount-fix-39468219112/fp6-shim-d22ap-product-ufs-rw-mount-fix.img`,
+  SHA256 `af8e26a51deded4c1d14e5996fa73735be85553fea69a7ff8e0e8c4cf2a1f528`.
+  Package construction passed; it has not been booted. `ufsrw=1 rootrw=1`
+  permits writes to the existing userdata HFS volume.
+
 ## FP6 CPU cluster topology (2026-10-20)
 
 - Source review confirms the Volcano DTS uses MPIDRs `0x000` through `0x700`,
