@@ -77,6 +77,17 @@ design is [docs/GPU_CX_EXPERIMENT.md](docs/GPU_CX_EXPERIMENT.md).
   `ufsrw`; it does not flash or modify userdata. No UFS panic log has been
   captured yet, so the numeric initializer error and failing stage remain
   unknown. `fastboot devices` returned no device at packaging time.
+- The user ran the host logger with the UFS-root image: the USB Ethernet
+  interface appeared, but no UDP log arrived. Likely limitation: the UFS-root
+  panic occurs before the background log thread gets a chance to transmit; this
+  is not proof of the underlying UFS fault. Packaged a read-only UFS probe
+  image that continues into the known RAM-disk init, allowing the UDP logger to
+  stay alive after the same UFS initialization path. Image:
+  `/tmp/fp6-ufs-probe-usb-debug/fp6-shim-ufs-probe-usb-debug.img`,
+  22,917,120 bytes, SHA256
+  `1a6831822a695c88e3537b48a71ec7c3a176bdd150d3ffc587153743e2764e8f`.
+  Header-v2 payload/shim/DTB validation passed. It has not been booted; this is
+  a diagnostic image, not a UFS-root fix.
 
 ## FP6 hardware bringup and pthread/gPanicBase fixes (2026-10-20)
 
