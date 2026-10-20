@@ -1,0 +1,17 @@
+--- a/iokit/Kernel/arm/SweetWatchdog.cpp
++++ b/iokit/Kernel/arm/SweetWatchdog.cpp
+@@ -14,1 +14,1 @@
+-#if defined(SWEET)
++#if defined(SWEET) || defined(FP6)
+--- a/iokit/KernelConfigTables.cpp
++++ b/iokit/KernelConfigTables.cpp
+@@ -41,2 +41,4 @@
+     "   { 'IOClass' = AppleKeyStore; 'IOProviderClass' = IOResources;"
+     "     'IOMatchCategory' = AppleKeyStore; },"
++    "   { 'IOClass' = IOWatchdog; 'IOProviderClass' = IOResources;"
++    "     'IOMatchCategory' = IOWatchdog; },"
+--- a/iokit/Kernel/arm/SweetWatchdog.cpp
++++ b/iokit/Kernel/arm/SweetWatchdog.cpp
+@@ -52,1 +52,1 @@
+-	IOLog("SWEET WDT: IOWatchdog registered (accepts check-ins, never fires)\n");
++	IOLog("WDT: IOWatchdog registered (dummy; hardware watchdog disabled)\n");

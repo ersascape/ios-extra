@@ -1,5 +1,20 @@
 # ios-extra — current state
 
+## FP6 watchdogd service discovery (2026-10-20)
+
+- The FP6 DT/ADT does not expose a verified APSS/MSM watchdog resource, so do
+  not map or write Qualcomm watchdog MMIO. The user's ADSP/WPSS `wdog` IRQs
+  belong to those remote processors and are unrelated to the AP watchdog.
+- Added patch `0107-fp6-dummy-iowatchdog.patch`: it compiles the existing
+  watchdogd-facing `IOWatchdog` user-client for FP6 and registers its IOKit
+  personality in the FP6 kernel table. It preserves the known dummy behavior,
+  including the `IOPMUPrimary` marker, but explicitly logs that hardware
+  watchdog control is disabled. This is an interim service-discovery fix, not
+  a hardware watchdog driver.
+- Patch syntax/numstat parsed locally. No XNU build, CI run, or phone test has
+  been performed yet; the FP6 daemon path still needs a built image and boot
+  observation.
+
 ## FP6 unsealed HFS root authentication (2026-10-20)
 
 - The user reports that the HFS root mounted, then XNU panicked with
