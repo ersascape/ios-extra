@@ -1,0 +1,417 @@
+--- a/bsd/dev/sweet_ufs.c
++++ b/bsd/dev/sweet_ufs.c
+@@ -67,6 +67,7 @@
+ #define REG_UTRLDBR     0x58
+ #define REG_UTRLCLR     0x5c
+ #define REG_UTRLRSR     0x60
++#define REG_AHIT        0x18
+ 
+ #define HCS_DP          (1u << 0)
+ #define HCS_UTRLRDY     (1u << 1)
+@@ -101,9 +102,19 @@
+ #define DMA_UCD         0x1000                  /* 128 byte aligned */
+ #define DMA_BOUNCE      0x4000
+ #define DMA_SIZE        (DMA_BOUNCE + BOUNCE_SIZE)
++#if defined(ARM64_BOARD_CONFIG_FP6)
++#define FP6_SMMU_IDR0   0x20
++#define FP6_SMMU_IDR1   0x24
++#define FP6_SMMU_IDR2   0x28
++#define FP6_SMMU_SMR(i) (0x800 + 4 * (i))
++#define FP6_SMMU_S2CR(i) (0xc00 + 4 * (i))
++#define FP6_SMMU_CBAR(i) (0x1000 + 4 * (i))
++#define FP6_SMMU_CBA2R(i) (0x1800 + 4 * (i))
++#endif
+ 
+ static struct {
+ 	vm_offset_t regs;
++	vm_offset_t smmu_regs;
+ 	vm_offset_t dma;                        /* kernel VA of the DMA allocation */
+ 	uint64_t dma_pa;
+ 	uint8_t lun;
+@@ -139,6 +150,121 @@
+ 	*(volatile uint32_t *)(su.regs + off) = v;
+ }
+ 
++#if defined(ARM64_BOARD_CONFIG_FP6)
++static inline uint32_t
++smmu_rd(uint32_t off)
++{
++	return *(volatile uint32_t *)(su.smmu_regs + off);
++}
++
++static inline void
++smmu_wr(uint32_t off, uint32_t value)
++{
++	__builtin_arm_dsb(0xf);
++	*(volatile uint32_t *)(su.smmu_regs + off) = value;
++	__builtin_arm_dsb(0xf);
++}
++
++static unsigned
++fp6_smmu_address_bits(unsigned code)
++{
++	switch (code) {
++	case 0: return 32;
++	case 1: return 36;
++	case 2: return 40;
++	case 3: return 42;
++	case 4: return 44;
++	case 5: return 48;
++	default: return 0;
++	}
++}
++
++/*
++ * Configure only UFS stream 0x60. Reuse any firmware mapping unchanged;
++ * when no mapping exists, create Linux Qualcomm's pass-through context-bank
++ * form, without changing global SMMU control or any other stream.
++ */
++static int
++fp6_smmu_prepare(uint16_t stream, uint64_t dma, uint64_t bytes)
++{
++	uint32_t idr0 = smmu_rd(FP6_SMMU_IDR0);
++	uint32_t idr1 = smmu_rd(FP6_SMMU_IDR1);
++	uint32_t idr2 = smmu_rd(FP6_SMMU_IDR2);
++	unsigned groups = idr0 & 0xff, banks = idr1 & 0xff;
++	unsigned pages = 1u << (((idr1 >> 28) & 7) + 1);
++	unsigned matches = 0, free_slot = UINT32_MAX, free_bank = UINT32_MAX;
++	uint32_t matched_smr = 0, matched_s2cr = 0;
++	if (!(idr0 & (1u << 30)) || !(idr2 & (1u << 12)) || !groups ||
++	    banks < 2 || banks > 128 || pages > 128 ||
++	    (pages + banks) * 4096 > 0x100000 || !bytes || dma + bytes < dma) {
++		printf("QCOM UFS: unsupported FP6 SMMU geometry idr0=%x idr1=%x idr2=%x\n",
++		    idr0, idr1, idr2);
++		return ENXIO;
++	}
++	ufs_error_detail = (idr0 & 0xffu) << 24 | (idr1 & 0xffu) << 16 | (idr2 & 0xffffu);
++	for (unsigned shift = 0; shift <= 8; shift += 4) {
++		unsigned bits = fp6_smmu_address_bits((idr2 >> shift) & 0xf);
++		if (!bits || dma >= (1ull << bits) || bytes > (1ull << bits) - dma)
++			return EINVAL;
++	}
++	if (groups > 128) groups = 128;
++	if (ufs_rd(REG_UTRLDBR) != 0) return EBUSY;
++	for (unsigned i = 0; i < groups; i++) {
++		uint32_t smr = smmu_rd(FP6_SMMU_SMR(i));
++		if (!(smr & 0x80000000u)) {
++			if (free_slot == UINT32_MAX) free_slot = i;
++			continue;
++		}
++		uint32_t s2cr = smmu_rd(FP6_SMMU_S2CR(i));
++		uint32_t mask = (smr >> 16) & 0x7fffu;
++		if (((smr ^ stream) & 0xffffu & ~mask) == 0) {
++			matches++;
++			matched_smr = smr;
++			matched_s2cr = s2cr;
++		}
++	}
++	if (matches) {
++		if (matches > 1) return EBUSY;
++		/* Existing firmware mapping carried our UTRD/response DMA; preserve it. */
++		printf("QCOM UFS: preserving SMMU mapping SID 0x%x SMR=%x S2CR=%x\n",
++		    stream, matched_smr, matched_s2cr);
++		return 0;
++	}
++	if (free_slot == UINT32_MAX) return ENOSPC;
++	for (unsigned back = 0; back < 8 && back + 1 < banks; back++) {
++		unsigned bank = banks - 1 - back;
++		bool used = false;
++		for (unsigned i = 0; i < groups; i++) {
++			uint32_t smr = smmu_rd(FP6_SMMU_SMR(i));
++			uint32_t s2cr = smmu_rd(FP6_SMMU_S2CR(i));
++			if ((smr & 0x80000000u) && ((s2cr >> 16) & 3u) == 0 &&
++			    (s2cr & 0xffu) == bank) used = true;
++		}
++		if (!used && !(smmu_rd((pages + bank) * 4096) & 1u)) {
++			free_bank = bank;
++			break;
++		}
++	}
++	if (free_bank == UINT32_MAX) return ENOSPC;
++	/* QCOM bypass_quirk: TRANSLATE -> reserved S1_TRANS_S2_BYPASS bank. */
++	smmu_wr((pages + free_bank) * 4096, 0);
++	smmu_wr(FP6_SMMU_CBA2R(free_bank), 1);       /* VA64 for physical DMA */
++	smmu_wr(FP6_SMMU_CBAR(free_bank), 0x10000);  /* S1_TRANS_S2_BYPASS */
++	if (smmu_rd((pages + free_bank) * 4096) != 0 ||
++	    smmu_rd(FP6_SMMU_CBA2R(free_bank)) != 1 ||
++	    smmu_rd(FP6_SMMU_CBAR(free_bank)) != 0x10000) return EIO;
++	/* Install context before making its stream match visible. */
++	smmu_wr(FP6_SMMU_S2CR(free_slot), free_bank); /* TRANSLATE */
++	if (smmu_rd(FP6_SMMU_S2CR(free_slot)) != free_bank) return EIO;
++	smmu_wr(FP6_SMMU_SMR(free_slot), 0x80000000u | stream);
++	if (smmu_rd(FP6_SMMU_SMR(free_slot)) != (0x80000000u | stream) ||
++	    smmu_rd(FP6_SMMU_S2CR(free_slot)) != free_bank) return EIO;
++	printf("QCOM UFS: SMMU pass-through SID 0x%x slot %u bank %u DMA %llx+%llx\n",
++	    stream, free_slot, free_bank, (unsigned long long)dma, (unsigned long long)bytes);
++	return 0;
++}
++#endif
++
+ static void
+ dma_sync(uint32_t off, uint32_t len)
+ {
+@@ -155,8 +281,45 @@
+  * One SCSI command in slot 0, data (if any) to/from the bounce buffer
+  * (to the device when write is set). Returns 0 or an errno.
+  */
++#if defined(ARM64_BOARD_CONFIG_FP6)
++static uint32_t fp6_ahit_saved;
++static bool fp6_ahit_active;
++#endif
++
++static int
++fp6_ahit_begin(void)
++{
++#if defined(ARM64_BOARD_CONFIG_FP6)
++	if (!fp6_ahit_active) {
++		fp6_ahit_saved = ufs_rd(REG_AHIT);
++		__builtin_arm_dsb(0xf);
++		ufs_wr(REG_AHIT, 0);
++		__builtin_arm_dsb(0xf);
++		if (ufs_rd(REG_AHIT) != 0) {
++			ufs_wr(REG_AHIT, fp6_ahit_saved);
++			__builtin_arm_dsb(0xf);
++			return EIO;
++		}
++		fp6_ahit_active = true;
++	}
++#endif
++	return 0;
++}
++
++static void
++fp6_ahit_end(void)
++{
++#if defined(ARM64_BOARD_CONFIG_FP6)
++	if (fp6_ahit_active) {
++		ufs_wr(REG_AHIT, fp6_ahit_saved);
++		__builtin_arm_dsb(0xf);
++		fp6_ahit_active = false;
++	}
++#endif
++}
++
+ static int
+-ufs_scsi(const uint8_t *cdb, unsigned cdb_len, uint32_t len, bool write)
++ufs_scsi_lun(uint8_t lun, const uint8_t *cdb, unsigned cdb_len, uint32_t len, bool write)
+ {
+ 	struct utrd *utrd = (struct utrd *)(su.dma + DMA_UTRL);
+ 	struct ucd *ucd = (struct ucd *)(su.dma + DMA_UCD);
+@@ -168,7 +331,7 @@
+ 
+ 	ucd->cmd[0] = 0x01;                     /* COMMAND UPIU */
+ 	ucd->cmd[1] = len ? (write ? 0x20 : 0x40) : 0x00;      /* W: data out, R: data in */
+-	ucd->cmd[2] = su.lun;
++	ucd->cmd[2] = lun;
+ 	ucd->cmd[3] = ++su.tag;
+ 	ucd->cmd[12] = (uint8_t)(len >> 24);
+ 	ucd->cmd[13] = (uint8_t)(len >> 16);
+@@ -215,6 +378,7 @@
+ 	__builtin_arm_dsb(0xf);
+ 	ufs_error_stage = "SCSI command";
+ 	ufs_error_detail = cdb[0];
++	if (fp6_ahit_begin()) return EIO;
+ 
+ 	ufs_wr(REG_UTRLDBR, 1);
+ 	uint64_t deadline;
+@@ -233,6 +397,7 @@
+ 		if (now > deadline) {
+ 			ufs_wr(REG_UTRLCLR, ~1u);
+ 			printf("QCOM UFS: command 0x%02x timed out\n", cdb[0]);
++			/* Leave AHIT disabled while the controller may still own the slot. */
+ 			return ETIMEDOUT;
+ 		}
+ 		if (sleepable && now >= spin_until) {
+@@ -258,6 +423,7 @@
+ 	if (len && !(su.cache && write)) {
+ 		dma_sync(DMA_BOUNCE, len);
+ 	}
++	fp6_ahit_end();
+ 
+ 	uint32_t ocs = utrd->dw2 & 0xff;
+ 	if (ocs || ucd->resp[0] != 0x21) {
+@@ -271,10 +437,16 @@
+ 	if (ucd->resp[6] != 0 || ucd->resp[7] != 0) {
+ 		uint16_t sense_len = ((uint16_t)ucd->resp[32] << 8) | ucd->resp[33];
+ 		uint8_t key = 0xff, asc = 0xff, ascq = 0xff;
+-		if (sense_len >= 14 && UFS_SENSE_DATA_OFFSET + 13 < sizeof(ucd->resp)) {
+-			key = ucd->resp[UFS_SENSE_DATA_OFFSET + 2] & 0x0f;
+-			asc = ucd->resp[UFS_SENSE_DATA_OFFSET + 12];
+-			ascq = ucd->resp[UFS_SENSE_DATA_OFFSET + 13];
++		uint8_t *sense = &ucd->resp[UFS_SENSE_DATA_OFFSET];
++		uint8_t format = sense[0] & 0x7f;
++		if ((format == 0x70 || format == 0x71) && sense_len >= 14) {
++			key = sense[2] & 0x0f;
++			asc = sense[12];
++			ascq = sense[13];
++		} else if ((format == 0x72 || format == 0x73) && sense_len >= 4) {
++			key = sense[1] & 0x0f;
++			asc = sense[2];
++			ascq = sense[3];
+ 		}
+ 		if (ucd->resp[7] == 0x02) {
+ 			ufs_error_stage = "SCSI check condition";
+@@ -288,7 +460,7 @@
+ 		    cdb[0], ucd->resp[6], ucd->resp[7], sense_len, key, asc, ascq);
+ 		/* Media may report UNIT ATTENTION or becoming-ready after handoff. */
+ 		if (ucd->resp[7] == 0x02 && cdb[0] == 0x00 &&
+-		    (key == 0x06 || (key == 0x02 && asc == 0x04))) {
++		    (key == 0x06 || key == 0x02)) {
+ 			return EAGAIN;
+ 		}
+ 		return EIO;
+@@ -296,6 +468,89 @@
+ 	return 0;
+ }
+ 
++static int
++ufs_scsi(const uint8_t *cdb, unsigned cdb_len, uint32_t len, bool write)
++{
++	return ufs_scsi_lun(su.lun, cdb, cdb_len, len, write);
++}
++
++#if defined(ARM64_BOARD_CONFIG_FP6)
++/* Read UFS bCurrentPowerMode (attribute IDN 0x02) without changing state. */
++static int
++ufs_query_power_mode(uint32_t *mode)
++{
++	struct utrd *utrd = (struct utrd *)(su.dma + DMA_UTRL);
++	struct ucd *ucd = (struct ucd *)(su.dma + DMA_UCD);
++	bzero(utrd, sizeof(*utrd));
++	bzero(ucd, sizeof(*ucd));
++	ucd->cmd[0] = 0x16;             /* QUERY REQUEST */
++	ucd->cmd[3] = 1;                /* task tag */
++	ucd->cmd[5] = 1;                /* standard read request */
++	ucd->cmd[12] = 3;               /* READ ATTRIBUTE */
++	ucd->cmd[13] = 2;               /* bCurrentPowerMode */
++	utrd->dw0 = 1u << 28;
++	utrd->dw2 = 0x0f;
++	utrd->ucdba = (uint32_t)(su.dma_pa + DMA_UCD);
++	utrd->ucdbau = (uint32_t)((su.dma_pa + DMA_UCD) >> 32);
++	utrd->resp = (512u / 4) << 16 | (512u / 4);
++	if (su.cache) {
++		dma_clean(DMA_UTRL, sizeof(*utrd));
++		dma_clean(DMA_UCD, 16);
++		dma_sync(DMA_UCD + offsetof(struct ucd, resp), sizeof(ucd->resp));
++	} else {
++		dma_sync(DMA_UTRL, sizeof(*utrd));
++		dma_sync(DMA_UCD, sizeof(*ucd));
++	}
++	__builtin_arm_dsb(0xf);
++	if (fp6_ahit_begin()) return EIO;
++	ufs_error_stage = "UFS power-mode query";
++	ufs_wr(REG_UTRLDBR, 1);
++	uint64_t deadline;
++	nanoseconds_to_absolutetime(CMD_TIMEOUT_NS, &deadline);
++	deadline += mach_absolute_time();
++	while (ufs_rd(REG_UTRLDBR) & 1) {
++		if (mach_absolute_time() > deadline) return ETIMEDOUT;
++		delay(1);
++	}
++	__builtin_arm_dsb(0xf);
++	ufs_wr(REG_IS, ufs_rd(REG_IS));
++	dma_sync(DMA_UTRL, sizeof(*utrd));
++	if (su.cache) dma_sync(DMA_UCD + offsetof(struct ucd, resp), sizeof(ucd->resp));
++	else dma_sync(DMA_UCD, sizeof(*ucd));
++	fp6_ahit_end();
++	uint32_t ocs = utrd->dw2 & 0xff;
++	if (ocs || ucd->resp[0] != 0x36 || ucd->resp[3] != 1 ||
++	    ucd->resp[6] != 0 || ucd->resp[12] != 3 || ucd->resp[13] != 2) {
++		ufs_error_detail = (ocs << 24) | ((uint32_t)ucd->resp[0] << 16) |
++		    ((uint32_t)ucd->resp[6] << 8) | ucd->resp[12];
++		printf("QCOM UFS: power-mode query failed ocs=%x type=%x tag=%x response=%x echo=%x/%x\n",
++		    ocs, ucd->resp[0], ucd->resp[3], ucd->resp[6], ucd->resp[12], ucd->resp[13]);
++		return EIO;
++	}
++	*mode = ((uint32_t)ucd->resp[20] << 24) | ((uint32_t)ucd->resp[21] << 16) |
++	    ((uint32_t)ucd->resp[22] << 8) | ucd->resp[23];
++	printf("QCOM UFS: current power mode 0x%x\n", *mode);
++	return 0;
++}
++
++static int
++ufs_wake_device_if_needed(void)
++{
++	uint32_t mode = 0;
++	int error = ufs_query_power_mode(&mode);
++	if (error) return error;
++	if ((mode & 0xff) == 0x11) return 0;
++	/* Match Linux ufshcd_set_dev_pwr_mode(ACTIVE) on device well-known LU. */
++	static const uint8_t start[6] = { 0x1b, 0, 0, 0, 0x10, 0 };
++	ufs_error_stage = "UFS device wake";
++	printf("QCOM UFS: requesting active power mode from 0x%x\n", mode);
++	error = ufs_scsi_lun(0xd0, start, sizeof(start), 0, false);
++	if (error) return error;
++	delay(50000);
++	return 0;
++}
++#endif
++
+ /* READ(10) of count device blocks at lba into the bounce buffer. */
+ static int
+ ufs_read_blocks(uint64_t lba, uint32_t count)
+@@ -630,7 +885,15 @@
+ {
+ 	DTEntry node;
+ 	uintptr_t const *reg = NULL;
++#if defined(ARM64_BOARD_CONFIG_FP6)
++	uintptr_t const *smmu_reg = NULL;
++	uint32_t const *smmu_stream = NULL;
++#endif
+ 	unsigned int size = 0;
++#if defined(ARM64_BOARD_CONFIG_FP6)
++	unsigned int smmu_size = 0;
++	unsigned int stream_size = 0;
++#endif
+ 	char want[64] = "userdata";
+ 	int error;
+ 
+@@ -663,6 +926,20 @@
+ 		printf("QCOM UFS: unable to map controller registers\n");
+ 		return ENXIO;
+ 	}
++#if defined(ARM64_BOARD_CONFIG_FP6)
++	if (SecureDTGetProperty(node, "smmu-reg", (void const **)&smmu_reg, &smmu_size) != kSuccess ||
++	    smmu_size < 2 * sizeof(uintptr_t) ||
++	    SecureDTGetProperty(node, "smmu-stream-id", (void const **)&smmu_stream, &stream_size) != kSuccess ||
++	    stream_size < sizeof(*smmu_stream) || *smmu_stream != 0x60) {
++		printf("QCOM UFS: FP6 ADT has no SMMU range\n");
++		return ENXIO;
++	}
++	su.smmu_regs = ml_io_map(smmu_reg[0], smmu_reg[1]);
++	if (!su.smmu_regs) {
++		printf("QCOM UFS: unable to map FP6 SMMU\n");
++		return ENXIO;
++	}
++#endif
+ 	ufs_error_stage = "DMA allocation";
+ 	if (kmem_alloc_contig(kernel_map, &su.dma, DMA_SIZE, PAGE_MASK, 0, 0,
+ 	    KMA_DATA | KMA_ZERO | KMA_PERMANENT, VM_KERN_MEMORY_IOKIT) != KERN_SUCCESS) {
+@@ -681,11 +958,25 @@
+ 	su.secsize = DEV_BSIZE;
+ 
+ 	lck_mtx_lock(&sweet_ufs_lock);
+-	error = ufs_take_over_host();
++#if defined(ARM64_BOARD_CONFIG_FP6)
++	ufs_error_stage = "SMMU setup";
++	error = fp6_smmu_prepare((uint16_t)*smmu_stream, su.dma_pa, DMA_SIZE);
++#else
++	error = 0;
++#endif
++	if (!error) {
++		error = ufs_take_over_host();
++	}
++#if defined(ARM64_BOARD_CONFIG_FP6)
++	if (!error) {
++		ufs_error_stage = "UFS device wake";
++		error = ufs_wake_device_if_needed();
++	}
++#endif
+ 	if (!error) {
+ 		ufs_error_stage = "TEST UNIT READY";
+ 		static const uint8_t tur[6] = { 0x00 };
+-		/* Retry transient UNIT ATTENTION / becoming-ready sense after handoff. */
++		/* Retry transient UNIT ATTENTION / NOT READY after handoff. */
+ 		error = ufs_scsi(tur, sizeof(tur), 0, false);
+ 		for (int i = 0; error == EAGAIN && i < 30; i++) {
+ 			delay(100000);

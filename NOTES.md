@@ -155,6 +155,18 @@ design is [docs/GPU_CX_EXPERIMENT.md](docs/GPU_CX_EXPERIMENT.md).
   SHA256 `6a61741e1c8a1853a6362f5ac7b2258ab65e91be869d4441612b42045e7e154b`.
   It uses `rd=ufsroot0 fp6usb=2`; it has not yet been booted. CI's own boot
   packaging was skipped because `FP6_STOCK_DTB_URL` is unset.
+- Patch 0105 implements the FP6 UFS/SoC handoff basics using NativeUfs and the
+  cloned SM7635 Linux sources: disable/restore the DT-confirmed broken AHIT
+  timer around each completed transfer; read `bCurrentPowerMode`, wake a
+  non-active device with START STOP UNIT on WLUN `0xD0`, then retry TUR for a
+  bounded 3 seconds; decode fixed and descriptor sense; inspect FP6 SMMU stream
+  `0x60` and preserve its live mapping, or configure only that stream through a
+  checked Linux Qualcomm pass-through context when no mapping exists. The FP6
+  ADT now carries the stock SMMU range `0x15000000..0x150fffff` and stream ID.
+  Patch application and ADT generation were checked locally. The local XNU
+  compile could not run because this Linux workspace lacks the Xcode kernel SDK
+  clang expects; CI build and phone validation are pending. No device was
+  touched, and this patch has not yet been committed.
 
 ## FP6 hardware bringup and pthread/gPanicBase fixes (2026-10-20)
 

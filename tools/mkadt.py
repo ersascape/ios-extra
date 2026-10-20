@@ -360,6 +360,9 @@ def build_fp6(seed=None, phys_base=None, mem_size=None):
     ufs = node('sweet-ufs', [
         ph(), ('compatible', cstr('qcom,ufshc')),
         ('reg', u64(0x01d84000, 0x3000)),
+        # FP6 stock DT: apps_smmu@15000000, UFS stream ID 0x60.
+        ('smmu-reg', u64(0x15000000, 0x100000)),
+        ('smmu-stream-id', u32(0x60)),
     ])
     defaults = node('defaults', [ph(), ('no-effaceable-storage', u32(1))])
     buttons = node('buttons', [
