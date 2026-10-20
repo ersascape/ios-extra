@@ -66,6 +66,18 @@ design is [docs/GPU_CX_EXPERIMENT.md](docs/GPU_CX_EXPERIMENT.md).
   been observed on the phone. The host can listen with
   `tools/sweet-usbnet.sh /tmp/fp6-usb-394283/usb-debug/fp6-usb.log`.
 
+- The user subsequently confirmed that the SWEET USB gadget appeared on the
+  host. Packaged a second image from the same CI kernel/ADT and local stock DTB
+  with `rd=ufsroot0 fp6usb=2`, so the existing UDP log sender starts before
+  UFS root selection. Header-v2 validation confirmed the image payload, shim
+  and embedded DTB. Image:
+  `/tmp/fp6-ufs-usb-debug/fp6-shim-ufs-usb-debug.img`, 22,900,736 bytes,
+  SHA256 `f0a8cadcd3e717fc819605db518dbfcd0e8e77dcbb356ec5719ebf8565366e05`.
+  It has not been booted. The UFS initializer defaults to read-only without
+  `ufsrw`; it does not flash or modify userdata. No UFS panic log has been
+  captured yet, so the numeric initializer error and failing stage remain
+  unknown. `fastboot devices` returned no device at packaging time.
+
 ## FP6 hardware bringup and pthread/gPanicBase fixes (2026-10-20)
 
 - On-device observation with packaged header v2 boot image (containing stock DTB):
