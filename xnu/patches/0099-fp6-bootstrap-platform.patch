@@ -1,3 +1,16 @@
+diff --git a/bsd/conf/Makefile.template b/bsd/conf/Makefile.template
+index f2d8bf8..f59e51f 100644
+--- a/bsd/conf/Makefile.template
++++ b/bsd/conf/Makefile.template
+@@ -45,7 +45,7 @@ CFLAGS+= -include meta_features.h -DDRIVER_PRIVATE \
+ SFLAGS+= -include meta_features.h
+ 
+ # This provider is built into SWEET; other boards use their normal kext.
+-ifeq ($(CURRENT_MACHINE_CONFIG),SWEET)
++ifneq ($(filter SWEET PHOENIX FP6,$(CURRENT_MACHINE_CONFIG)),)
+ SWEET_PTHREAD_ROOT = $(SRCROOT)/bsd/pthread/sweet_libpthread
+ SWEET_PTHREAD_INC = -I$(SWEET_PTHREAD_ROOT) -I$(SWEET_PTHREAD_ROOT)/private -I$(SWEET_PTHREAD_ROOT)/include
+ sweet_pthread_init.o_INCFLAGS = $(SWEET_PTHREAD_INC)
 diff --git a/bsd/dev/sweet_sample.c b/bsd/dev/sweet_sample.c
 index b40eccd..d5978c3 100644
 --- a/bsd/dev/sweet_sample.c
@@ -73,6 +86,86 @@ index 9066367..0ec93ff 100644
  	if (trust_cache_rt == NULL) {
  		return KERN_NOT_SUPPORTED;
  	}
+diff --git a/bsd/kern/sweet_amfi.c b/bsd/kern/sweet_amfi.c
+index cb67b4d..42500a7 100644
+--- a/bsd/kern/sweet_amfi.c
++++ b/bsd/kern/sweet_amfi.c
+@@ -22,7 +22,7 @@
+  * Interfaces no kernel path uses on SWEET (they serve other Apple kexts)
+  * panic with a clear message instead of being NULL.
+  */
+-#if defined(ARM64_BOARD_CONFIG_SWEET)
++#if (defined(ARM64_BOARD_CONFIG_SWEET) || defined(ARM64_BOARD_CONFIG_FP6))
+ #include <kern/debug.h>
+ #include <kern/startup.h>
+ #include <libkern/amfi/amfi.h>
+diff --git a/bsd/pthread/sweet_pthread_init.c b/bsd/pthread/sweet_pthread_init.c
+index 5a82439..194d484 100644
+--- a/bsd/pthread/sweet_pthread_init.c
++++ b/bsd/pthread/sweet_pthread_init.c
+@@ -1,5 +1,5 @@
+ /* Built-in provider: Apple libpthread-514.100.2, paired with xnu-8796.141.3. */
+-#if defined(ARM64_BOARD_CONFIG_SWEET)
++#if (defined(ARM64_BOARD_CONFIG_SWEET) || defined(ARM64_BOARD_CONFIG_FP6))
+ #include "sweet_pthread_compat.h"
+ #include "sweet_libpthread/kern/kern_init.c"
+ 
+@@ -20,7 +20,7 @@ sweet_pthread_register(void)
+     if (kr != KERN_SUCCESS || sweet_pthread_kern == NULL) {
+         panic("SWEET: pthread provider registration failed: %d", kr);
+     }
+-    kprintf("SWEET pthread: libpthread-514.100.2 registered\n");
++    kprintf("QCOM pthread: libpthread-514.100.2 registered\n");
+ }
+ STARTUP(EARLY_BOOT, STARTUP_RANK_SECOND, sweet_pthread_register);
+ #endif /* ARM64_BOARD_CONFIG_SWEET */
+diff --git a/bsd/pthread/sweet_pthread_support.c b/bsd/pthread/sweet_pthread_support.c
+index beae777..486f1cf 100644
+--- a/bsd/pthread/sweet_pthread_support.c
++++ b/bsd/pthread/sweet_pthread_support.c
+@@ -1,5 +1,5 @@
+ /* Built-in provider: Apple libpthread-514.100.2, paired with xnu-8796.141.3. */
+-#if defined(ARM64_BOARD_CONFIG_SWEET)
++#if (defined(ARM64_BOARD_CONFIG_SWEET) || defined(ARM64_BOARD_CONFIG_FP6))
+ #include "sweet_pthread_compat.h"
+ #include "sweet_libpthread/kern/kern_support.c"
+ #endif /* ARM64_BOARD_CONFIG_SWEET */
+diff --git a/bsd/pthread/sweet_pthread_synch.c b/bsd/pthread/sweet_pthread_synch.c
+index 08baa1b..8a159f5 100644
+--- a/bsd/pthread/sweet_pthread_synch.c
++++ b/bsd/pthread/sweet_pthread_synch.c
+@@ -1,5 +1,5 @@
+ /* Built-in provider: Apple libpthread-514.100.2, paired with xnu-8796.141.3. */
+-#if defined(ARM64_BOARD_CONFIG_SWEET)
++#if (defined(ARM64_BOARD_CONFIG_SWEET) || defined(ARM64_BOARD_CONFIG_FP6))
+ #include "sweet_pthread_compat.h"
+ #include "sweet_libpthread/kern/kern_synch.c"
+ #endif /* ARM64_BOARD_CONFIG_SWEET */
+diff --git a/bsd/sys/pthread_internal.h b/bsd/sys/pthread_internal.h
+index 135405e..30e3d8c 100644
+--- a/bsd/sys/pthread_internal.h
++++ b/bsd/sys/pthread_internal.h
+@@ -34,7 +34,7 @@
+ 
+ struct ksyn_waitq_element {
+ #if __LP64__
+-	#if defined(ARM64_BOARD_CONFIG_SWEET)
++	#if (defined(ARM64_BOARD_CONFIG_SWEET) || defined(ARM64_BOARD_CONFIG_FP6))
+ 	/* libpthread-514.100.2 includes the trailing kwe_uth pointer. */
+ 	char opaque[56];
+ #else
+diff --git a/config/MASTER b/config/MASTER
+index 4fde794..07147cb 100644
+--- a/config/MASTER
++++ b/config/MASTER
+@@ -113,7 +113,6 @@ options		CONFIG_WORKLOOP_DEBUG	# <config_workloop_debug>
+ #	4.4 filesystems
+ #
+ options		MOCKFS		# Boot from an executable	# <mockfs>
+-options		SWEET_HFS	# Built-in Apple OSS HFS (SWEET)	# <sweet_hfs>
+ options		FIFO		# fifo support			# <fifo>
+ options		FDESC		# fdesc_fs support		# <fdesc>
+ options		DEVFS		# devfs support			# <devfs>
 diff --git a/config/MASTER.arm64.fp6 b/config/MASTER.arm64.fp6
 new file mode 100644
 index 0000000..306dd5d
@@ -317,8 +410,52 @@ index 0000000..b87d04f
 +
 +options   CONFIG_RESLIDE_SHARED_CACHE		# <reslide_shared_cache>
 +options   CONFIG_KERNEL_TBI		# <kernel_tbi>
+diff --git a/config/MASTER.arm64.sweet b/config/MASTER.arm64.sweet
+index e305f0d..d1eaa84 100644
+--- a/config/MASTER.arm64.sweet
++++ b/config/MASTER.arm64.sweet
+@@ -95,6 +95,8 @@ machine		"arm64"						# <arm64>
+ 
+ makeoptions	OSFMK_MACHINE = "arm64"				# <mach>
+ 
++options		SWEET_HFS	# Built-in Apple OSS HFS	# <sweet_hfs>
++
+ options		COUNT_SYSCALLS		# count bsd system calls 	# <countcalls>
+ options     TRASH_VFP_ON_SAVE   # <debug,trash_vfp>
+ options		ALTERNATE_DEBUGGER	# <alternate_debugger>
+diff --git a/iokit/Kernel/IOService.cpp b/iokit/Kernel/IOService.cpp
+index 59c834e..f0ba20c 100644
+--- a/iokit/Kernel/IOService.cpp
++++ b/iokit/Kernel/IOService.cpp
+@@ -5126,7 +5126,7 @@ IOService::publishHiddenMedia(IOService * parent)
+ 	bool                wasHiding;
+ 
+ 	iomediaClass = OSMetaClass::getMetaClassWithName(gIOMediaKey);
+-#if !defined(ARM64_BOARD_CONFIG_SWEET)
++#if !(defined(ARM64_BOARD_CONFIG_SWEET) || defined(ARM64_BOARD_CONFIG_FP6))
+ 	assert(iomediaClass);
+ #endif
+ 
+@@ -5137,7 +5137,7 @@ IOService::publishHiddenMedia(IOService * parent)
+ 	}
+ 	UNLOCKNOTIFY();
+ 
+-#if defined(ARM64_BOARD_CONFIG_SWEET)
++#if (defined(ARM64_BOARD_CONFIG_SWEET) || defined(ARM64_BOARD_CONFIG_FP6))
+ 	/* SWEET has no IOStorageFamily: without the IOMedia class no media exists to unhide. */
+ 	if (!iomediaClass) {
+ 		wasHiding = false;
+@@ -5188,7 +5188,7 @@ IOService::setRootMedia(IOService * root)
+ 	bool unhide;
+ 
+ 	ioblockstoragedriverClass = OSMetaClass::getMetaClassWithName(gIOBlockStorageDriverKey);
+-#if defined(ARM64_BOARD_CONFIG_SWEET)
++#if (defined(ARM64_BOARD_CONFIG_SWEET) || defined(ARM64_BOARD_CONFIG_FP6))
+ 	/*
+ 	 * SWEET has no IOStorageFamily, so no service can be a block storage
+ 	 * driver: the root (e.g. a RAM disk) is not block media, as for image boot.
 diff --git a/iokit/Kernel/arm/SweetCPU.cpp b/iokit/Kernel/arm/SweetCPU.cpp
-index 2545cf9..cf5c67a 100644
+index 2545cf9..3caf40d 100644
 --- a/iokit/Kernel/arm/SweetCPU.cpp
 +++ b/iokit/Kernel/arm/SweetCPU.cpp
 @@ -5,7 +5,7 @@
@@ -511,8 +648,19 @@ index 2545cf9..cf5c67a 100644
  }
  
  const OSSymbol *
+@@ -268,4 +268,10 @@ SweetCPU::getCPUName(void)
+ {
+ 	return cpuName;
+ }
++
++class QcomCPU : public SweetCPU {
++	OSDeclareDefaultStructors(QcomCPU);
++};
++
++OSDefineMetaClassAndStructors(QcomCPU, SweetCPU);
+ #endif /* SWEET */
 diff --git a/iokit/Kernel/arm/SweetPlatformExpert.cpp b/iokit/Kernel/arm/SweetPlatformExpert.cpp
-index 0631685..f8b8fcc 100644
+index 0631685..8ce01d2 100644
 --- a/iokit/Kernel/arm/SweetPlatformExpert.cpp
 +++ b/iokit/Kernel/arm/SweetPlatformExpert.cpp
 @@ -5,7 +5,7 @@
@@ -524,20 +672,37 @@ index 0631685..f8b8fcc 100644
  #include <IOKit/IOPlatformExpert.h>
  #include <IOKit/IODeviceTreeSupport.h>
  #include <IOKit/IOLib.h>
+@@ -79,4 +79,10 @@ SweetPlatformExpert::processTopLevel(IORegistryEntry *root)
+  * "compatible" string and "model" (D22AP / iPhone10,3 in the ADT), which
+  * is what the iPhone userland (MobileGestalt) expects.
+  */
++
++class QcomPlatformExpert : public SweetPlatformExpert {
++	OSDeclareDefaultStructors(QcomPlatformExpert);
++};
++
++OSDefineMetaClassAndStructors(QcomPlatformExpert, SweetPlatformExpert);
+ #endif /* SWEET */
 diff --git a/iokit/KernelConfigTables.cpp b/iokit/KernelConfigTables.cpp
-index 92f3e26..d02ca88 100644
+index 92f3e26..bbb831e 100644
 --- a/iokit/KernelConfigTables.cpp
 +++ b/iokit/KernelConfigTables.cpp
-@@ -34,11 +34,21 @@
+@@ -34,11 +34,27 @@
  
  const char * gIOKernelConfigTables =
      "("
 -#if defined(ARM64_BOARD_CONFIG_SWEET)
 +#if defined(ARM64_BOARD_CONFIG_FP6)
-+    "   { 'IOClass' = SweetPlatformExpert; 'IOProviderClass' = IOPlatformExpertDevice;"
++    "   { 'IOClass' = QcomPlatformExpert; 'IOProviderClass' = IOPlatformExpertDevice;"
 +    "     'IONameMatch' = 'fairphone,fp6'; 'IOProbeScore' = 10000:32; },"
-+    "   { 'IOClass' = SweetCPU; 'IOProviderClass' = IOPlatformDevice;"
++    "   { 'IOClass' = QcomPlatformExpert; 'IOProviderClass' = IOPlatformExpertDevice;"
++    "     'IONameMatch' = 'qcom,volcano'; 'IOProbeScore' = 10000:32; },"
++    "   { 'IOClass' = QcomCPU; 'IOProviderClass' = IOPlatformDevice;"
 +    "     'IONameMatch' = 'qcom,kryo'; 'IOProbeScore' = 10000:32; },"
++    "   { 'IOClass' = SweetPlatformExpert; 'IOProviderClass' = IOPlatformExpertDevice;"
++    "     'IONameMatch' = 'fairphone,fp6'; 'IOProbeScore' = 9000:32; },"
++    "   { 'IOClass' = SweetCPU; 'IOProviderClass' = IOPlatformDevice;"
++    "     'IONameMatch' = 'qcom,kryo'; 'IOProbeScore' = 9000:32; },"
 +#endif
 +#if defined(ARM64_BOARD_CONFIG_SWEET) || defined(ARM64_BOARD_CONFIG_PHOENIX)
      "   {"
@@ -923,6 +1088,22 @@ index 023086f..8c8b1cc 100644
  
  #if (!CONFIG_KERNEL_INTEGRITY || (CONFIG_KERNEL_INTEGRITY && !defined(KERNEL_INTEGRITY_WT)))
  	/* Watchtower
+diff --git a/osfmk/kdp/kdp_udp.c b/osfmk/kdp/kdp_udp.c
+index cfff436..56313fd 100644
+--- a/osfmk/kdp/kdp_udp.c
++++ b/osfmk/kdp/kdp_udp.c
+@@ -2281,6 +2281,11 @@ kdp_init(void)
+ #endif /* defined(__arm64__) */
+ 
+ #if defined(__arm64__)
++#if defined(ARM64_BOARD_CONFIG_SWEET) || defined(ARM64_BOARD_CONFIG_FP6)
++	if (kdp_not_serial) {
++		return;
++	}
++#endif
+ 	if (kdp_not_serial && PE_consistent_debug_enabled() && debug_boot_arg) {
+ 		return;
+ 	} else {
 diff --git a/osfmk/prng/entropy.c b/osfmk/prng/entropy.c
 index 42286ed..ed67975 100644
 --- a/osfmk/prng/entropy.c
@@ -1043,6 +1224,27 @@ index 54edb01..122243a 100644
  		slot_idx = sweet_kmem_uniform(zpercpu_get(sizeclass.ks_rng_ctx), num_slots);
  #else
  		crypto_random_uniform(zpercpu_get(sizeclass.ks_rng_ctx), num_slots,
+diff --git a/pexpert/arm/pe_consistent_debug.c b/pexpert/arm/pe_consistent_debug.c
+index d43130f..b3e2216 100644
+--- a/pexpert/arm/pe_consistent_debug.c
++++ b/pexpert/arm/pe_consistent_debug.c
+@@ -84,7 +84,16 @@ PE_consistent_debug_inherit(void)
+ 		}
+ 	}
+ 	if (root_pointer == 0) {
++#if defined(ARM64_BOARD_CONFIG_SWEET) || defined(ARM64_BOARD_CONFIG_FP6)
++		static dbg_registry_t builtin_cdbg;
++		builtin_cdbg.top_level_header.record_id = kDbgIdTopLevelHeader;
++		builtin_cdbg.top_level_header.num_records = 16;
++		builtin_cdbg.top_level_header.record_size_bytes = sizeof(dbg_record_header_t);
++		consistent_debug_registry = &builtin_cdbg;
++		return 0;
++#else
+ 		return -1;
++#endif
+ 	}
+ 	consistent_debug_registry = (dbg_registry_t *)ml_map_high_window(root_pointer, sizeof(dbg_registry_t));
+ 	return 0;
 diff --git a/pexpert/arm/pe_fiq.c b/pexpert/arm/pe_fiq.c
 index 6089db9..262e52d 100644
 --- a/pexpert/arm/pe_fiq.c
@@ -1116,6 +1318,34 @@ index 6089db9..262e52d 100644
  	// ABL leaves only ARE_NS set; Linux writes ARE_NS | EnableGrp1A | EnableGrp1
  	uint32_t gicd_ctlr = gicd_read32(GICD_CTLR);
  	gicd_ctlr |= GICD_CTLR_ARE_NS | GICD_CTLR_ENABLEGRP1A | GICD_CTLR_ENABLEGRP1;
+diff --git a/pexpert/arm/pe_init.c b/pexpert/arm/pe_init.c
+index 04dda53..a4d61f8 100644
+--- a/pexpert/arm/pe_init.c
++++ b/pexpert/arm/pe_init.c
+@@ -120,7 +120,15 @@ check_for_panic_log(void)
+ 	 * embedded-panic-log-size is the maximum amount of data to store in the buffer
+ 	 */
+ 	if (kSuccess != SecureDTLookupEntry(0, "pram", &entry)) {
++#if defined(ARM64_BOARD_CONFIG_SWEET) || defined(ARM64_BOARD_CONFIG_FP6) || defined(PLATFORM_PANIC_LOG_DISABLED)
++		static char builtin_panic_buf[256 * 1024] __attribute__((aligned(16384)));
++		gPanicBase = (vm_offset_t)builtin_panic_buf;
++		gPanicSize = sizeof(builtin_panic_buf);
++		panic_text_len = gPanicSize - sizeof(struct embedded_panic_header);
++		goto have_panic_buf;
++#else
+ 		return;
++#endif
+ 	}
+ 
+ 	if (kSuccess != SecureDTGetProperty(entry, "reg", (void const **)&reg_prop, &size)) {
+@@ -155,6 +163,7 @@ check_for_panic_log(void)
+ #endif /* DEVELOPMENT && defined(XNU_TARGET_OS_BRIDGE) */
+ 
+ #endif
++have_panic_buf:
+ 	panic_info = (struct embedded_panic_header *)gPanicBase;
+ 
+ 	/* Check if a shared memory console is running in the panic buffer */
 diff --git a/pexpert/pexpert/arm/protos.h b/pexpert/pexpert/arm/protos.h
 index 9004f2b..44e998d 100644
 --- a/pexpert/pexpert/arm/protos.h

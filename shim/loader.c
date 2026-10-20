@@ -116,12 +116,28 @@ static int choose_runtime_ram(uintptr_t dtb, uint64_t initrd_start, uint64_t ini
 	struct fdt_range memory[MAX_MEMORY_RANGES], reserved[MAX_RESERVED_RANGES];
 	uint32_t nm = MAX_MEMORY_RANGES, nr = MAX_RESERVED_RANGES - 4;
 	uint64_t dtb_size;
-	if (!fdt_memory_map(dtb, memory, &nm, reserved, &nr, &dtb_size)) return 0;
+	if (!fdt_memory_map(dtb, memory, &nm, reserved, &nr, &dtb_size)) {
+		if (fdt_root_compatible(dtb, "qcom,volcano") ||
+		    fdt_root_compatible(dtb, "fairphone,fp6")) {
+			memory[0] = (struct fdt_range){0x80000000UL, 0x78000000UL};
+			nm = 1;
+		} else {
+			return 0;
+		}
+	}
 	sort_ranges(reserved, nr);
 	if (fdt_framebuffer(dtb, fb)) {
 		uint64_t fb_reserve = fb->size;
 		if (fb->base == 0xe3940000UL && fb_reserve < 0x2b00000UL) fb_reserve = 0x2b00000UL;
 		reserved[nr++] = (struct fdt_range){fb->base, fb_reserve};
+	} else if (fdt_root_compatible(dtb, "qcom,volcano") ||
+	           fdt_root_compatible(dtb, "fairphone,fp6")) {
+		fb->base = 0xe3940000UL;
+		fb->width = 1116;
+		fb->height = 2484;
+		fb->stride = 1116 * 4;
+		fb->size = 0x2b00000UL;
+		reserved[nr++] = (struct fdt_range){fb->base, fb->size};
 	}
 	reserved[nr++] = (struct fdt_range){initrd_start, initrd_end - initrd_start};
 	reserved[nr++] = (struct fdt_range){dtb, dtb_size};
@@ -254,8 +270,18 @@ const char *loader_boot(uintptr_t dtb)
 		if (!choose_runtime_ram(dtb, rd_start, rd_end, need,
 					&phys_base, &mem_size, &fb))
 			return "no free RAM range in bootloader FDT";
-		if (!fb.base)
-			return "no framebuffer in bootloader FDT";
+		if (!fb.base) {
+			if (fdt_root_compatible(dtb, "qcom,volcano") ||
+			    fdt_root_compatible(dtb, "fairphone,fp6")) {
+				fb.base = 0xe3940000UL;
+				fb.width = 1116;
+				fb.height = 2484;
+				fb.stride = 1116 * 4;
+				fb.size = 0x2b00000UL;
+			} else {
+				return "no framebuffer in bootloader FDT";
+			}
+		}
 		con_set_framebuffer(fb.base, fb.width, fb.height, fb.stride);
 	} else if (!phys_base || !mem_size) {
 		return "incomplete payload RAM range";
@@ -308,8 +334,15 @@ const char *loader_boot(uintptr_t dtb)
 	uint64_t fb_base;
 	uint32_t fb_width, fb_height, fb_stride;
 	con_get_framebuffer(&fb_base, &fb_width, &fb_height, &fb_stride);
+	if (!fb_base && (fdt_root_compatible(dtb, "qcom,volcano") ||
+	                 fdt_root_compatible(dtb, "fairphone,fp6"))) {
+		fb_base = 0xe3940000UL;
+		fb_width = 1116;
+		fb_height = 2484;
+		fb_stride = 1116 * 4;
+	}
 	ba->Video.v_baseAddr = fb_base;
-	ba->Video.v_display = 1;
+	ba->Video.v_display = fb_base ? 1 : 0;
 	ba->Video.v_rowBytes = fb_stride;
 	ba->Video.v_width = fb_width;
 	ba->Video.v_height = fb_height;

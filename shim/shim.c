@@ -384,8 +384,8 @@ void shim_main(uint64_t dtb)
 	if (fdt_framebuffer(dtb, &fb))
 		con_set_framebuffer(fb.base, fb.width, fb.height, fb.stride);
 	else if (volcano) {
-		/* Do not touch the Sweet framebuffer or its MMIO on FP6. */
-		con_fb = 0;
+		/* Fairphone 6 simple-framebuffer splash at 0xe3940000, 1116x2484 */
+		con_set_framebuffer(0xe3940000UL, 1116, 2484, 1116 * 4);
 	}
 
 	/* An xnu payload in the ramdisk means: boot it (MMU stays off). */

@@ -6,6 +6,34 @@ hashes, CI runs, raw numbers) is [docs/GPU_LOG.md](docs/GPU_LOG.md); the hardwar
 mainline reference is [docs/GPU_GMU_BOOT.md](docs/GPU_GMU_BOOT.md); the per-patch
 design is [docs/GPU_CX_EXPERIMENT.md](docs/GPU_CX_EXPERIMENT.md).
 
+## FP6 hardware bringup and pthread/gPanicBase fixes (2026-10-20)
+
+- On-device observation with packaged header v2 boot image (containing stock DTB):
+  ABL booted successfully into shim, simple-framebuffer splash activated at 0xe3940000 (1116x2484).
+  XNU initialized console, IOKit matched platform and boot CPU ("1 of 1 CPUs initialized"),
+  entered BSD, and halted with:
+  `panic pthread kernel extension not loaded pthread_shims.c:318`.
+  Also observed:
+  `debug_log_init: Error!! gPanicBase is still not initialized` and
+  `Serial requested, consistent debug disabled or debug boot arg not present`.
+- Root causes:
+  1. Built-in libpthread was guarded by `CURRENT_MACHINE_CONFIG == SWEET` and `ARM64_BOARD_CONFIG_SWEET`.
+     `sweet_pthread_register` was never compiled or registered during early boot on FP6.
+  2. `gPanicBase` was uninitialized because no `pram` node exists in the bootstrap ADT, causing
+     `check_for_panic_log` to return early.
+  3. `kdp_udp.c` fell back to serial KDP warning because `PE_consistent_debug_enabled()` returned false.
+- Fixes staged in patch 0099:
+  1. Enabled `sweet_libpthread` and `sweet_hfs` for `FP6` in `bsd/conf/Makefile.template`,
+     `bsd/sys/pthread_internal.h`, `bsd/pthread/sweet_pthread_*.c`, `bsd/kern/sweet_amfi.c`,
+     and `iokit/Kernel/IOService.cpp`.
+  2. In `pexpert/arm/pe_init.c`, provided a 256 KiB static panic buffer fallback when `pram` is absent,
+     initializing `gPanicBase` and `panic_info` cleanly.
+  3. In `pexpert/arm/pe_consistent_debug.c`, provided a static debug registry fallback for FP6, and in
+     `osfmk/kdp/kdp_udp.c`, bypassed serial KDP when serial is not explicitly requested.
+  4. Registered `QcomPlatformExpert` and `QcomCPU` classes in `SweetPlatformExpert.cpp` and `SweetCPU.cpp`
+     and added corresponding entries in `KernelConfigTables.cpp`.
+  5. Verified patch 0099 applies with zero errors against the baseline.
+
 ## FP6 shim packaging (2026-10-20)
 
 - Patch audit: Phoenix edits to 0016 broke later patch contexts. Restored 0016

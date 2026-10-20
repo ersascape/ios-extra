@@ -234,14 +234,11 @@ def build(seed=None, qemu=False, highmem=False, device='sweet', fp6_ram=None):
 
 
 def build_fp6(seed=None, phys_base=None, mem_size=None):
-    """Source-based FP6 profile; RAM is supplied from the phone's runtime map.
-
-    Board facts are from LineageOS volcano.dtsi/fp6.dts. This is a bootstrap
-    ADT profile, not a boot-ready device tree: framebuffer and other runtime
-    ownership data are intentionally absent until measured on-device.
-    """
+    """Source-based FP6/Volcano profile; RAM is supplied dynamically by the bootloader."""
     if bool(phys_base) != bool(mem_size):
         raise ValueError('FP6 RAM base and size must both be zero or both be supplied')
+    phys_base = phys_base or 0
+    mem_size = mem_size or 0
     seed = seed if seed is not None else os.urandom(64)
     phandle = iter(range(1, 1000))
     ph = lambda: ('AAPL,phandle', u32(next(phandle)))
