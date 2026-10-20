@@ -15,10 +15,22 @@
 - A follow-on patch 0107 failed in CI because it targeted `bsd_init.c` after
   prior patch edits shifted the context. Removed it and folded the same one-line
   board guard into patch 0029, which introduces this block early in the series.
-  The corrected patch needs a fresh CI build; no new image is available yet.
+  Commit `11e3311dec6aebdcdf40f167c05316fc29601169` passed CI run
+  `39444642284` (both XNU build and FP6 boot job). The workflow's generic boot
+  image was skipped because `FP6_STOCK_DTB_URL` is unset.
 - The intended next test image should retain `rd=ufsroot0 ufsrw=1` to allow the
   journal/root writes required by this image, and USB diagnostics. No device
-  action has been run from this workspace.
+  action has been run from this workspace. Locally packaged and header-v2
+  validated the matching CI kernel and ADT with the verified local stock DTB:
+  `/tmp/fp6-unsealed-394446/ufs-root/fp6-shim-ufs-root-rw.img`, 23,396,352
+  bytes, SHA256 `e0143993d89b656cdb7094bc323d57ce32941c59c7e8b5f3bab6f2f8e0596bee`.
+  Kernel SHA256 `e9568a5aa790b88c2a773483e4717d7c1ba307d91ba79f7a32c62b08e7c80750`,
+  ADT SHA256 `5f273d7248d288e77f0cde2cfd118acd39f5008502e8f8b4d0db52dfee3a4a84`,
+  stock DTB SHA256 `16a9e60e441772b5cf491a6b51dbe4829f5895fa284bcfa342623bc5b2287dc5`.
+  Command line is `debug=0xc serial=3 cpus=8 keepsyms=1 -noprogress rd=ufsroot0
+  ufsrw=1 fp6usb=2`. This opts in to writes to userdata for the HFS journal;
+  it has not been boot-tested and root authentication continuation is not yet
+  verified on hardware.
 
 Last updated 2026-10-20 after adding the FP6 ADT profile. Read [HANDOFF.md](HANDOFF.md) for how to
 continue and [AGENTS.md](AGENTS.md) for the rules. The per-step history (images,
