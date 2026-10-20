@@ -1,5 +1,25 @@
 # ios-extra — current state
 
+## FP6 unsealed HFS root authentication (2026-10-20)
+
+- The user reports that the HFS root mounted, then XNU panicked with
+  `rootvp not authenticated after mounting` at `bsd_init.c:947`. This advances
+  past the prior journal-write failure; it is the sealed-root authentication
+  check, not evidence of an HFS mount failure.
+- The existing patch 0029 already permits an unauthenticated HFS root on the
+  unsigned SWEET development boot. Extended that original patch's guard to
+  include FP6, where the unsigned shim boot also has no Image4 trust chain and
+  the development HFS root is unsealed. It now reports the auth error and
+  continues through this check. This does not authenticate the volume or prove
+  later userspace startup.
+- A follow-on patch 0107 failed in CI because it targeted `bsd_init.c` after
+  prior patch edits shifted the context. Removed it and folded the same one-line
+  board guard into patch 0029, which introduces this block early in the series.
+  The corrected patch needs a fresh CI build; no new image is available yet.
+- The intended next test image should retain `rd=ufsroot0 ufsrw=1` to allow the
+  journal/root writes required by this image, and USB diagnostics. No device
+  action has been run from this workspace.
+
 Last updated 2026-10-20 after adding the FP6 ADT profile. Read [HANDOFF.md](HANDOFF.md) for how to
 continue and [AGENTS.md](AGENTS.md) for the rules. The per-step history (images,
 hashes, CI runs, raw numbers) is [docs/GPU_LOG.md](docs/GPU_LOG.md); the hardware and
