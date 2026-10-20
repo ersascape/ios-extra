@@ -730,3 +730,35 @@ error::ResourceWarning -m unittest discover -s tests` (also with
   Its write path remains bounded to the GPT partition selected by `ufsroot`
   (`userdata` by default); it cannot address other UFS partitions. This
   read-write image has not yet been tested on the phone.
+
+## UniXNU repository review (2026-10-20)
+
+- Shallow-cloned the UniXNU build repository to `/home/ersa/Dev/UniXNU` with
+  its shallow driver/kit submodules, the device repo to
+  `/home/ersa/Dev/UniXNU-sheng` with its shallow touch/preflight submodules,
+  and firmware repo to `/home/ersa/Dev/uefi-sheng`. Main repo commits at
+  review: UniXNU `5725f11`, UniXNU-sheng `b409de2`, uefi-sheng `329b473`.
+  All these checkouts were clean after cloning. Source review only: no build,
+  tests or phone run was done.
+- UniXNU-sheng targets Xiaomi Pad 6S Pro / SM8550 and boots through its own
+  Mu-Silicium UEFI plus DarwinBoot flow. FP6 currently boots through the
+  existing fastboot shim, so the UniXNU boot chain is a separate architecture
+  choice; its driver repos can still be referenced or selectively ported.
+- Most transferable source is at the interface/algorithm level: ARM CPU/GIC/
+  timer, ADT matching, UFSHCI command handling, SMMUv2 4 KiB table code,
+  framebuffer copy/present, GENI SPI transport, HID event publication and
+  root-manifest verification. None should be assumed board-ready for FP6.
+- Confirmed board-specific limits: NativeUfs matches `qcom,sm8550-ufshc` and
+  hardcodes sheng GCC/UFS physical ranges and stream setup; NativeAdreno and
+  AdrenoPM4 are A740-specific; NativeNovatekTouch is for the sheng NT36532E;
+  NativeMobileDisplay uses firmware GOP/framebuffer scanout and has no hardware
+  vblank. NativeMetal's demonstrated GPU path depends on the Adreno/Turnip stack.
+- `kits/VerifiedRoot` implements an owner-key RSA-3072/SHA-256 block-manifest
+  format; it is not Apple's Image4/APFS sealed-root authentication. NativeAES
+  and NativeKeyStoreEvents do not implement QTEE communication or SEP-backed
+  AppleKeyStore. Check each module's own license before copying; the collection
+  mixes BSD-2-Clause-Patent, BSD-2-Clause, MIT, and Apache-2.0 code.
+- The UniXNU organization page showed three top-level repositories at review;
+  the build repo additionally pins 21 driver/kit submodules, and the sheng
+  device repo adds two submodules. See the checked-out READMEs and source under
+  `/home/ersa/Dev/UniXNU*` for exact per-module commits.
