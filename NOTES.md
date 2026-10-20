@@ -127,12 +127,34 @@ design is [docs/GPU_CX_EXPERIMENT.md](docs/GPU_CX_EXPERIMENT.md).
   and was subsequently booted; it reproduced the SCSI completion panic below.
 - The user then booted the 0103 image and still saw
   `ufsroot0 unavailable 5 at SCSI completion detail 0x2102`. The 0103 kernel
-  binary contains the new check-condition path, so this stage indicates its
-  earlier completion guard still rejected the nonzero SCSI response byte
-  (`resp[6]`) before sense decoding. The packed detail retains UPIU `0x21` and
-  status `0x02` but omits `resp[6]`. Patch 0104 moves response/status handling
-  into the sense-reporting path and will expose both response and embedded
-  sense; the exact response code and sense values are not yet known.
+  binary contains the new check-condition path, so the reported stage means its
+  earlier completion guard rejected a nonzero response byte (`resp[6]`) before
+  sense decoding. The packed detail retains UPIU `0x21` and status `0x02` but
+  omits that response byte. Linux's completion path consumes SCSI status from a
+  response UPIU and copies the embedded sense for CHECK CONDITION; patch 0104
+  now follows that flow and reports both response and sense. Exact values still
+  await phone retest.
+- Research against the local stock FP6 DTB found its UFS host node at
+  `0x1d84000`, using two lanes, the Qualcomm UFS PHY, ICE, MCQ, and an SMMU
+  stream (`iommus` stream ID `0x60`) with `qcom,iommu-dma = "fastmap"`. It also
+  sets `qcom,broken-ahit-wa`. Linux's QCOM driver disables the auto-hibernation
+  idle timer while commands are active on that quirk path; the current XNU
+  handoff driver does not. This is a platform-confirmed candidate to address,
+  though it does not by itself explain the TUR CHECK CONDITION. The existing
+  TUR has no PRDT, so its completion has not validated data-buffer DMA through
+  the SMMU; actual GPT/data reads remain untested.
+- The QCOM Linux host also owns PHY initialization, regulators/clocks, link
+  startup, device-init queries, and recovery. XNU currently assumes ABL leaves
+  those initialized and takes over only the UTRL. Since TUR returns a UFS
+  response with OCS zero, the live link and a response DMA work at least once;
+  this does not validate post-handoff power-state handling or data DMA. No
+  Apple-specific iPhone UFS host source was found in Apple's public XNU tree.
+- Patch 0104 CI run `39435664153` succeeded on commit
+  `0ff825a8f143aff1926e8071342ccba708057ad3`. Locally packaged and header-v2
+  validated `/tmp/fp6-ufs-audit-394356/ufs-root/fp6-shim-ufs-response-debug.img`,
+  SHA256 `6a61741e1c8a1853a6362f5ac7b2258ab65e91be869d4441612b42045e7e154b`.
+  It uses `rd=ufsroot0 fp6usb=2`; it has not yet been booted. CI's own boot
+  packaging was skipped because `FP6_STOCK_DTB_URL` is unset.
 
 ## FP6 hardware bringup and pthread/gPanicBase fixes (2026-10-20)
 
