@@ -13,6 +13,8 @@
 #define GREEN	0xff00ff00U
 
 extern volatile uint32_t *con_fb;
+void con_set_framebuffer(uint64_t base, uint32_t width, uint32_t height, uint32_t stride);
+void con_get_framebuffer(uint64_t *base, uint32_t *width, uint32_t *height, uint32_t *stride);
 
 void con_clear(uint32_t bg);
 void con_skip(void);

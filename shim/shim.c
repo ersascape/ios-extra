@@ -8,6 +8,7 @@
  */
 #include <stdint.h>
 #include "console.h"
+#include "fdt.h"
 #include "mmu.h"
 #include "loader.h"
 #include "ufs.h"
@@ -373,6 +374,10 @@ static uint32_t to_us(uint64_t ticks)
 void shim_main(uint64_t dtb)
 {
 	struct mmu_info mi;
+	struct fdt_fb fb;
+
+	if (fdt_framebuffer(dtb, &fb))
+		con_set_framebuffer(fb.base, fb.width, fb.height, fb.stride);
 
 	/* An xnu payload in the ramdisk means: boot it (MMU stays off). */
 	stage = "loader";

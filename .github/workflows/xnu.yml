@@ -18,14 +18,6 @@ on:
           - SWEET
           - PHOENIX
           - FP6
-      fp6_dram_base:
-        description: FP6 usable RAM base in bytes (hex or decimal; required for FP6 ADT)
-        type: string
-        default: ""
-      fp6_dram_size:
-        description: FP6 usable RAM size in bytes (hex or decimal; required for FP6 ADT)
-        type: string
-        default: ""
       keep_going:
         description: make -k (collect all compile errors in one run)
         default: "true"
@@ -33,7 +25,9 @@ on:
     branches: [main]
     paths:
       - "xnu/patches/**"
+      - "shim/**"
       - "tools/mkadt.py"
+      - "tools/mkpayload.py"
       - "docs/FAIRPHONE6.md"
       - ".github/workflows/xnu.yml"
 
@@ -47,8 +41,6 @@ env:
   MACOS_VERSION: ${{ inputs.macos_version || '13.5' }}
   KERNEL_CONFIG: ${{ inputs.kernel_config || 'DEVELOPMENT' }}
   MACHINE_CONFIG: ${{ inputs.machine_config || vars.MACHINE_CONFIG || 'SWEET' }}
-  FP6_DRAM_BASE: ${{ inputs.fp6_dram_base || vars.FP6_DRAM_BASE || '' }}
-  FP6_DRAM_SIZE: ${{ inputs.fp6_dram_size || vars.FP6_DRAM_SIZE || '' }}
 
 jobs:
   build:
@@ -63,18 +55,9 @@ jobs:
 
       - name: Generate Fairphone 6 ADT
         if: ${{ env.MACHINE_CONFIG == 'FP6' }}
-        env:
-          FP6_DRAM_BASE: ${{ env.FP6_DRAM_BASE }}
-          FP6_DRAM_SIZE: ${{ env.FP6_DRAM_SIZE }}
         run: |
-          if [ -z "$FP6_DRAM_BASE" ] || [ -z "$FP6_DRAM_SIZE" ]; then
-            echo "FP6 ADT generation requires the measured usable RAM base and size." >&2
-            echo "Set fp6_dram_base/fp6_dram_size in workflow_dispatch or repository variables." >&2
-            exit 1
-          fi
           mkdir -p out
-          python3 tools/mkadt.py out/fp6.adt --device fp6 \
-            --dram-base "$FP6_DRAM_BASE" --dram-size "$FP6_DRAM_SIZE"
+          python3 tools/mkadt.py out/fp6.adt --device fp6
           shasum -a 256 out/fp6.adt > out/fp6.adt.sha256
 
       - uses: actions/upload-artifact@v4

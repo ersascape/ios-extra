@@ -74,9 +74,8 @@ def build(seed=None, qemu=False, highmem=False, device='sweet', fp6_ram=None):
     if device not in ('sweet', 'phoenix', 'fp6'):
         raise ValueError(f'unsupported device profile: {device}')
     if device == 'fp6':
-        if fp6_ram is None:
-            raise ValueError('FP6 requires --dram-base and --dram-size from a trusted device memory map')
-        return build_fp6(seed=seed, phys_base=fp6_ram[0], mem_size=fp6_ram[1])
+        return build_fp6(seed=seed, phys_base=fp6_ram[0] if fp6_ram else 0,
+                         mem_size=fp6_ram[1] if fp6_ram else 0)
     phys_base, mem_size = (HIGH_PHYS_BASE, HIGH_MEM_SIZE) if highmem else (PHYS_BASE, MEM_SIZE)
     gicd, gicr, timebase = (QEMU_GICD, QEMU_GICR, QEMU_TIMEBASE) if qemu else (GICD, GICR, TIMEBASE)
     seed = seed if seed is not None else os.urandom(64)
@@ -241,8 +240,8 @@ def build_fp6(seed=None, phys_base=None, mem_size=None):
     ADT profile, not a boot-ready device tree: framebuffer and other runtime
     ownership data are intentionally absent until measured on-device.
     """
-    if not phys_base or not mem_size:
-        raise ValueError('FP6 RAM base and size must be non-zero')
+    if bool(phys_base) != bool(mem_size):
+        raise ValueError('FP6 RAM base and size must both be zero or both be supplied')
     seed = seed if seed is not None else os.urandom(64)
     phandle = iter(range(1, 1000))
     ph = lambda: ('AAPL,phandle', u32(next(phandle)))
@@ -336,12 +335,16 @@ if __name__ == '__main__':
     parser.add_argument('--highmem', action='store_true')
     parser.add_argument('--device', choices=('sweet', 'phoenix', 'fp6'), default='sweet')
     parser.add_argument('--dram-base', type=lambda v: int(v, 0),
-                        help='FP6 RAM base in bytes (required for --device fp6)')
+                        help='optional FP6 usable RAM base; otherwise the shim fills it from the bootloader FDT')
     parser.add_argument('--dram-size', type=lambda v: int(v, 0),
-                        help='FP6 RAM size in bytes (required for --device fp6)')
+                        help='optional FP6 usable RAM size; otherwise the shim fills it from the bootloader FDT')
     parser.add_argument('--dump', action='store_true')
     args = parser.parse_args()
-    fp6_ram = (args.dram_base, args.dram_size) if args.device == 'fp6' and args.dram_base is not None and args.dram_size is not None else None
+    have_dram_base = args.dram_base is not None
+    have_dram_size = args.dram_size is not None
+    if args.device == 'fp6' and have_dram_base != have_dram_size:
+        parser.error('--dram-base and --dram-size must be supplied together')
+    fp6_ram = (args.dram_base, args.dram_size) if args.device == 'fp6' and have_dram_base else None
     root = build(qemu=args.qemu, highmem=args.highmem, device=args.device, fp6_ram=fp6_ram)
     blob = adt.serialize(root)
     open(args.output, 'wb').write(blob)

@@ -35,32 +35,30 @@ It uses a conservative ARM64 instruction baseline and records the source CPU
 count/cluster count. `tools/mkadt.py --device fp6` now emits an FP6 ADT profile
 with the Volcano CPU affinity IDs/topology, GICv3 and UFS register ranges, and
 Fairphone identity. It includes the upstream FP6 simple-framebuffer address,
-dimensions and stride. It requires explicit `--dram-base` and `--dram-size`
-arguments, because the LineageOS Volcano DTS has `reg = <0 0 0 0>` for RAM and
-the upstream board DTS leaves RAM discovery to the bootloader. The upstream
-board source reserves the splash area containing the framebuffer, but that
-does not define the usable RAM range for XNU.
+dimensions and stride. The LineageOS Volcano DTS has `reg = <0 0 0 0>` for
+RAM; the FP6 ADT therefore carries zero RAM fields as a build-time template.
+The shim reads the bootloader's runtime FDT, selects a contiguous RAM range
+excluding its reserved regions and boot assets, then patches the ADT and XNU
+boot arguments before entering the kernel. The upstream board source reserves
+the splash area containing the framebuffer.
 
-Example syntax (the values below are deliberately not supplied):
+Generate the build-time ADT template:
 
 ```sh
-python3 tools/mkadt.py /tmp/fp6.adt --device fp6 \
-  --dram-base 0x... --dram-size 0x...
+python3 tools/mkadt.py /tmp/fp6.adt --device fp6
 ```
 
-This is an ADT generation profile, not a boot-ready ADT or image. Runtime RAM
-ownership, the exact timer/interrupt handoff, CPU startup, live framebuffer
-handoff and storage handoff still need validation against the phone's
-bootloader data.
+This is an ADT generation profile, not a boot-ready image. Runtime memory map
+selection and framebuffer handoff still need validation against an FP6
+bootloader FDT; the exact timer/interrupt handoff, CPU startup and storage
+handoff also remain unverified.
 The FP6 XNU machine config has not yet been validated by CI, and this profile
 must not be used for a phone boot until those inputs are confirmed.
 
-The `xnu` GitHub Actions workflow accepts `FP6` as a machine config. A manual
-FP6 run must also provide `fp6_dram_base` and `fp6_dram_size`; it publishes the
-generated `fp6-adt` artifact separately. On push, the workflow uses the
-`MACHINE_CONFIG`, `FP6_DRAM_BASE`, and `FP6_DRAM_SIZE` repository variables if
-set (otherwise the existing SWEET default applies). CI has not run this
-workflow for FP6 yet.
+The `xnu` GitHub Actions workflow accepts `FP6` as a machine config and
+publishes the generated `fp6-adt` template separately. On push, the workflow
+uses the `MACHINE_CONFIG` repository variable if set; otherwise the existing
+SWEET default applies. CI has not run this workflow for FP6 yet.
 
 Source references inspected from LineageOS repositories at device-tree commit
 `f32428a`, device configuration commit `564f00b`, and kernel commit
