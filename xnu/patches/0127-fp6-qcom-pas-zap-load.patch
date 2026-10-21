@@ -1,0 +1,170 @@
+diff --git a/bsd/dev/sweet_gpu.c b/bsd/dev/sweet_gpu.c
+index 3c4a9dd..0000000 100644
+--- a/bsd/dev/sweet_gpu.c
++++ b/bsd/dev/sweet_gpu.c
+@@ -2111,2 +2111,150 @@ fp6_qcom_pas_probe(void)
+ }
+ #endif /* ARM64_BOARD_CONFIG_FP6 */
++
++/* A separately opted-in PAS load of the signed FP6 Gen8.3 ZAP. */
++#if defined(ARM64_BOARD_CONFIG_FP6)
++#include <arm/caches_internal.h>
++#include <kern/startup.h>
++#include "fp6_zap_fw.h"
++
++#define FP6_SCM_FID_PAS_INIT_IMAGE       0xC2000201ULL
++#define FP6_SCM_FID_PAS_MEM_SETUP        0xC2000202ULL
++#define FP6_SCM_FID_PAS_AUTH_AND_RESET   0xC2000205ULL
++#define FP6_SCM_FID_PAS_SHUTDOWN         0xC2000206ULL
++#define FP6_ZAP_REGION_PA                0x9ea9a000ULL
++#define FP6_ZAP_REGION_SIZE              0x2000u
++#define FP6_ZAP_IMAGE_PA                 FP6_ZAP_REGION_PA
++#define FP6_ZAP_METADATA_PA              (FP6_ZAP_REGION_PA + 0x1000ULL)
++#define FP6_ZAP_IMAGE_SIZE               0x1000u
++
++#if defined(FP6_SCM_TEST)
++extern void fp6_scm_test_call_full(uint64_t, uint64_t, uint64_t, uint64_t,
++    uint64_t, uint64_t *, uint64_t *);
++#endif
++extern vm_offset_t ml_io_map_wcomb(vm_offset_t, vm_size_t);
++
++static int fp6_zap_started;
++
++static void
++fp6_scm_invoke_full(uint64_t fid, uint64_t arginfo, uint64_t arg0,
++    uint64_t arg1, uint64_t arg2, uint64_t *status, uint64_t *value)
++{
++	*status = ~0ULL;
++	*value = 0;
++#if defined(FP6_SCM_TEST)
++	fp6_scm_test_call_full(fid, arginfo, arg0, arg1, arg2, status, value);
++#elif defined(__aarch64__)
++	register uint64_t x0 __asm__("x0") = fid;
++	register uint64_t x1 __asm__("x1") = arginfo;
++	register uint64_t x2 __asm__("x2") = arg0;
++	register uint64_t x3 __asm__("x3") = arg1;
++	register uint64_t x4 __asm__("x4") = arg2;
++	__asm__ volatile("smc #0" : "+r"(x0), "+r"(x1), "+r"(x2), "+r"(x3), "+r"(x4) : :
++	    "x5", "x6", "x7", "x8", "x9", "x10", "x11", "x12", "x13",
++	    "x14", "x15", "x16", "x17", "cc", "memory");
++	*status = x0;
++	*value = x1;
++#endif
++}
++
++static int
++fp6_scm_pas_result(const char *name, uint64_t fid, uint64_t arginfo,
++    uint64_t arg0, uint64_t arg1, uint64_t arg2)
++{
++	uint64_t status, value;
++	fp6_scm_invoke_full(fid, arginfo, arg0, arg1, arg2, &status, &value);
++	printf("QCOM SCM: %s fid=0x%llx smc=0x%llx result=0x%llx\n", name,
++	    (unsigned long long)fid, (unsigned long long)status,
++	    (unsigned long long)value);
++	return status == 0 && value == 0;
++}
++
++void
++fp6_qcom_pas_zap_load(void)
++{
++	int mode = 0;
++	if (!PE_parse_boot_argn("fp6zap", &mode, sizeof(mode)) || mode == 0)
++		return;
++	if (mode != 1) {
++		printf("QCOM SCM: unsupported fp6zap=%d (0=off, 1=load signed ZAP)\n", mode);
++		return;
++	}
++	if (fp6_zap_started) {
++		printf("QCOM SCM: GPU ZAP already started in this boot\n");
++		return;
++	}
++
++	uint64_t status, value;
++	fp6_scm_invoke(FP6_SCM_FID_INFO_IS_CALL_AVAIL, 1,
++	    FP6_SCM_PAS_SUPPORTED_CALL, &status, &value);
++	printf("QCOM SCM: ZAP call availability smc=0x%llx result=0x%llx\n",
++	    (unsigned long long)status, (unsigned long long)value);
++	if (status != 0 || value == 0) {
++		printf("QCOM SCM: PAS support query unavailable; ZAP load skipped\n");
++		return;
++	}
++	fp6_scm_invoke(FP6_SCM_FID_PAS_IS_SUPPORTED, 1,
++	    FP6_SCM_PAS_ID_GPU, &status, &value);
++	printf("QCOM SCM: ZAP PAS_IS_SUPPORTED smc=0x%llx result=0x%llx\n",
++	    (unsigned long long)status, (unsigned long long)value);
++	if (status != 0 || value == 0) {
++		printf("QCOM SCM: GPU PAS unsupported or query failed; ZAP load skipped\n");
++		return;
++	}
++
++	vm_offset_t mapped = ml_io_map_wcomb((vm_offset_t)FP6_ZAP_REGION_PA,
++	    FP6_ZAP_REGION_SIZE);
++	if (mapped == 0) {
++		printf("QCOM SCM: GPU ZAP reserved-memory map failed\n");
++		return;
++	}
++	unsigned char *metadata = (unsigned char *)(uintptr_t)(mapped + 0x1000);
++	unsigned char *image = (unsigned char *)(uintptr_t)mapped;
++	memset(metadata, 0, 0x1000);
++	memcpy(metadata, fp6_zap_metadata, sizeof(fp6_zap_metadata));
++	clean_dcache64((addr64_t)FP6_ZAP_METADATA_PA, 0x1000, 1);
++#if !defined(FP6_SCM_TEST)
++	__asm__ volatile("dsb sy" ::: "memory");
++#endif
++
++	printf("QCOM SCM: GPU ZAP PAS init metadata PA=0x%llx bytes=%u\n",
++	    (unsigned long long)FP6_ZAP_METADATA_PA,
++	    (unsigned)sizeof(fp6_zap_metadata));
++	int initialized = 1;
++	if (!fp6_scm_pas_result("PAS_INIT_IMAGE", FP6_SCM_FID_PAS_INIT_IMAGE,
++	    0x82, FP6_SCM_PAS_ID_GPU, FP6_ZAP_METADATA_PA, 0))
++		goto shutdown;
++
++	memset(image, 0, FP6_ZAP_IMAGE_SIZE);
++	memcpy(image, fp6_zap_segment, sizeof(fp6_zap_segment));
++	clean_dcache64((addr64_t)FP6_ZAP_IMAGE_PA, FP6_ZAP_IMAGE_SIZE, 1);
++#if !defined(FP6_SCM_TEST)
++	__asm__ volatile("dsb sy" ::: "memory");
++#endif
++	if (!fp6_scm_pas_result("PAS_MEM_SETUP", FP6_SCM_FID_PAS_MEM_SETUP,
++	    3, FP6_SCM_PAS_ID_GPU, FP6_ZAP_IMAGE_PA, FP6_ZAP_IMAGE_SIZE))
++		goto shutdown;
++	if (!fp6_scm_pas_result("PAS_AUTH_AND_RESET",
++	    FP6_SCM_FID_PAS_AUTH_AND_RESET, 1, FP6_SCM_PAS_ID_GPU, 0, 0))
++		goto shutdown;
++
++	fp6_zap_started = 1;
++	printf("QCOM SCM: GPU ZAP authenticated and reset; PAS remains active\n");
++	return;
++
++shutdown:
++	if (initialized && !fp6_scm_pas_result("PAS_SHUTDOWN",
++	    FP6_SCM_FID_PAS_SHUTDOWN, 1, FP6_SCM_PAS_ID_GPU, 0, 0))
++		printf("QCOM SCM: GPU PAS cleanup failed; state may remain active\n");
++}
++
++__startup_func
++static void
++fp6_adreno_startup(void)
++{
++	fp6_gpu_inventory();
++	fp6_qcom_pas_probe();
++	fp6_qcom_pas_zap_load();
++}
++STARTUP(EARLY_BOOT, STARTUP_RANK_LAST, fp6_adreno_startup);
++#endif /* ARM64_BOARD_CONFIG_FP6 */
+diff --git a/bsd/dev/sweet_ufs.c b/bsd/dev/sweet_ufs.c
+index dd4e7e1..0000000 100644
+--- a/bsd/dev/sweet_ufs.c
++++ b/bsd/dev/sweet_ufs.c
+@@ -60,4 +60,0 @@ extern void sweet_gpu_probe(void);
+-#if defined(ARM64_BOARD_CONFIG_FP6)
+-extern void fp6_gpu_inventory(void);
+-extern void fp6_qcom_pas_probe(void);
+-#endif
+@@ -1024,5 +1020,0 @@ sweet_ufs_init(bool allow_write)
+-#if defined(ARM64_BOARD_CONFIG_FP6)
+-	/* Read-only and opt-in via fp6gpu=1; GPU remains untouched by default. */
+-	fp6_gpu_inventory();
+-	fp6_qcom_pas_probe();
+-#endif

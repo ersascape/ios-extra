@@ -22,7 +22,12 @@
   Its arguments include `fp6pas=1 fp6touch=2 fp6usb=2`, and omit
   `-enable_kprintf_spam` and the framebuffer mute args. It uses the same
   latest successful kernel and matching ADT/DTB. Header-v2 contents validated;
-  no phone test has been run.
+  it was temporarily booted once after the user said the phone was ready.
+  USB capture decoded 448 packets. The console showed `PAS_IS_SUPPORTED`
+  advertised and GPU PAS ID 13 supported=1, followed by the FP6 touch driver
+  polling at 1116x2484. The user confirmed touch responds. This proves only
+  the read-only PAS query; no firmware load/auth/reset or GPU register access
+  occurred. Captures are retained outside Git under `/tmp/fp6-kernel-logs`.
 - Earlier quiet image (retained for reference):
   `/tmp/fp6-quiet-local-39569106154/fp6-shim-ufs-root-quiet-pas.img`, SHA-256
   `5798d5592286aebf569f5a45c0a33107bc2a1058dad317adabdc78387755dc7c`.
@@ -43,8 +48,8 @@
   host test's expected FID was corrected likewise. PAS_IS_SUPPORTED
   0xC2000207 (PIL 0x02 / 0x07) was already correct. Disassembly of the local
   arm64 object shows `smc #0` with x0=0xC2000601, x1=1, x2=0x02000207, then
-  x0=0xC2000207, x2=13. `python3 -m unittest tests.test_gpu_probe` passes on
-  the merged tree.
+  x0=0xC2000207, x2=13. The phone query result above matches the expected
+  SMC path.
 
 ## FP6 Adreno 810 profile correction (2026-10-21)
 
@@ -96,9 +101,9 @@
   GPU source; no full XNU CI build or phone inventory test has run for 0118.
   This work is on `main`; no phone GPU inventory test has run.
 
-## FP6 Qualcomm PAS query draft (2026-10-21)
+## FP6 Qualcomm PAS query (2026-10-21)
 
-- Local patch `0119` adds an opt-in `fp6pas=1` QCOM SCM query after FP6 UFS
+- Patch `0122` adds an opt-in `fp6pas=1` QCOM SCM query during early boot
   setup. It asks SCM whether `PAS_IS_SUPPORTED` is advertised, then queries
   PAS peripheral ID 13 (GPU). It does not load Zap, initialize/authenticate a
   PAS image, reset a peripheral, map GPU memory, or touch GPU/GMU/SMMU MMIO.
@@ -109,10 +114,32 @@
   precedent; this does not establish that the direct SIP SCM route is accepted
   on FP6 (the vendor kernel also has a QCPE/HAB transport branch).
 - Host model tests cover disabled/invalid modes, service-unavailable and SMC
-  error paths, and the exact two successful query descriptors. Full test suite,
-  ASan/UBSan GPU harness, and AArch64 Clang syntax check pass. No full XNU
-  build, CI run, boot image, or phone query has been made. The phone remains
-  untouched. Work remains uncommitted on `fp6-adreno-gen711` per instruction.
+  error paths, and the exact two successful query descriptors. The local
+  harness and ASan/UBSan GPU harness pass. CI build 39569106154 included this
+  patch; the phone result is recorded above. It is still query-only.
+
+## FP6 Adreno startup and signed ZAP loader draft (2026-10-21)
+
+- User clarified that GPU bring-up must not be attached to UFS initialization.
+  Patch 0127 moves the FP6 GPU inventory and PAS query into a dedicated
+  `EARLY_BOOT` startup hook in `sweet_gpu.c`; UFS no longer owns those calls.
+- Patch 0126 fetches `gen80300_zap.mbn` from FairBlobs commit
+  `e58a5be8fa0fb6bc5a5f2e29cc01c036ccf75710`, verifies its SHA-256, validates
+  the ELF32/QDSP6 program-header and relocatable-segment layout, then emits
+  only the signed-image metadata and segment into a generated header. The
+  firmware binary remains out of Git.
+- Patch 0127 adds opt-in `fp6zap=1`: check PAS availability/support, write the
+  metadata into the second page of the stock 8 KiB no-map Zap carveout, call
+  PAS_INIT_IMAGE, copy/zero the relocatable 4 KiB image page, call
+  PAS_MEM_SETUP and PAS_AUTH_AND_RESET, and call PAS_SHUTDOWN on failure.
+  Successful PAS state remains active. This does not start the GMU, map or
+  program the GPU SMMU, or execute GPU commands.
+- The staging script passed against the local blob (SHA-256
+  `a91c411027746d4c3389a69b66f25d21eb646e89f2de5eed3f698e370f83f26c`),
+  producing a 0xfcc-byte Linux-compatible metadata buffer and 0x378-byte
+  segment. Host GPU harness and full four-test suite pass, including
+  ASan/UBSan; `git diff --check` passes. These changes have not yet had a full
+  XNU CI build or a phone test. PAS authentication is therefore not proven.
 
 ## FP6 touch, HID services and ring switch (2026-10-21)
 
@@ -1401,3 +1428,25 @@ error::ResourceWarning -m unittest discover -s tests` (also with
   Capture remains active for the new-image test. `fastboot devices` returned
   zero, so this image has not been booted and the USB change is not yet
   phone-verified.
+
+## FP6 battery and fuel-gauge source audit (2026-10-21)
+
+- Inspected the exact stock DTB embedded in CI run 39569106154, decompiled to
+  `/tmp/fp6-live.dts`, plus the Fairphone Volcano DTS and kernel sources. The
+  DT has a PMK8550 ADC/RTC/PON/SDAM tree and a `qcom,power-telemetry` child
+  marked `status = "disabled"`; it has no enabled local `qpnp-qg` fuel-gauge
+  node. The battery-charger interface is instead a child of `qcom,pmic-glink`
+  on `PMIC_RTR_ADSP_APPS`, with subsystem `lpass` and ADSP
+  `msm/adsp/charger_pd` protection-domain dependency.
+- The available `drivers/power/supply/qcom/qpnp-qg.c` only matches PM2250,
+  PM6150, PMI632 and PM7250B configurations; its probe requires a parent
+  regmap and battery-ID/thermistor ADC channels. It is not a PMK8550 driver
+  that can be enabled by adding an XNU SPMI read. Historical SWEET
+  `SweetBattery` in patch 0062 assumes a PM6150 fuel-gauge register map and
+  estimates SOC from voltage; it must not be reused as FP6 telemetry.
+- No FP6 code or device operation was made in this audit. Real SOC, current,
+  charge state and temperature require the ADSP PMIC-GLink battery service
+  (and its remote-processor/IPC prerequisites), or a separately validated
+  PMK8550 telemetry implementation if the disabled QPT block's wire protocol
+  can be established. An interim IOPMPowerSource would be a labeled static
+  fallback, not a functioning fuel gauge.

@@ -48,6 +48,10 @@ class GPUProbeTests(unittest.TestCase):
                                'typedef uintptr_t vm_size_t;\n',
                 'sys/systm.h': '',
                 'kern/clock.h': 'void delay(int);\n',
+                'kern/startup.h': '#define __startup_func\n#define STARTUP(phase, rank, fn) '
+                                  'static void (* const startup_test_ref_##fn)(void) '
+                                  '__attribute__((used)) = fn;\n#define EARLY_BOOT 1\n'
+                                  '#define STARTUP_RANK_LAST 4\n',
                 'arm/caches_internal.h': '#define TRUE 1\ntypedef unsigned long long addr64_t;\n'
                                          'void clean_dcache64(addr64_t, unsigned, int);\n',
                 'vm/pmap.h': 'typedef unsigned long long addr64_t;\ntypedef unsigned int ppnum_t;\n'
@@ -70,6 +74,9 @@ class GPUProbeTests(unittest.TestCase):
             (work / 'sweet_gpu_fw.h').write_text(
                 'static const unsigned char sweet_gpu_gmu_fw[] = {%s};\n' %
                 ','.join(str(b) for b in fw))
+            (work / 'fp6_zap_fw.h').write_text(
+                'static const unsigned char fp6_zap_metadata[0xfcc] = {1,2,3};\n'
+                'static const unsigned char fp6_zap_segment[0x378] = {4,5,6};\n')
             (work / 'test.c').write_text(HARNESS)
             build = subprocess.run([shutil.which('cc') or 'cc', '-std=c11', '-Wall',
                                     '-Wextra', '-Werror', *os.environ.get('IOS_EXTRA_CFLAGS', '').split(), '-I', str(work),
@@ -86,6 +93,8 @@ class GPUProbeTests(unittest.TestCase):
             self.assertIn('PASS: 14 clock/cache cases, 30 ARC cases + 512 mutations, 61 CX experiment cases', result.stdout)
             self.assertIn('PASS: FP6 GPUCC inventory is opt-in, read-only, and bounded', result.stdout)
             self.assertIn('PASS: FP6 Qualcomm SCM PAS query is opt-in and never authenticates firmware', result.stdout)
+            self.assertIn('PASS: FP6 signed ZAP PAS load is opt-in, stage-ordered, and shuts down on failure', result.stdout)
+            self.assertIn('PASS: FP6 Adreno work starts from its dedicated EARLY_BOOT hook', result.stdout)
 
 
 HARNESS = r'''
@@ -112,8 +121,12 @@ static int present, mode, map_calls, fail_gcc, fail_cc;
 static int fp6_mode;
 static unsigned fp6_map_calls;
 static int fp6_pas_mode;
+static int fp6_zap_mode, zap_map_fail;
 static uint64_t scm_status[2], scm_value[2], scm_fid[2], scm_arginfo[2], scm_arg0[2];
 static unsigned scm_calls;
+static struct { uint64_t fid, arginfo, arg0, arg1, arg2, status, value; } scm_full[8];
+static unsigned scm_full_calls, scm_full_fail_at;
+static unsigned char zap_region[0x2000];
 static uint32_t locator[2], database[1024];
 static uint32_t gmu_mem[GPU_GMU_SIZE / 4];
 static int gmu_maps, fail_gmu_map;
@@ -234,6 +247,11 @@ static void smmu_sim(void)
 }
 
 void clean_dcache64(addr64_t addr, unsigned count, int phys) {
+    if (addr == 0x9ea9a000u || addr == 0x9ea9b000u) {
+        assert(count == 0x1000 && phys == TRUE);
+        clean_calls++;
+        return;
+    }
     assert(addr == fake_pa_base && phys == TRUE);
     clean_bytes = count; clean_calls++;
     if (count == GPU_BUF_BYTES) {
@@ -319,6 +337,11 @@ static int probe_printf(const char *fmt, ...)
 
 int PE_parse_boot_argn(const char *name, void *value, int length)
 {
+	if (strcmp(name, "fp6zap") == 0) {
+		assert(length == sizeof(fp6_zap_mode));
+		if (fp6_zap_mode != 0) memcpy(value, &fp6_zap_mode, sizeof(fp6_zap_mode));
+		return fp6_zap_mode != 0;
+	}
 	if (strcmp(name, "fp6pas") == 0) {
 		assert(length == sizeof(fp6_pas_mode));
 		if (fp6_pas_mode != 0) memcpy(value, &fp6_pas_mode, sizeof(fp6_pas_mode));
@@ -379,6 +402,25 @@ void fp6_scm_test_call(uint64_t fid, uint64_t arginfo, uint64_t arg0,
     *status = scm_status[scm_calls];
     *value = scm_value[scm_calls];
     scm_calls++;
+}
+
+vm_offset_t ml_io_map_wcomb(vm_offset_t physical, vm_size_t size)
+{
+    assert(physical == 0x9ea9a000u && size == sizeof(zap_region));
+    return zap_map_fail ? 0 : (vm_offset_t)zap_region;
+}
+
+void fp6_scm_test_call_full(uint64_t fid, uint64_t arginfo, uint64_t arg0,
+                            uint64_t arg1, uint64_t arg2,
+                            uint64_t *status, uint64_t *value)
+{
+    assert(scm_full_calls < 8);
+    unsigned n = scm_full_calls++;
+    scm_full[n].fid = fid; scm_full[n].arginfo = arginfo;
+    scm_full[n].arg0 = arg0; scm_full[n].arg1 = arg1; scm_full[n].arg2 = arg2;
+    *status = scm_full_fail_at == n + 1 ? 0xFFFFFFFFULL : 0;
+    *value = 0;
+    scm_full[n].status = *status; scm_full[n].value = *value;
 }
 
 static void reset(void)
@@ -1454,6 +1496,48 @@ int main(void)
     fp6_qcom_pas_probe();
     assert(scm_calls == 2 && strstr(output, "PAS ID 13 query failed"));
     puts("PASS: FP6 Qualcomm SCM PAS query is opt-in and never authenticates firmware");
+
+    /* The signed ZAP loader is separately opt-in and uses the stock no-map carveout. */
+    fp6_zap_mode = 0; scm_calls = scm_full_calls = 0; fp6_qcom_pas_zap_load();
+    assert(scm_calls == 0 && scm_full_calls == 0);
+    fp6_zap_mode = 2; fp6_qcom_pas_zap_load();
+    assert(scm_calls == 0 && scm_full_calls == 0 && strstr(output, "unsupported fp6zap=2"));
+    fp6_zap_mode = 1; scm_status[0] = 0xFFFFFFFFULL; scm_value[0] = 1;
+    scm_calls = scm_full_calls = 0; fp6_qcom_pas_zap_load();
+    assert(scm_calls == 1 && scm_full_calls == 0);
+    scm_status[0] = 0; scm_value[0] = 1; scm_status[1] = 0; scm_value[1] = 0;
+    scm_calls = scm_full_calls = 0; fp6_qcom_pas_zap_load();
+    assert(scm_calls == 2 && scm_full_calls == 0);
+    scm_status[0] = scm_status[1] = 0;
+    scm_value[0] = scm_value[1] = 1; zap_map_fail = 1; scm_calls = scm_full_calls = 0;
+    fp6_qcom_pas_zap_load();
+    assert(scm_calls == 2 && scm_full_calls == 0 && strstr(output, "reserved-memory map failed"));
+    zap_map_fail = 0;
+    for (unsigned fail = 1; fail <= 3; fail++) {
+        memset(zap_region, 0, sizeof(zap_region));
+        scm_calls = scm_full_calls = 0; scm_full_fail_at = fail;
+        fp6_qcom_pas_zap_load();
+        assert(scm_calls == 2 && scm_full_calls == fail + 1);
+        assert(scm_full[scm_full_calls - 1].fid == 0xC2000206ULL);
+        assert(scm_full[scm_full_calls - 1].arginfo == 1);
+        assert(scm_full[scm_full_calls - 1].arg0 == 13);
+    }
+    memset(zap_region, 0, sizeof(zap_region));
+    scm_calls = scm_full_calls = 0; scm_full_fail_at = 0;
+    fp6_qcom_pas_zap_load();
+    assert(scm_calls == 2 && scm_full_calls == 3);
+    assert(scm_full[0].fid == 0xC2000201ULL && scm_full[0].arginfo == 0x82);
+    assert(scm_full[0].arg0 == 13 && scm_full[0].arg1 == 0x9ea9b000ULL);
+    assert(scm_full[1].fid == 0xC2000202ULL && scm_full[1].arginfo == 3);
+    assert(scm_full[1].arg0 == 13 && scm_full[1].arg1 == 0x9ea9a000ULL && scm_full[1].arg2 == 0x1000);
+    assert(scm_full[2].fid == 0xC2000205ULL && scm_full[2].arginfo == 1 && scm_full[2].arg0 == 13);
+    assert(zap_region[0x1000] == 1 && zap_region[0x1001] == 2 && zap_region[0x1002] == 3);
+    assert(zap_region[0] == 4 && zap_region[1] == 5 && zap_region[2] == 6 && zap_region[0xfff] == 0);
+    puts("PASS: FP6 signed ZAP PAS load is opt-in, stage-ordered, and shuts down on failure");
+    fp6_map_calls = 0; fp6_mode = fp6_pas_mode = 1; fp6_zap_mode = 0; scm_calls = 0;
+    fp6_adreno_startup();
+    assert(fp6_map_calls == 1 && scm_calls == 2);
+    puts("PASS: FP6 Adreno work starts from its dedicated EARLY_BOOT hook");
     return 0;
 }
 '''
