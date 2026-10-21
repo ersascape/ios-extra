@@ -1,0 +1,33 @@
+--- a/bsd/dev/sweet_gpu.c
++++ b/bsd/dev/sweet_gpu.c
+@@ -2545,6 +2545,30 @@
+ 		printf("QCOM SMMU: CX GDSC on GDSCR=0x%08x status=0x%08x\n",
+ 		    fp6_smmu_read32(clocks->gpucc, FP6_CX_GDSCR), fp6_smmu_read32(clocks->gpucc, FP6_CX_GDSC_STATUS));
+ 	}
++	/*
++	 * gpucc-volcano probe keeps these always enabled before any GPUCC clock
++	 * use: cb, cxo_aon, demet, gx_ahb_ff, rscc_hub_aon, rscc_xo_aon, sleep.
++	 * Without them the hub RCG and gpu_cc_ahb read as zero and ignore writes.
++	 */
++	static const uint32_t aon_gates[] = { 0x93a4u, 0x9008u, 0x9010u, 0x9064u, 0x93a8u, 0x9004u, 0x90ccu };
++	printf("QCOM SMMU: before AON gates ahb=0x%08x hub_cmd=0x%08x hub_cfg=0x%08x hub_div=0x%08x\n",
++	    fp6_smmu_read32(clocks->gpucc, 0x90bcu), fp6_smmu_read32(clocks->gpucc, 0x93ecu),
++	    fp6_smmu_read32(clocks->gpucc, 0x93f0u), fp6_smmu_read32(clocks->gpucc, 0x942cu));
++	for (unsigned i = 0; i < sizeof(aon_gates) / sizeof(aon_gates[0]); i++) {
++		uint32_t v = fp6_smmu_read32(clocks->gpucc, aon_gates[i]);
++		if (v == 0xffffffffu) return 0;
++		if (!(v & 1u)) fp6_smmu_write32(clocks->gpucc, aon_gates[i], v | 1u);
++	}
++	delay(10);
++	hub = fp6_smmu_read32(clocks->gpucc, 0x93ecu);
++	printf("QCOM SMMU: after AON gates ahb=0x%08x hub_cmd=0x%08x hub_cfg=0x%08x hub_div=0x%08x gates=%08x/%08x/%08x/%08x/%08x/%08x/%08x\n",
++	    fp6_smmu_read32(clocks->gpucc, 0x90bcu), hub,
++	    fp6_smmu_read32(clocks->gpucc, 0x93f0u), fp6_smmu_read32(clocks->gpucc, 0x942cu),
++	    fp6_smmu_read32(clocks->gpucc, 0x93a4u), fp6_smmu_read32(clocks->gpucc, 0x9008u),
++	    fp6_smmu_read32(clocks->gpucc, 0x9010u), fp6_smmu_read32(clocks->gpucc, 0x9064u),
++	    fp6_smmu_read32(clocks->gpucc, 0x93a8u), fp6_smmu_read32(clocks->gpucc, 0x9004u),
++	    fp6_smmu_read32(clocks->gpucc, 0x90ccu));
++	if (hub == 0xffffffffu) return 0;
+ 	if (hub & (1u << 31)) {
+ 		/* SMMU control-plane access can use the same CXO safe config that
+ 		 * clk_rcg2_enable supports. GMU boot must later select the stock

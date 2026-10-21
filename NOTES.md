@@ -1,5 +1,21 @@
 # ios-extra — current state
 
+## FP6 first RPMh vote and CX power on the phone (2026-10-21)
+
+- No-spam GPU power test (`fp6smmu=2 fp6smmupower=1`, kernel `121a02d`,
+  booted 17:42:00 UTC), console photo: `CX GDSCR=0x0022f001
+  status=0x2800010a HUB_CMD=0x00000000`; **`FP6 CX ARC floor 0x40
+  acknowledged level=2 TCS=0`** (first RPMh vote from XNU on FP6); **`CX GDSC
+  on GDSCR=0xf8228800 status=0x80000202`** (PWR_ON). SMMU clocks: 0x7000
+  before 0x80000000, GCC memnoc 0x3, snoc 0x1, gpu_cc_ahb 0x90bc before
+  0x00000000 and its enable did not stick -> `prerequisite clock failed
+  index=3; no context writes`.
+- gpu_cc_ahb and the hub RCG reading all-zero (not CLK_OFF) suggest a dead
+  hub/RSCC clock domain. gpucc-volcano probe enables seven always-on gates
+  (cb, cxo_aon, demet, gx_ahb_ff, rscc_hub_aon, rscc_xo_aon, sleep) before
+  any GPUCC clock; our SMMU path did not. Patch 0139 enables them right
+  after the CX GDSC and logs ahb/hub before and after (source-based).
+
 ## FP6 canvas placement and USB log host setup (2026-10-21)
 
 - User: a black bar is visible at the top. 0130 centred the 1125x2436 canvas
