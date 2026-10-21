@@ -1,0 +1,49 @@
+diff --git a/iokit/Kernel/arm/SweetFramebuffer.cpp b/iokit/Kernel/arm/SweetFramebuffer.cpp
+--- a/iokit/Kernel/arm/SweetFramebuffer.cpp
++++ b/iokit/Kernel/arm/SweetFramebuffer.cpp
+@@ -156,7 +156,7 @@
+ 	PE_parse_boot_argn("sweetfb_native", &native, sizeof(native));
+ 	fLogicalW = fWidth;
+ 	fLogicalH = fHeight;
+-	if (!native && fWidth <= SWEET_FB_LOGICAL_W && fHeight <= SWEET_FB_LOGICAL_H) {
++	if (!native) {
+ 		fLogicalW = SWEET_FB_LOGICAL_W;
+ 		fLogicalH = SWEET_FB_LOGICAL_H;
+ 	}
+@@ -331,6 +331,25 @@
+ 		}
+ 		s->release();
+ 	}
++
++	/*
++	 * FP6 is physically taller than the iPhone X canvas. Center the virtual
++	 * 1125x2436 image in the 1116x2484 panel and keep the unused rows black;
++	 * otherwise the ABL splash or console remains in the letterbox.
++	 */
++	if (fOffY < 0) {
++		uint32_t top = (uint32_t)(-fOffY);
++		uint32_t bottom = top + fLogicalH;
++		if (top > fHeight) top = fHeight;
++		if (bottom > fHeight) bottom = fHeight;
++		uint32_t *pixels = (uint32_t *)fPixels;
++		for (uint32_t y = 0; y < top; y++)
++			for (uint32_t x = 0; x < fWidth; x++)
++				pixels[(uint64_t)y * (fRowBytes / 4) + x] = 0xff000000u;
++		for (uint32_t y = bottom; y < fHeight; y++)
++			for (uint32_t x = 0; x < fWidth; x++)
++				pixels[(uint64_t)y * (fRowBytes / 4) + x] = 0xff000000u;
++	}
+ }
+ 
+ bool
+diff --git a/iokit/Kernel/arm/hid/SweetHID.cpp b/iokit/Kernel/arm/hid/SweetHID.cpp
+--- a/iokit/Kernel/arm/hid/SweetHID.cpp
++++ b/iokit/Kernel/arm/hid/SweetHID.cpp
+@@ -447,6 +447,6 @@
+ 	fLogicalW = fPanelW;
+ 	fLogicalH = fPanelH;
+-	if (!native && fPanelW <= 1125 && fPanelH <= 2436) {
++	if (!native) {
+ 		fLogicalW = 1125;
+ 		fLogicalH = 2436;
+ 	}

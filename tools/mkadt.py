@@ -295,7 +295,9 @@ def build_fp6(seed=None, phys_base=None, mem_size=None):
     display = node('disp0', [
         ph(), ('device_type', cstr('display-subsystem')),
         ('compatible', cstr('sweet,display')),
-        ('canvas-width', u32(1116)), ('canvas-height', u32(2484)),
+        # Match the iPhone X userland's real status-bar/display provider at 3x.
+        # AppleCLCD presents this logical canvas over the larger 1116x2484 FP6 panel.
+        ('canvas-width', u32(1125)), ('canvas-height', u32(2436)),
     ])
     gic_phandle = next(phandle)
     gic = node('gic', [

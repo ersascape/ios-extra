@@ -1566,3 +1566,16 @@ error::ResourceWarning -m unittest discover -s tests` (also with
   on this host; only `/usr/bin/clang` is installed. Thus 0131 is not yet
   validated against the cached XNU compile commands or a CI kernel build, and
   no SMMU write has been tested on the phone. Do not claim GPU/Metal execution.
+
+## FP6 iPhone X logical display canvas (2026-10-21)
+
+- Status-bar experiment 0130 changes FP6's logical display provider to
+  1125x2436 while preserving the stock 1116x2484 physical framebuffer. The
+  framebuffer offset math centers the logical canvas (4-pixel horizontal crop
+  per side and 24-pixel top/bottom bars); `present()` clears the unused rows.
+  SweetHID now reports the same logical dimensions. This targets iPhone X
+  userland layout and is separate from a native DSI/panel driver.
+- `tools/mkadt.py` generated an ADT whose parsed `sweet,display` node reports
+  canvas-width=1125 and canvas-height=2436. Patch 0130 applies cleanly to the
+  cached XNU source. No XNU CI build or phone observation has tested this yet;
+  it is included with the next GPU SMMU CI build at the user's request.
