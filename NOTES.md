@@ -144,7 +144,12 @@
   (core 0x0c400000 APID map +0x2000+4n, cnfg 0x0c42d000 owner +4n, obs
   0x0c440000 +0x20*apid; offsets checked in spmi-pmic-arb.c). The only MMIO
   write is the observer read command; `fp6keys=0` disables. Both compile
-  locally. Rails
+  locally.
+  CI `39557553973` (`9d9f1de`, before the Codex merge) passed. Image with
+  console visible and `fp6touch=2`:
+  `/tmp/fp6-keys-39557553973/img/fp6-shim-ufs-root-touch-keys-console.img`,
+  SHA256 `7008124cc16249af752d318806fef60efba97df12360f832aa27eaef8ee2abcc`,
+  temporarily booted 06:59:58 UTC; result pending. Rails
   (L22B/L9B) and PMIC are still untouched. Work is committed from a separate
   worktree on main because the shared checkout is on Codex's
   `fp6-adreno-gen711` branch.
