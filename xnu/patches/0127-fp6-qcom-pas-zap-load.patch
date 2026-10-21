@@ -107,7 +107,7 @@ index 3c4a9dd..0000000 100644
 +	unsigned char *image = (unsigned char *)(uintptr_t)mapped;
 +	memset(metadata, 0, 0x1000);
 +	memcpy(metadata, fp6_zap_metadata, sizeof(fp6_zap_metadata));
-+	clean_dcache64((addr64_t)FP6_ZAP_METADATA_PA, 0x1000, 1);
++	clean_dcache64((addr64_t)(uintptr_t)metadata, 0x1000, 0);
 +#if !defined(FP6_SCM_TEST)
 +	__asm__ volatile("dsb sy" ::: "memory");
 +#endif
@@ -122,7 +122,7 @@ index 3c4a9dd..0000000 100644
 +
 +	memset(image, 0, FP6_ZAP_IMAGE_SIZE);
 +	memcpy(image, fp6_zap_segment, sizeof(fp6_zap_segment));
-+	clean_dcache64((addr64_t)FP6_ZAP_IMAGE_PA, FP6_ZAP_IMAGE_SIZE, 1);
++	clean_dcache64((addr64_t)(uintptr_t)image, FP6_ZAP_IMAGE_SIZE, 0);
 +#if !defined(FP6_SCM_TEST)
 +	__asm__ volatile("dsb sy" ::: "memory");
 +#endif

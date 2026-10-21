@@ -247,8 +247,9 @@ static void smmu_sim(void)
 }
 
 void clean_dcache64(addr64_t addr, unsigned count, int phys) {
-    if (addr == 0x9ea9a000u || addr == 0x9ea9b000u) {
-        assert(count == 0x1000 && phys == TRUE);
+    if (addr == (addr64_t)(uintptr_t)zap_region ||
+        addr == (addr64_t)(uintptr_t)(zap_region + 0x1000)) {
+        assert(count == 0x1000 && phys == 0);
         clean_calls++;
         return;
     }

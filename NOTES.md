@@ -1466,3 +1466,20 @@ error::ResourceWarning -m unittest discover -s tests` (also with
   makes the patch series independent of that file's evolving context. Normal
   and ASan/UBSan host tests pass; a corrected CI build is still required before
   image packaging or phone testing.
+- Commit e998189 built successfully in CI run 39581455083. The FP6 boot job
+  skipped image packaging because the repository has no `FP6_STOCK_DTB_URL`.
+  Locally packaged the matching kernel/ADT with the verified stock `tree-04`
+  DTB and minimal RAM-disk init. Image
+  `/tmp/fp6-zap-39581455083/image/fp6-shim-fp6zap.img` uses `fp6gpu=1`,
+  `fp6pas=1`, `fp6zap=1`, `fp6touch=2`, and `fp6usb=2`; SHA256
+  `2438d333a1d0a5e10ccf3ed8601916a0db61d010b0b535267beeeca83c27fc94`.
+  The user booted it and reported this panic:
+  `phystokv_range: illegal PA: 0x9ea9b000 phys base 0x900000000 size 0x100000000 @arm_vm_init.c:406`.
+  Source audit confirms both ZAP cache-clean calls passed reserved carveout
+  physical addresses with `phys=TRUE`; `clean_dcache` then calls
+  `phystokv_range`, which rejects this carveout because it is outside XNU's
+  managed RAM range. Fix patch 0127 to clean through the `ml_io_map_wcomb`
+  virtual mapping (`phys=FALSE`). Updated the host harness to assert the mapped
+  virtual addresses/flag. Normal and ASan/UBSan suites pass. This correction
+  needs a new CI build and phone retest; the failed boot's USB NIC disappeared
+  before capture started, so no PAS/ZAP SMC result is available.
