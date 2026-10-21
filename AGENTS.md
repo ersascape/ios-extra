@@ -4,15 +4,21 @@
   (current state) before starting; `docs/GPU_GMU_BOOT.md` is the hardware and
   mainline reference, `docs/GPU_LOG.md` the full history. This is the experimental playground for
   `ios-sweet`, with its own Git history and GitHub remote.
-- Make experiments in `/home/dipa/ios-extra`. Treat `/home/dipa/ios-sweet` as
-  a read-only reference unless the user asks to integrate changes upstream.
+- Work in `/home/ersa/Dev/ios-extra-main` on branch `main`. This checkout's
+  only GitHub remote is `ersascape/ios-extra`; use that repository for every
+  push, build, log lookup, artifact download, and package record. Do not use
+  `dipa-studio/ios-extra` or another account's repository.
+- `/home/ersa/Dev/ios-extra` is a separate checkout with its own branch and
+  existing work. Do not copy changes between checkouts or modify it unless the
+  user asks. Treat `/home/dipa/ios-sweet` as read-only unless the user asks to
+  integrate changes upstream.
 - The imported baseline is upstream commit
   `347e19018e3e4c0117635e9e444f73659b2ece53`, patches 0001–0079.
   Preserve focused commits so working changes can be ported separately.
 - Update `NOTES.md` after milestones and before stopping. Distinguish source
   inspection, build results and phone observations. Record exact commits,
   CI run IDs, boot images, logs and unfinished work.
-- Commit completed changes. Use `gh` with `-R dipa-studio/ios-extra` for this
+- Commit completed changes. Use `gh` with `-R ersascape/ios-extra` for this
   repository's builds and logs. Local single-file cross-compiles can avoid
   unnecessary CI runs. Do not edit the upstream research tree to check an
   experiment: stage a separate build tree here or in external scratch space.
