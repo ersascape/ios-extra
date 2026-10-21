@@ -10,8 +10,9 @@ script_dir=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)
     exit 1
 }
 
-source_args=()
 if [[ -n "${FP6_GMU_SOURCE:-}" ]]; then
-    source_args=(--source "$FP6_GMU_SOURCE")
+    python3 "$script_dir/fp6-gmu-fw.py" --source "$FP6_GMU_SOURCE" \
+        --output bsd/dev/fp6_gmu_fw.h
+else
+    python3 "$script_dir/fp6-gmu-fw.py" --output bsd/dev/fp6_gmu_fw.h
 fi
-python3 "$script_dir/fp6-gmu-fw.py" --output bsd/dev/fp6_gmu_fw.h "${source_args[@]}"

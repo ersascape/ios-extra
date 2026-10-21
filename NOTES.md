@@ -20,9 +20,9 @@
   FP6 SMMU window has not been read by this build or tested on the phone.
 - Host GPU probe suite passes, including the new SMMU inventory case; the six
   GMU firmware parser tests pass and the staging shell script is tested against
-  the local pinned blob. CI run `39588975030` for commit `ddfd837` stopped before
-  compilation because the staging script resolved the parser relative to the
-  XNU source directory. The script now resolves it beside itself; a follow-up
+  the local pinned blob. CI runs `39588975030` and `39589703230` stopped in
+  staging before compilation: first the parser path was wrong, then macOS Bash
+  3.2 rejected an empty array under `set -u`. Both issues are fixed; the next
   CI run is pending. No GMU firmware has been loaded and no GPU commands have
   executed.
 
