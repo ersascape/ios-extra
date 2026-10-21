@@ -1,5 +1,21 @@
 # ios-extra — current state
 
+## FP6 GMU first boot patch (2026-10-21)
+
+- Patch 0140 (opt-in `fp6gmuboot=1`, after a successful `fp6gmuload=1`
+  upload; also needs `fp6smmu=2 fp6smmupower=1`) follows
+  `docs/FP6_GMU_FIRST_BOOT.md`: reserves noncached HFI (0x12000, 17 queues),
+  log (64 KiB) and VRB (4 KiB) first-fit from 0x60000000 before the domain is
+  frozen, fills the queue table/VRB header, re-arms the SID5 stream match,
+  masks all GMU interrupts, writes KGSL's register config (RPMH_POWER_STATE,
+  FAL, BOOT_CONFIG 2, HFI_QTBL, fence range 0x80c808a0, CM3_CFG 0x4052,
+  GBIF, GENERAL_8..11, caches), prints the DTCM firmware versions, releases
+  CM3 and polls FW_INIT_RESULT for 0x100 (100 ms, aborts on 0xe00), then
+  HFI_CTRL_INIT/STATUS. No HFI messages yet. Failure puts CM3 back into
+  reset, masks/clears interrupts and sets the fence to allow. Compiles
+  locally; host suite passes; no phone result. This would be the first GMU
+  firmware execution on FP6.
+
 ## FP6 first RPMh vote and CX power on the phone (2026-10-21)
 
 - No-spam GPU power test (`fp6smmu=2 fp6smmupower=1`, kernel `121a02d`,

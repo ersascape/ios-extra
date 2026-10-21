@@ -1,0 +1,196 @@
+--- a/bsd/dev/sweet_gpu.c
++++ b/bsd/dev/sweet_gpu.c
+@@ -2746,6 +2746,175 @@
+  __asm__ volatile("dsb sy" ::: "memory");
+  return d->frozen && !d->failed && !fp6_gmu_kernel_ready(ctx) ? 0 : -1;
+ }
++
++/*
++ * Gen8 GMU first boot (docs/FP6_GMU_FIRST_BOOT.md; KGSL hwsched order),
++ * opt-in fp6gmuboot=1 after a successful fp6gmuload=1 upload. Polled: every
++ * GMU interrupt stays masked. This step stops after HFI_CTRL_INIT; no HFI
++ * message is sent yet. On failure CM3 goes back into reset.
++ */
++#define FP6_GMU_HFI_SIZE        0x12000u        /* 840 + 16 + 17 x 4 KiB, page rounded */
++#define FP6_GMU_HFI_QUEUES      17u
++#define FP6_GMU_HFI_QUEUE0      0x350u          /* ALIGN(table, 16) */
++#define FP6_GMU_LOG_SIZE        0x10000u
++#define FP6_GMU_VRB_SIZE        0x1000u
++static uint32_t fp6_gmu_hfi_va, fp6_gmu_log_va, fp6_gmu_vrb_va;
++
++static int
++fp6_gmu_boot_wanted(void)
++{
++	int mode = 0;
++	return PE_parse_boot_argn("fp6gmuboot", &mode, sizeof(mode)) && mode == 1;
++}
++
++static uint8_t *
++fp6_gmu_range_va(uint32_t address)
++{
++	for (unsigned i = 0; i < fp6_gmu_domain.count; i++) {
++		struct fp6_gmu_domain_range *r = &fp6_gmu_domain.ranges[i];
++		if (r->complete && r->address == address) return r->backing.va;
++	}
++	return NULL;
++}
++
++/* KGSL GMU_NONCACHED_KERNEL: first fit from 0x60000000, below 0x80000000. */
++static uint32_t
++fp6_gmu_next_va(uint32_t size)
++{
++	uint64_t va = 0x60000000u;
++	for (unsigned i = 0; i < fp6_gmu_domain.count; i++) {
++		struct fp6_gmu_domain_range *r = &fp6_gmu_domain.ranges[i];
++		uint64_t end = (uint64_t)r->address + r->mapped_size;
++		if (r->address >= 0x60000000u && r->address < 0x80000000u && end > va) va = end;
++	}
++	return va + size > 0x80000000u ? 0 : (uint32_t)va;
++}
++
++/* Reserve HFI, log and VRB before the domain is published (frozen), and
++ * fill the queue table and VRB header so publish cleans them to memory. */
++static int
++fp6_gmu_boot_reserve(void)
++{
++	fp6_gmu_hfi_va = fp6_gmu_next_va(FP6_GMU_HFI_SIZE);
++	if (!fp6_gmu_hfi_va || fp6_gmu_domain_reserve(&fp6_gmu_domain, fp6_gmu_hfi_va, FP6_GMU_HFI_SIZE, 0)) return -1;
++	fp6_gmu_log_va = fp6_gmu_next_va(FP6_GMU_LOG_SIZE);
++	if (!fp6_gmu_log_va || fp6_gmu_domain_reserve(&fp6_gmu_domain, fp6_gmu_log_va, FP6_GMU_LOG_SIZE, 0)) return -1;
++	fp6_gmu_vrb_va = fp6_gmu_next_va(FP6_GMU_VRB_SIZE);
++	if (!fp6_gmu_vrb_va || fp6_gmu_domain_reserve(&fp6_gmu_domain, fp6_gmu_vrb_va, FP6_GMU_VRB_SIZE, 0)) return -1;
++	uint32_t *t = (uint32_t *)(void *)fp6_gmu_range_va(fp6_gmu_hfi_va);
++	uint32_t *vrb = (uint32_t *)(void *)fp6_gmu_range_va(fp6_gmu_vrb_va);
++	if (!t || !vrb) return -1;
++	/* hfi_queue_table: version, size (dwords), qhdr0 offset, qhdr size, num_q, num_active_q. */
++	t[0] = 0;
++	t[1] = (24u + FP6_GMU_HFI_QUEUES * 48u) / 4u;
++	t[2] = 6;
++	t[3] = 12;
++	t[4] = FP6_GMU_HFI_QUEUES;
++	t[5] = FP6_GMU_HFI_QUEUES;
++	/* CMD, MSG, DBG, then dispatch queues at priorities 0 x4, 1 x4, 2 x3, 3 x2, 4. */
++	static const uint8_t prio[FP6_GMU_HFI_QUEUES] = { 0, 0, 0, 0, 0, 0, 0, 1, 1, 1, 1, 2, 2, 2, 3, 3, 4 };
++	for (unsigned i = 0; i < FP6_GMU_HFI_QUEUES; i++) {
++		uint32_t *q = t + 6 + 12 * i;
++		q[0] = 1;                                               /* status: enabled */
++		q[1] = fp6_gmu_hfi_va + FP6_GMU_HFI_QUEUE0 + 0x1000u * i;
++		q[2] = i | ((uint32_t)prio[i] << 8);                    /* id | prio << 8 */
++		q[3] = 0x1000u / 4u;                                    /* size in dwords */
++		/* msg_size 0 (variable), unused, read_index 0, write_index 0 */
++	}
++	vrb[0] = FP6_GMU_VRB_SIZE / 4u;
++	printf("QCOM GMU: boot buffers HFI 0x%08x log 0x%08x VRB 0x%08x\n",
++	    fp6_gmu_hfi_va, fp6_gmu_log_va, fp6_gmu_vrb_va);
++	return 0;
++}
++
++static int
++fp6_gmu_poll(vm_offset_t g, uint32_t off, uint32_t mask, uint32_t want, uint32_t *last)
++{
++	for (unsigned i = 0; i < 1000; i++) {                   /* 100 us steps, 100 ms */
++		uint32_t v = fp6_smmu_read32(g, off);
++		*last = v;
++		if ((v & mask) == want) return 1;
++		if (off == 0x47070u && (v & 0xe00u)) return 0;          /* reset/NMI: firmware assert */
++		delay(100);
++	}
++	return 0;
++}
++
++static void
++fp6_gmu_first_boot(vm_offset_t smmu, uint32_t cb_off, uint32_t smr_off)
++{
++	vm_offset_t g = fp6_gmu_window;
++	vm_offset_t gbif = ml_io_map(0x03d0f000u, 0x1000u);
++	uint32_t v = 0;
++	if (!g || !gbif || !fp6_gmu_hfi_va) {
++		printf("QCOM GMU: first boot refused: buffers or windows missing\n");
++		return;
++	}
++	if (fp6_smmu_read32(g, 0x47000u) != 1u) {
++		printf("QCOM GMU: first boot refused: CM3 not held in reset\n");
++		return;
++	}
++	/* Route SID 5 to the persistent context (S2CR still points at it). */
++	fp6_smmu_write32(smmu, smr_off, (1u << 31) | FP6_SMMU_GMU_SID);
++	if (fp6_smmu_read32(smmu, smr_off) != ((1u << 31) | FP6_SMMU_GMU_SID)) {
++		printf("QCOM GMU: first boot refused: SID5 stream match not retained\n");
++		return;
++	}
++	/* Polled bring-up: every GMU-to-host and AO interrupt masked and cleared. */
++	fp6_smmu_write32(g, 0x4764cu, 0xffffffffu);
++	fp6_smmu_write32(g, 0x57c18u, 0xffffffffu);
++	fp6_smmu_write32(g, 0x47644u, 0xffffffffu);
++	fp6_smmu_write32(g, 0x57c10u, 0xffffffffu);
++	/* gen8_gmu_register_config */
++	fp6_smmu_write32(g, 0x46fa4u, 0xfu);                    /* RPMH_POWER_STATE */
++	fp6_smmu_write32(g, 0x46fb4u, 1u);                      /* CX_FALNEXT_INTF */
++	fp6_smmu_write32(g, 0x46fb0u, 1u);                      /* CX_FAL_INTF */
++	fp6_smmu_write32(g, 0x47070u, 0);                       /* CM3_FW_INIT_RESULT */
++	fp6_smmu_write32(g, 0x47004u, 2u);                      /* CM3_BOOT_CONFIG */
++	fp6_smmu_write32(g, 0x47614u, fp6_gmu_hfi_va);          /* HFI_QTBL_ADDR */
++	fp6_smmu_write32(g, 0x47610u, 1u);                      /* HFI_QTBL_INFO */
++	fp6_smmu_write32(g, 0x57c44u, 0x80c808a0u);             /* AHB_FENCE_RANGE_0 */
++	fp6_smmu_write32(g, 0x470b4u, 0x4052u);                 /* CM3_CFG */
++	for (uint32_t off = 0x00cu; off <= 0x018u; off += 4u)
++		fp6_smmu_write32(gbif, off, 0x00071e20u);       /* GBIF_QSB_SIDE0..3 */
++	fp6_smmu_write32(gbif, 0x000u, 0x20023000u);            /* GBIF_CX_CONFIG */
++	fp6_smmu_write32(gbif, 0x114u, 1u << 3);                /* GBIF_HALT: clear stale halt */
++	fp6_smmu_write32(g, 0x4772cu, fp6_gmu_vrb_va);          /* GENERAL_11: VRB */
++	fp6_smmu_write32(g, 0x47724u, 0);                       /* GENERAL_9: log write pointer */
++	fp6_smmu_write32(g, 0x47728u, 0x08030000u);             /* GENERAL_10: GMU rev 8.3.0 */
++	fp6_smmu_write32(g, 0x47720u, (fp6_gmu_log_va & 0xfffff000u) | 0xfu); /* GENERAL_8: 64 KiB log */
++	fp6_smmu_write32(g, 0x4603cu, 1u);                      /* SYS_BUS_CONFIG */
++	fp6_smmu_write32(g, 0x46000u, 1u);                      /* ICACHE_CONFIG */
++	fp6_smmu_write32(g, 0x46004u, 1u);                      /* DCACHE_CONFIG */
++	printf("QCOM GMU: firmware versions %08x %08x %08x %08x %08x (DTCM+0x3fe0..)\n",
++	    fp6_smmu_read32(g, 0x3dfe0u), fp6_smmu_read32(g, 0x3dfe4u), fp6_smmu_read32(g, 0x3dfe8u),
++	    fp6_smmu_read32(g, 0x3dfecu), fp6_smmu_read32(g, 0x3dff0u));
++	__asm__ volatile("dsb sy" ::: "memory");
++	printf("QCOM GMU: releasing CM3 (first GMU firmware execution)\n");
++	fp6_smmu_write32(g, 0x47000u, 0);                       /* CM3_SYSRESET */
++	int alive = fp6_gmu_poll(g, 0x47070u, 0x1ffu, 0x100u, &v);
++	printf("QCOM GMU: FW_INIT_RESULT=0x%08x %s intr_info=0x%08x ao_status=0x%08x cb_fsr=0x%08x\n",
++	    v, alive ? "(running)" : "(no 0x100)", fp6_smmu_read32(g, 0x47648u),
++	    fp6_smmu_read32(g, 0x57c14u), fp6_smmu_read32(smmu, cb_off + FP6_SMMU_CB_FSR));
++	if (alive) {
++		fp6_smmu_write32(g, 0x47618u, 1u);              /* HFI_CTRL_INIT */
++		int hfi = fp6_gmu_poll(g, 0x47600u, 1u, 1u, &v);
++		printf("QCOM GMU: HFI_CTRL_STATUS=0x%08x %s; GMU left running, interrupts masked\n",
++		    v, hfi ? "(HFI initialized)" : "(HFI init timeout)");
++		if (hfi) return;
++	}
++	/* Safe stop: CM3 back into reset, interrupts masked/cleared, fence allow. */
++	fp6_smmu_write32(g, 0x4764cu, 0xffffffffu);
++	fp6_smmu_write32(g, 0x57c18u, 0xffffffffu);
++	fp6_smmu_write32(g, 0x47644u, 0xffffffffu);
++	fp6_smmu_write32(g, 0x57c10u, 0xffffffffu);
++	fp6_smmu_write32(g, 0x57c50u, 7u);                      /* AHB_FENCE_STATUS_CLR */
++	fp6_smmu_write32(g, 0x57c40u, 0);                       /* AHB_FENCE_CTRL: allow */
++	fp6_smmu_write32(g, 0x47000u, 1u);                      /* CM3_SYSRESET */
++	printf("QCOM GMU: first boot failed; CM3 back in reset (SYSRESET=0x%08x)\n",
++	    fp6_smmu_read32(g, 0x47000u));
++}
++
+ /* Called only after temporary ATS passes. Success retains a persistent context;
+  * failure returns to caller's containment path, which disables SID and SCTLR. */
+ static int fp6_gmu_persistent_upload(vm_offset_t base, uint32_t cb_off,
+@@ -2781,6 +2950,9 @@
+   int kind = fp6_gmu_loader_vma(b->address, b->size);
+   if ((kind == 2 || kind == 4) && fp6_gmu_domain_copy(&fp6_gmu_domain, b->address, b->data, b->size)) return 0;
+  }
++ if (fp6_gmu_boot_wanted() && fp6_gmu_boot_reserve()) {
++  printf("QCOM GMU: boot buffer reservation failed\n"); return 0;
++ }
+  if (fp6_gmu_domain_publish(&fp6_gmu_domain)) return 0;
+  /* Block SID before disabling translation and changing TTBR. */
+  fp6_smmu_write32(base, smr_off, old_smr);
+@@ -2819,6 +2991,7 @@
+   fp6_gmu_kernel_copy, fp6_gmu_kernel_tcm, fp6_gmu_kernel_ready, fp6_gmu_kernel_published };
+  int result = fp6_gmu_loader_upload(&loader, &fp6_gmu_domain);
+  printf("QCOM GMU: persistent pages checked=%u firmware upload=%d CM3 held reset; SID disabled\n", checked, result);
++ if (result == 0 && fp6_gmu_boot_wanted()) fp6_gmu_first_boot(base, cb_off, smr_off);
+  return result == 0;
+ }
+ 
