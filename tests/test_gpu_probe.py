@@ -24,6 +24,18 @@ class GPUProbeTests(unittest.TestCase):
                     subprocess.run(['git', 'apply', '--include=bsd/dev/sweet_gpu.c',
                                     str(patch)], cwd=work, check=True)
             source = (work / 'bsd/dev/sweet_gpu.c').read_text()
+            source = source.replace('__asm__ volatile("dsb sy" ::: "memory");', '')
+            for name in ('fp6_gmu_loader.h',):
+                shutil.copyfile(ROOT / 'xnu/helpers' / name, work / name)
+            domain_patch = (ROOT / 'xnu/patches/0133-fp6-gmu-persistent-domain.patch').read_text()
+            (work / 'fp6_gmu_domain.h').write_text('\n'.join(line[1:] for line in domain_patch.splitlines() if line.startswith('+') and not line.startswith('+++')))
+            (work / 'fp6_gmu_fw.h').write_text(
+                'struct fp6_gmu_fw_preallocation { uint32_t address,size,type; };\n'
+                'struct fp6_gmu_fw_block { uint32_t address,size,type,value; const uint8_t *data; };\n'
+                '#define FP6_GMU_FW_PREALLOCATION_COUNT 1u\n#define FP6_GMU_FW_BLOCK_COUNT 1u\n'
+                'static const uint8_t payload[4] = {1,2,3,4};\n'
+                'static const struct fp6_gmu_fw_preallocation fp6_gmu_fw_preallocations[]={{0x60000000,4096,1}};\n'
+                'static const struct fp6_gmu_fw_block fp6_gmu_fw_blocks[]={{0x60000000,4,0xefbeadde,0xefbeadde,payload}};\n')
             barrier = '__asm__ volatile("dmb oshld" ::: "memory");'
             self.assertEqual(source.count(barrier), 4)  # SWEET 32/64-bit + FP6 GPUCC/SMMU barriers
             for name in ('dmb oshld', 'dmb oshst', 'dsb osh'):
@@ -120,6 +132,8 @@ static uint32_t fp6_gpucc[0x9800 / 4], fp6_gpucc_before[0x9800 / 4];
 static uint32_t fp6_smmu[0x40000 / 4];
 static uint32_t fp6_gcc_gpu[0x1000 / 4];
 static int fp6_clock_refuse = -1;
+static int fp6_power_mode;
+static uint32_t fp6_rsc[0x10000 / 4], fp6_cmd_db[0x20000 / 4];
 #define FP6_TEST_CB 2u
 #define FP6_TEST_CB_BASE 0x22000u
 static unsigned fp6_ats64_writes;
@@ -163,6 +177,18 @@ static int smmu_sticky; /* hardware that refuses to take the ABL default back in
 static void test_store32(vm_offset_t base, uint32_t off, uint32_t value)
 {
     all_mmio_writes++;
+    if (base == (vm_offset_t)fp6_rsc + 0xd00) {
+        if (off == 8) { fp6_rsc[(0xd00+4)/4] &= ~value; return; }
+        if (off == 0x24 && value == 0x1010000) {
+            fp6_rsc[(0xd00+4)/4] |= 1;
+            fp6_rsc[(0xd00+0x40)/4] = 0x10100;
+            fp6_rsc[(0xd00+0x28)/4] = 1;
+        }
+    }
+    if (base == (vm_offset_t)fp6_gpucc && fp6_power_mode) {
+        if (off == 0x9080 && !(value & 1u)) value |= 1u << 31;
+        if (off == 0x93ec && (value & 2u)) value &= ~((1u << 31) | 1u);
+    }
     if ((base == (vm_offset_t)fp6_gpucc &&
         ((fp6_clock_refuse == 0 && off == 0x7000) || (fp6_clock_refuse == 3 && off == 0x90bc))) ||
         (base == (vm_offset_t)fp6_gcc_gpu &&
@@ -408,6 +434,8 @@ int PE_parse_boot_argn(const char *name, void *value, int length)
 		if (fp6_mode != 0) memcpy(value, &fp6_mode, sizeof(fp6_mode));
 		return fp6_mode != 0;
 	}
+	if (strcmp(name, "fp6gmuload") == 0) { return 0; }
+	if (strcmp(name, "fp6smmupower") == 0) { memcpy(value, &fp6_power_mode, sizeof(fp6_power_mode)); return fp6_power_mode != 0; }
 	if (strcmp(name, "fp6smmu") == 0) {
 		assert(length == sizeof(fp6_smmu_mode));
 		if (fp6_smmu_mode != 0) memcpy(value, &fp6_smmu_mode, sizeof(fp6_smmu_mode));
@@ -429,6 +457,8 @@ vm_offset_t ml_io_map(vm_offset_t physical, vm_size_t size)
         return (vm_offset_t)fp6_smmu;
     }
     if (physical == 0x00171000 && size == sizeof(fp6_gcc_gpu)) return (vm_offset_t)fp6_gcc_gpu;
+    if (physical == 0x17a20000 && size == sizeof(fp6_rsc)) return (vm_offset_t)fp6_rsc;
+    if (physical == 0x81c60000 && size == sizeof(fp6_cmd_db)) return (vm_offset_t)fp6_cmd_db;
     map_calls++;
     if (physical == GPU_GCC_PA && size == GPU_GCC_SIZE)
         return fail_gcc ? 0 : (vm_offset_t)gcc;
@@ -1588,6 +1618,38 @@ int main(void)
     assert(fp6_smmu_clocks_get(&clocks)); fp6_smmu_clocks_put(&clocks);
     assert(all_mmio_writes == 0); /* Preserve all four borrowed votes. */
     puts("PASS: FP6 SMMU stock clock prerequisite votes and rollback");
+
+    /* FP6 RSCv3 command layout and actual CX/hub enable sequence. */
+    memset(fp6_cmd_db, 0, sizeof(fp6_cmd_db));
+    uint32_t arc_address = 0, arc_level = 0;
+    assert(!fp6_arc_level((vm_offset_t)fp6_cmd_db, 0, &arc_address, &arc_level));
+    fp6_cmd_db[4/4] = 0x0c0330dbu;
+    fp6_cmd_db[8/4] = (0x100u << 16) | 3u;
+    fp6_cmd_db[12/4] = (1u << 16) | 0x180u;
+    fp6_cmd_db[0x190/4] = 0x6c2e7863u;
+    fp6_cmd_db[0x194/4] = 0x00006c76u;
+    fp6_cmd_db[0x1a0/4] = 0x30000u;
+    fp6_cmd_db[0x1a4/4] = 6u;
+    fp6_cmd_db[0x210/4] = 64u << 16;
+    fp6_cmd_db[0x214/4] = 0x180u;
+    assert(fp6_arc_level((vm_offset_t)fp6_cmd_db, 0, &arc_address, &arc_level));
+    assert(arc_address == 0x30000u && arc_level == 2);
+    fp6_rsc[0] = 3u << 16;
+    fp6_rsc[0x0c/4] = (16u << 27) | (8u << 12);
+    fp6_rsc[(0xd00+0x28)/4] = 1;
+    fp6_gpucc[0x9080/4] = 1;
+    fp6_gpucc[0x93ec/4] = 0x80000000u;
+    fp6_power_mode = 1;
+    assert(fp6_smmu_clocks_get(&clocks));
+    assert(fp6_gpucc[0x9080/4] == 0x80000000u);
+    assert(fp6_gpucc[0x93f0/4] == 0x100001u);
+    assert(fp6_gpucc[0x93ec/4] == 2);
+    assert(fp6_rsc[(0xd00+0x38)/4] == 0x30000u);
+    assert(fp6_rsc[(0xd00+0x3c)/4] == 2);
+    assert(fp6_rsc[(0xd00+0x24)/4] == 0 && fp6_rsc[(0xd00+0x2c)/4] == 0);
+    fp6_smmu_clocks_put(&clocks);
+    fp6_power_mode = 0;
+    puts("PASS: FP6 RSCv3 CX ARC floor, GDSC and hub safe clock enable");
 
     /* fp6smmu=2: map one 4 KiB GMU SID5 IOVA, verify by ATOS, then roll back. */
     memset(fp6_smmu, 0, sizeof(fp6_smmu));

@@ -1,0 +1,132 @@
+diff --git a/bsd/dev/sweet_gpu.c b/bsd/dev/sweet_gpu.c
+--- a/bsd/dev/sweet_gpu.c
++++ b/bsd/dev/sweet_gpu.c
+@@ -2750,6 +2750,128 @@
+  return result == 0;
+ }
+ 
++/* GMU-only boot path; no reset writes and no CM3 release. Ownership is retained
++ * for this boot. A partial failure never authorizes TCM or CM3 execution. */
++static int
++fp6_gmu_branch_on(vm_offset_t base, uint32_t off, int poll)
++{
++	uint32_t value = fp6_smmu_read32(base, off);
++	if (value == 0xffffffffu) return 0;
++	fp6_smmu_write32(base, off, value | 1u);
++	if (!(fp6_smmu_read32(base, off) & 1u)) return 0;
++	if (!poll) { delay(10); return 1; }
++	return fp6_power_poll(base, off, 1u << 31, 0, 1000u);
++}
++
++static int
++fp6_gmu_rcg_set(vm_offset_t cc, uint32_t cmd, uint32_t config)
++{
++	uint32_t before = fp6_smmu_read32(cc, cmd), cfg = fp6_smmu_read32(cc, cmd + 4);
++	if (before == 0xffffffffu || cfg == 0xffffffffu) return 0;
++	/* Force parent root, change only source/div/mode/HW-control, latch update.
++	 * Preserve ROOT_EN for the persistent firmware domain. */
++	fp6_smmu_write32(cc, cmd, before | 2u);
++	uint32_t mask = 0x1fu | (7u << 8) | (3u << 12) | (1u << 20);
++	if (!fp6_power_write(cc, cmd + 4, (cfg & ~mask) | config)) return 0;
++	fp6_smmu_write32(cc, cmd, fp6_smmu_read32(cc, cmd) | 3u);
++	return fp6_power_poll(cc, cmd, (1u << 31) | 1u, 0, 1000u);
++}
++
++static int
++fp6_gmu_pll700(vm_offset_t cc)
++{
++	uint32_t mode = fp6_smmu_read32(cc, 0), l = fp6_smmu_read32(cc, 0x10);
++	uint32_t alpha = fp6_smmu_read32(cc, 0x14), user = fp6_smmu_read32(cc, 0x18);
++	uint32_t op = fp6_smmu_read32(cc, 4);
++	if (mode == 0xffffffffu || user == 0xffffffffu || (user & (1u << 25))) return 0;
++	int running = (mode & 1u) && op == 1u;
++	if ((l & 0xffffu) && ((l & 0xffffu) != 0x24u || alpha != 0x7555u)) {
++		printf("QCOM GMU: unsupported inherited PLL0 rate L=0x%x alpha=0x%x\n", l, alpha);
++		return 0;
++	}
++	if (running) {
++		/* Do not tune or change an enabled PLL. Even postdivider must match. */
++		return (mode & (1u << 31)) && ((user >> 10) & 15u) == 1u && (user & 7u) == 7u;
++	}
++	/* Reject another live consumer before configuring an unused PLL. */
++	uint32_t gmu_mux = (fp6_smmu_read32(cc, 0x931cu) >> 8) & 7u;
++	uint32_t hub_mux = (fp6_smmu_read32(cc, 0x93f0u) >> 8) & 7u;
++	if (hub_mux >= 1 && hub_mux <= 3) return 0;
++	if (gmu_mux >= 1 && gmu_mux <= 3 &&
++	    (!(fp6_smmu_read32(cc, 0x90d4u) & (1u << 31)) ||
++	     !(fp6_smmu_read32(cc, 0x9060u) & (1u << 31)))) return 0;
++	if (!(l & 0xffffu)) {
++		/* Exact gpucc-volcano 700MHz configuration, Lucid OLE register map.
++		 * Linux skips this configuration if boot firmware already set L. */
++		static const struct { uint32_t off, value; } setup[] = {
++			{0x10,0x44440024}, {0x14,0x7555}, {0x20,0x20485699},
++			{0x24,0x00182261}, {0x28,0x82aa299c}, {0x18,0x407},
++			{0x1c,5}, {0x30,3}, {0x34,0x00009000}, {0x38,0x00000034},
++		};
++		for (unsigned i = 0; i < sizeof(setup)/sizeof(setup[0]); i++)
++			if (!fp6_power_write(cc, setup[i].off, setup[i].value)) return 0;
++	} else {
++		/* Inherited correct frequency, disabled output: enable /2 and outputs. */
++		if (!fp6_power_write(cc, 0x18, (user & ~(15u << 10)) | (1u << 10) | 7u)) return 0;
++	}
++	/* Lucid OLE aliases EVO: RESET_N, RUN, LOCK_DET, OUTCTRL. */
++	fp6_smmu_write32(cc, 0, (mode & ~1u) | 4u);
++	if (!fp6_power_write(cc, 4, 1u)) return 0;
++	if (!fp6_power_poll(cc, 0, 1u << 31, 1u << 31, 1500u)) return 0;
++	fp6_smmu_write32(cc, 0, fp6_smmu_read32(cc, 0) | 1u);
++	return (fp6_smmu_read32(cc, 0) & 5u) == 5u;
++}
++
++static int
++fp6_gmu_clocks_prepare(struct fp6_smmu_clocks *clocks)
++{
++	vm_offset_t cc = clocks->gpucc;
++	if (!clocks->acquired || !cc || !clocks->gcc) return 0;
++	uint32_t cx = fp6_smmu_read32(cc, 0x9080u);
++	if (cx == 0xffffffffu || (cx & ((1u << 31) | 1u)) != (1u << 31)) return 0;
++	/* Access clocks first. No GMU/hub source or PLL changes before verifying
++	 * CM3 reset. Do not assert reset on a potentially inherited running GMU. */
++	if (!fp6_gmu_branch_on(cc, 0x90e4u, 1) ||
++	    !fp6_gmu_branch_on(clocks->gcc, 0x15cu, 0)) return 0;
++	vm_offset_t regs = ml_io_map(0x03d37000u, 0x68000u);
++	if (!regs) return 0;
++	uint32_t reset = fp6_smmu_read32(regs, 0x47000u);
++	if (reset != 1u) {
++		printf("QCOM GMU: clock preparation refused CM3_SYSRESET=0x%08x; access votes retained\n", reset);
++		return 0;
++	}
++	if (!fp6_floor_vote(0) || !fp6_floor_vote(1)) return 0;
++	/* HUB200MHz uses fixed GCC GPLL0 output600MHz /3. Validate the inherited
++	 * PLL rate rather than retuning a SoC-wide parent used by other devices. */
++	vm_offset_t gccpll = ml_io_map(0x00100000u, 0x1000u);
++	vm_offset_t votes = ml_io_map(0x00152000u, 0x1000u);
++	if (!gccpll || !votes) return 0;
++	uint32_t l = fp6_smmu_read32(gccpll, 0x10u) & 0xffffu;
++	uint32_t alpha = fp6_smmu_read32(gccpll, 0x14u) & 0xffffu;
++	uint64_t rate = (19200000ULL * (((uint64_t)l << 16) | alpha)) >> 16;
++	if (rate < 599999000ULL || rate > 600001000ULL) {
++		printf("QCOM GMU: inherited GCC GPLL0 rate unsupported=%llu\n", (unsigned long long)rate);
++		return 0;
++	}
++	uint32_t enable = fp6_smmu_read32(votes, 0x20u), branch = fp6_smmu_read32(votes, 0);
++	if (enable == 0xffffffffu || branch == 0xffffffffu ||
++	    !fp6_power_write(votes, 0x20u, enable | 1u) ||
++	    !fp6_power_poll(gccpll, 0, 1u << 31, 1u << 31, 1500u) ||
++	    !fp6_power_write(votes, 0, branch | (1u << 15))) return 0;
++	delay(10);
++	if (!fp6_gmu_pll700(cc)) return 0;
++	if (!fp6_gmu_rcg_set(cc, 0x93ecu, 0x100505u) ||
++	    !fp6_gmu_rcg_set(cc, 0x9318u, 0x100201u) ||
++	    !fp6_gmu_branch_on(cc, 0x90d4u, 1)) return 0;
++	/* Match Linux gpucc-volcano probe's always-on support gates. */
++	static const uint32_t gates[] = {0x93a4u,0x9008u,0x9010u,0x9064u,0x93a8u,0x9004u,0x90ccu};
++	for (unsigned i = 0; i < sizeof(gates)/sizeof(gates[0]); i++)
++		if (!fp6_gmu_branch_on(cc, gates[i], 0)) return 0;
++	if (fp6_smmu_read32(regs, 0x47000u) != 1u) return 0;
++	printf("QCOM GMU: CX/MX floor acknowledged; GMU350MHz HUB200MHz clocks enabled, CM3 held reset\n");
++	return 1;
++}
++
+ static void
+ fp6_smmu_inventory(void)
+ {

@@ -1,0 +1,166 @@
+diff --git a/bsd/dev/sweet_gpu.c b/bsd/dev/sweet_gpu.c
+--- a/bsd/dev/sweet_gpu.c
++++ b/bsd/dev/sweet_gpu.c
+@@ -2439,6 +2439,150 @@
+ 	return 0;
+ }
+ 
++#include "fp6_gmu_fw.h"
++#include "fp6_gmu_loader.h"
++#include "fp6_gmu_domain.h"
++
++static int fp6_gmu_clocks_prepare(struct fp6_smmu_clocks *);
++
++static struct fp6_gmu_domain fp6_gmu_domain;
++static vm_offset_t fp6_gmu_window;
++static int fp6_gmu_kernel_alloc(void *ctx, uint32_t size, struct fp6_gmu_domain_page *page)
++{
++ (void)ctx;
++ vm_offset_t va = 0;
++ vm_size_t bytes = (size + PAGE_MASK) & ~PAGE_MASK;
++ if (kmem_alloc_contig(kernel_map, &va, bytes, PAGE_MASK, 0, 0,
++     KMA_DATA | KMA_ZERO | KMA_PERMANENT, VM_KERN_MEMORY_IOKIT) != KERN_SUCCESS || !va) return -1;
++ ppnum_t ppn = pmap_find_phys(kernel_pmap, (addr64_t)va);
++ page->va = (uint8_t *)(uintptr_t)va;
++ page->pa = ptoa_64(ppn);
++ return !ppn || page->pa >= (1ULL << 36) ? -1 : 0;
++}
++static int fp6_gmu_kernel_publish(void *ctx, const void *va, uint32_t size)
++{
++ (void)ctx;
++ clean_dcache64((addr64_t)(uintptr_t)va, size, 0);
++ __asm__ volatile("dsb sy" ::: "memory");
++ return 0;
++}
++static int fp6_gmu_kernel_ready(void *ctx)
++{
++ (void)ctx;
++ return !fp6_gmu_window || fp6_smmu_read32(fp6_gmu_window, 0x47000u) != 1u;
++}
++static int fp6_gmu_kernel_tcm(void *ctx, uint32_t reg, uint32_t value)
++{
++ if (fp6_gmu_kernel_ready(ctx) ||
++     !((reg >= 0x1b400 && reg < 0x1c400) ||
++       (reg >= 0x1c400 && reg < 0x1d400))) return -1;
++ uint32_t off = (reg - 0xdc00u) * 4;
++ fp6_smmu_write32(fp6_gmu_window, off, value);
++ return fp6_smmu_read32(fp6_gmu_window, off) == value ? 0 : -1;
++}
++/* Frozen-domain loader callbacks verify identical already-published contents. */
++static int fp6_gmu_kernel_reserve(void *ctx, uint32_t address, uint32_t size, int cached)
++{
++ struct fp6_gmu_domain *d = ctx;
++ for (unsigned i = 0; i < d->count; i++) {
++  struct fp6_gmu_domain_range *r = &d->ranges[i];
++  if (r->complete && r->address == address && r->size == size && r->cached == cached) return 0;
++ }
++ return -1;
++}
++static int fp6_gmu_kernel_copy(void *ctx, uint32_t address, const uint8_t *data, uint32_t size)
++{
++ struct fp6_gmu_domain *d = ctx;
++ for (unsigned i = 0; i < d->count; i++) {
++  struct fp6_gmu_domain_range *r = &d->ranges[i];
++  if (r->complete && address >= r->address &&
++      (uint64_t)address + size <= (uint64_t)r->address + r->size)
++   return memcmp(r->backing.va + address - r->address, data, size) ? -1 : 0;
++ }
++ return -1;
++}
++static int fp6_gmu_kernel_published(void *ctx)
++{
++ struct fp6_gmu_domain *d = ctx;
++ __asm__ volatile("dsb sy" ::: "memory");
++ return d->frozen && !d->failed && !fp6_gmu_kernel_ready(ctx) ? 0 : -1;
++}
++/* Called only after temporary ATS passes. Success retains a persistent context;
++ * failure returns to caller's containment path, which disables SID and SCTLR. */
++static int fp6_gmu_persistent_upload(vm_offset_t base, uint32_t cb_off,
++ uint32_t smr_off, uint32_t old_smr, struct fp6_smmu_clocks *clocks)
++{
++ int mode = 0;
++ if (!PE_parse_boot_argn("fp6gmuload", &mode, sizeof(mode)) || mode != 1) return 0;
++ if (!fp6_gmu_clocks_prepare(clocks)) {
++  printf("QCOM GMU: upload refused: GMU power/clock preparation failed\n"); return 0;
++ }
++ /* Independently confirm running GMU roots after the power driver votes.
++  * GPUCC-volcano: CX_GMU/CXO branches, GMU RCG ROOT_OFF bit31. */
++ uint32_t gmu = fp6_smmu_read32(clocks->gpucc, 0x90d4);
++ uint32_t cxo = fp6_smmu_read32(clocks->gpucc, 0x90e4);
++ uint32_t root = fp6_smmu_read32(clocks->gpucc, 0x9318);
++ if (!(gmu & 1) || (gmu & (1u << 31)) || !(cxo & 1) ||
++     (cxo & (1u << 31)) || (root & (1u << 31))) {
++  printf("QCOM GMU: upload refused: inherited GMU clocks not running\n"); return 0;
++ }
++ fp6_gmu_window = ml_io_map(0x03d37000u, 0x68000u);
++ if (fp6_gmu_kernel_ready(NULL)) {
++  printf("QCOM GMU: upload refused: CM3 reset not held\n"); return 0;
++ }
++ static const struct fp6_gmu_domain_ops memory = { fp6_gmu_kernel_alloc, fp6_gmu_kernel_publish };
++ if (fp6_gmu_domain_init(&fp6_gmu_domain, &memory, NULL)) return 0;
++ for (unsigned i = 0; i < FP6_GMU_FW_PREALLOCATION_COUNT; i++) {
++  const struct fp6_gmu_fw_preallocation *p = &fp6_gmu_fw_preallocations[i];
++  int kind = fp6_gmu_loader_vma(p->address, p->size);
++  if ((kind == 2 || kind == 4) && fp6_gmu_domain_reserve(&fp6_gmu_domain, p->address, p->size, kind == 2)) return 0;
++ }
++ for (unsigned i = 0; i < FP6_GMU_FW_BLOCK_COUNT; i++) {
++  const struct fp6_gmu_fw_block *b = &fp6_gmu_fw_blocks[i];
++  int kind = fp6_gmu_loader_vma(b->address, b->size);
++  if ((kind == 2 || kind == 4) && fp6_gmu_domain_copy(&fp6_gmu_domain, b->address, b->data, b->size)) return 0;
++ }
++ if (fp6_gmu_domain_publish(&fp6_gmu_domain)) return 0;
++ /* Block SID before disabling translation and changing TTBR. */
++ fp6_smmu_write32(base, smr_off, old_smr);
++ if (fp6_smmu_read32(base, smr_off) != old_smr) return 0;
++ fp6_smmu_write32(base, cb_off + FP6_SMMU_CB_SCTLR, 0);
++ if (fp6_smmu_read32(base, cb_off + FP6_SMMU_CB_SCTLR)) return 0;
++ fp6_smmu_write64(base, cb_off + FP6_SMMU_CB_TTBR0, fp6_gmu_domain.root.pa);
++ if (fp6_smmu_read64(base, cb_off + FP6_SMMU_CB_TTBR0) != fp6_gmu_domain.root.pa) return 0;
++ fp6_smmu_write32(base, cb_off + FP6_SMMU_CB_TLBIALL, 0);
++ fp6_smmu_write32(base, cb_off + FP6_SMMU_CB_TLBSYNC, 0);
++ unsigned polls;
++ for (polls = 0; polls < 1000; polls++) {
++  if (!(fp6_smmu_read32(base, cb_off + FP6_SMMU_CB_TLBSTATUS) & 1)) break;
++  delay(10);
++ }
++ if (polls == 1000) return 0;
++ fp6_smmu_write32(base, cb_off + FP6_SMMU_CB_SCTLR, 0x27);
++ if (fp6_smmu_read32(base, cb_off + FP6_SMMU_CB_SCTLR) != 0x27) return 0;
++ unsigned checked = 0;
++ for (unsigned i = 0; i < fp6_gmu_domain.count; i++) {
++  struct fp6_gmu_domain_range *r = &fp6_gmu_domain.ranges[i];
++  for (uint32_t n = 0; n < r->mapped_size; n += 4096) {
++   fp6_smmu_write64(base, cb_off + FP6_SMMU_CB_ATS1PR, (uint64_t)r->address + n);
++   for (polls = 0; polls < 1000; polls++) {
++    if (!(fp6_smmu_read32(base, cb_off + FP6_SMMU_CB_ATSR) & 1)) break;
++    delay(10);
++   }
++   uint64_t par = fp6_smmu_read64(base, cb_off + FP6_SMMU_CB_PAR);
++   if (polls == 1000 || (par & 1) || (par & 0x0000fffffffff000ULL) != r->backing.pa + n) {
++    printf("QCOM GMU: persistent ATS failed IOVA=0x%x PAR=0x%llx\n", r->address + n, (unsigned long long)par);return 0;
++   }
++   checked++;
++  }
++ }
++ const struct fp6_gmu_loader_ops loader = { fp6_gmu_kernel_reserve,
++  fp6_gmu_kernel_copy, fp6_gmu_kernel_tcm, fp6_gmu_kernel_ready, fp6_gmu_kernel_published };
++ int result = fp6_gmu_loader_upload(&loader, &fp6_gmu_domain);
++ printf("QCOM GMU: persistent pages checked=%u firmware upload=%d CM3 held reset; SID disabled\n", checked, result);
++ return result == 0;
++}
++
+ static void
+ fp6_smmu_inventory(void)
+ {
+@@ -2677,6 +2816,11 @@
+ 		    (unsigned long long)expected, passed);
+ 	} else {
+ 		printf("QCOM SMMU: GMU SID5 ATOS timed out\n");
++	}
++
++	if (passed && fp6_gmu_persistent_upload(base, cb_off, smr_off, old_smr, &clocks)) {
++		printf("QCOM GMU: retaining persistent context and clock votes; no firmware execution yet\n");
++		return;
+ 	}
+ 
+ rollback:
