@@ -21,7 +21,14 @@
 - Image (wifimac ADT, console muted, `fp6touch=2`):
   `/tmp/fp6-touch-39554419254/img/fp6-shim-ufs-root-touch.img`, SHA256
   `39175f461e09eeb9dd2f1af9ecf225841cee49f28646f4a9ff8345820ffbf6b0`.
-  Temporarily booted 06:23:21 UTC (`fastboot boot` OKAY); result pending.
+  Temporarily booted 06:23:21 UTC (`fastboot boot` OKAY). User report: touch
+  failed with `QGENI SE0: no usable 32-bit FIFO`; exact if_disable/hw values
+  pending from the user's logs. No controller access happened (the check
+  precedes any SPI transfer). Stock Volcano DT wires SE0 SPI to GPI DMA
+  (`gpi_dma0` @0xa00000, SID 0x576, gpii-mask 0x3e, static-gpii-mask 0x01;
+  QUP wrapper SID 0x563), so FIFO-disabled GSI firmware is the leading
+  explanation, not yet confirmed. Chosen direction: a polled GPI DMA path in
+  qcom_geni (research in progress).
   The driver does not touch reset, L22B/L9B or PMIC; slider polarity
   (mainline: GPIO 107 high = muted) is unverified.
 
