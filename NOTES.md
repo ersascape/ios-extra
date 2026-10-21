@@ -1,5 +1,24 @@
 # ios-extra — current state
 
+## FP6 atomic ATS image, existing ECM transport (2026-10-21)
+
+- CI `39627541732` passed for `2a068b7c182bce5b11bf6bffe3b47d702683e3c4`.
+  Downloaded kernel SHA-256
+  `0b7a4b4c47fb28dc3275250241ab235065ffc672e82d18a5db16babb85d1f3db`
+  matched its CI SHA256SUMS before packaging.
+- Packaged `/tmp/fp6-smmu-2a068b7/image/fp6-shim-ufsroot-smmu-atomic.img`,
+  SHA-256 `bec67541d4c5d0b08d985f03e65201004aa833d9e4741fc9ee04ea94b8e6a9c4`.
+  Uses the verified selected FP6 stock DTB (`81985341...`), UFS root,
+  `fp6smmu=2`, `fp6usb=2`, `fp6touch=2`, `fp6pas=1`, eight CPUs and quiet
+  console defaults. Header-v2 payload/shim/DTB round-trip checks passed.
+  No Tegu transport changes are included; no phone test has run.
+- Work on an EP0 host-pull log console is an external draft only:
+  `/tmp/fp6-usb-ep0-log-console.draft.patch`. It sketches an EP0-only mode3,
+  serial-callback polling and deferred SMMU test after USB startup. It is not
+  in the patch series or any kernel/image. Host reader, protocol tests, deferred
+  test harness stubs and full kernel validation remain unfinished. Do not apply
+  it unchanged. The firmware port remains incomplete: no GMU execution yet.
+
 ## FP6 atomic ATS correction and reference correction (2026-10-21)
 
 - Source inspection found a protocol error in patch 0131: AArch64 ATS1PR was
