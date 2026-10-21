@@ -1,5 +1,14 @@
 # ios-extra — current state
 
+## FP6 GPU SMMU: TCR2 passes, FSR FORMAT bits (2026-10-21)
+
+- Boot of CI `39650403002` (`b919d67`, 0143), 18:19:12 UTC, USB log:
+  `TCR2 wrote 0x00038011 read 0x00038071` (accepted), then `setup failed:
+  fault clear +0x22058 want=0x00000000 got=0x00000400`, `contained=1
+  route_live=0 bank_reserved=1`. FSR 0x400 is FORMAT (bits 10:9 = 0b10,
+  AArch64 context), read-only, not a fault. Patch 0144 checks only Linux's
+  ARM_SMMU_FSR_FAULT bits (0xc00001fe). Compiles locally; host suite passes.
+
 ## FP6 GPU SMMU context bank live; TCR2 TBI bits (2026-10-21)
 
 - Boot of CI `39649157006` (`ebae218`, 0141/0142), 18:09:17 UTC; full boot

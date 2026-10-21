@@ -1,0 +1,14 @@
+--- a/bsd/dev/sweet_gpu.c
++++ b/bsd/dev/sweet_gpu.c
+@@ -3352,7 +3352,10 @@
+ 	FP6_SMMU_WRITE_CHECK(cb_off + FP6_SMMU_CB_MAIR1, 0u);
+ 	fp6_smmu_write32(base, cb_off + FP6_SMMU_CB_FSR, 0xffffffffu); /* W1C stale faults */
+ 	uint32_t fsr_after_clear = fp6_smmu_read32(base, cb_off + FP6_SMMU_CB_FSR);
+-	if (fsr_after_clear != 0) {
++	/* Only arm-smmu.h ARM_SMMU_FSR_FAULT bits (MULTI, SS, UUT, ASF, TLBLKF,
++	 * TLBMCF, EF, PF, AFF, TF) are faults. FSR[10:9] FORMAT is read-only
++	 * (0b10 = AArch64 context from CBA2R.VA64); FP6 reads 0x400 here. */
++	if (fsr_after_clear & 0xc00001feu) {
+ 		failure = "fault clear"; fail_off = cb_off + FP6_SMMU_CB_FSR;
+ 		fail_got = fsr_after_clear;
+ 		goto rollback;
