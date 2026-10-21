@@ -1348,12 +1348,27 @@ error::ResourceWarning -m unittest discover -s tests` (also with
   path was skipped. The sender now always emits the already-framed raw packet,
   retains its ring position on `ENOBUFS`, and waits 5 ms between successful
   packets to let the gadget's 32-entry TX queue drain.
-- Source is based on CI build tree for run 39565043535 (success, head
-  0755f4d2f6343b06cc0f5d31d31460b096330d3d). The modified `sweet_usb.c` passes
-  `tools/xnu-cc.py` against that build tree (`0 of 1 files failed`) using local
-  Clang 23. CI run 39568643454 failed before compilation because its patch runner
-  rejects zero-context diffs. Patch 0125 now uses standard context and passes
-  `git apply` against the same source; the corrected CI run is pending. No
-  packaged image or phone result exists yet. The user's live tcpdump capture is
-  the next evidence for the current image; the new sender needs a separate build
-  and temporary boot before it can be called fixed.
+- Source was based on CI build tree for run 39565043535 (success, head
+  0755f4d2f6343b06cc0f5d31d31460b096330d3d). The modified `sweet_usb.c` passed
+  `tools/xnu-cc.py` against that tree (`0 of 1 files failed`) using local Clang
+  23. Initial CI run 39568643454 failed before compilation because the patch
+  runner rejects zero-context diffs. Patch 0125 was regenerated with standard
+  context, passed `git apply`, and built successfully in CI run 39569106154 on
+  e21a51767ef7ca68ca796bb840431c8ef7810044. The CI build-tree `sweet_usb.c`
+  matches the locally compiled file byte-for-byte (SHA-256
+  `5f6d78f1a5f1120ee4e8f1b98de803a98d54e34a7490f2474e51cbf307e220c7`).
+- CI's `fp6-boot` skipped packaging because `FP6_STOCK_DTB_URL` is unset. The
+  kernel checksum passed (`601288b0a5ae4ac1af9d870a269673205be1856b75f72f7da48131c809bdf100`);
+  ADT SHA-256 is `401b10b78b7d4d0480b630c76b78d3e2bbbfd2da1753bc1382e797ba54474f8a`.
+  Locally packaged and header-v2 round-trip checked
+  `/tmp/fp6-usb-39569106154/image/fp6-shim-ufs-root-pas-touch-usb-raw-paced.img`,
+  SHA-256 `d25383cdb095111d6c8c600f2a0943eebc3f96ba31b37e1082a094945cdd6c01`,
+  using the verified stock DTB (SHA-256
+  `8198534128258bfe7b05bbb5b227affc181aa49b376884c08eae8564fce124e3`). Its
+  args keep `fp6pas=1`, `fp6touch=2`, `fp6usb=2`, and the console visible.
+- User's current tcpdump capture contained 233 UDP/5140 packets / 40,249 decoded
+  bytes at inspection time. Decoded lines include kernel `CRASH assetsd` records
+  and `exec ReportMemoryException`; this is not an About-specific stack trace.
+  Capture remains active for the new-image test. `fastboot devices` returned
+  zero, so this image has not been booted and the USB change is not yet
+  phone-verified.
