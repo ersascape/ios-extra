@@ -1,5 +1,43 @@
 # ios-extra — current state
 
+## FP6 userspace stall after early boot (2026-10-21)
+
+- Phone observation (user report, image from CI run `39545845250`): libignition
+  at `ignition_level=1` prints "failed to write persona, ignition level
+  insufficient" (a skipped stage, as on SWEET) and continues; level 3 fails on
+  the missing Preboot volume, as on SWEET. Boot then reaches early boot
+  complete: bindfs firmware mount message, MKB init passes, "Could not get
+  options entry from the device tree" (no NVRAM node, also on SWEET), a
+  bluetoothd/xpcproxy relaunch loop (no hardware, also on SWEET), `logd
+  privilege 1002 denied` (0064 log), MobileGestalt AKS/IOKit call returning 0.
+  No backboardd activity and no `SWEET SURF` lines.
+- Source audit against SWEET's working path found FP6 lacked: the iPhone X
+  identity (ADT root `FP6`, chip-id `0x7635`, no security-status or
+  `display-scale`; 0059 kept the macOS `hw.machine`/`hw.model`), 0052
+  RENAME_SWAP fallback (the fix before SWEET's backboardd milestone), 0031
+  `rootrw=1` (passed by the FP6 package but compiled out), 0039 core dumps off,
+  and the 0042/0043/0048 exec/crash/tee diagnostics.
+- Commit `5e9a9a0` widens those patch guards to FP6; `90f6c55` gives the FP6
+  ADT Sweet's D22AP / iPhone10,3 / D22 identity, chip-id `0x8015`, the
+  security-status tuple and `display-scale` 3. The `disp0` canvas stays
+  1116x2484 because AppleCLCD reports the native size when the panel is taller
+  than 2436. `b043585` commits the pending 0041 HFS diagnostic cap for FP6.
+  Local arm64 compile was not possible (no Apple clang here); CI is the build
+  check.
+- ADT-only test image (old kernel from CI `39545845250`, new local ADT with
+  `/product`, stock DTB `16a9e60e...`, default UFS-root args):
+  `/tmp/fp6-identity-39545845250/fp6-shim-ufs-root-identity.img`, SHA256
+  `33e7f7c2624d45864408a374074a841c7bcd0a42a8b890175750bc362cf57420`.
+  Header-v2 validation passed; not yet booted. It tests the ADT identity
+  without the 0059 `hw.machine`/`hw.model` change or the other kernel fixes.
+  A MobileGestalt cache written under the old FP6 identity may need clearing.
+- Not changed, from review: 0108 with the macOS Edge scheduler leaves P cores
+  4–7 mostly idle (E→P migration/steal disallowed; throughput only); 0100
+  probe images ignore `ufsrw=1`; 0105 SMMU geometry decode and power-query
+  timeout cleanup are latent; 0114 socket-first send can report success while
+  ARP holds the packet, hiding the raw fallback; the persistent log flush
+  (0047) stays SWEET-only.
+
 ## FP6/SWEET launch diagnostics and USB logger (2026-10-21)
 
 - Patch 0111 replaces the kernel logger's routed UDP socket sends with complete
