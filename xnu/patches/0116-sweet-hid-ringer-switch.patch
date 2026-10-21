@@ -1,0 +1,131 @@
+--- a/iokit/Kernel/arm/hid/SweetHID.cpp
++++ b/iokit/Kernel/arm/hid/SweetHID.cpp
+@@ -323,13 +323,18 @@
+ 
+ /*
+  * Buttons. iOS takes the side/volume/home buttons as consumer-control
+- * keyboard events (AppleM68Buttons publishes the same usage pair).
++ * keyboard events (AppleM68Buttons publishes the same usage pair). The
++ * ring/silent switch is a Telephony RingEnable key: down while the ringer
++ * is on, up while silent. Its position is also returned by copyEvent and
++ * repeated to each new client, so iOS learns it without a switch change.
+  */
+ class SweetHIDButtons : public IOHIDEventService {
+ 	OSDeclareDefaultStructors(SweetHIDButtons);
+ public:
+ 	virtual bool start(IOService *provider) APPLE_KEXT_OVERRIDE;
+-	void key(UInt32 usage, bool down);
++	virtual bool open(IOService *client, IOOptionBits options, void *context, Action action) APPLE_KEXT_OVERRIDE;
++	virtual IOHIDEvent *copyEvent(IOHIDEventType type, IOHIDEvent *matching, IOOptionBits options) APPLE_KEXT_OVERRIDE;
++	void key(UInt32 page, UInt32 usage, bool down);
+ protected:
+ 	virtual UInt32 getPrimaryUsagePage() APPLE_KEXT_OVERRIDE { return kHIDPage_Consumer; }
+ 	virtual UInt32 getPrimaryUsage() APPLE_KEXT_OVERRIDE { return kHIDUsage_Csmr_ConsumerControl; }
+@@ -339,6 +344,7 @@
+ 	IOTimerEventSource *fTest;
+ 	UInt32 fTestSecs;
+ 	UInt32 fTestCount;
++	int fRinger;            /* -1 unknown, 0 silent, 1 ringer on */
+ };
+ OSDefineMetaClassAndStructors(SweetHIDButtons, IOHIDEventService);
+ 
+@@ -382,6 +388,7 @@
+ bool
+ SweetHIDButtons::start(IOService *provider)
+ {
++	fRinger = -1;
+ 	if (!IOHIDEventService::start(provider)) {
+ 		return false;
+ 	}
+@@ -398,18 +405,48 @@
+ }
+ 
+ void
+-SweetHIDButtons::key(UInt32 usage, bool down)
++SweetHIDButtons::key(UInt32 page, UInt32 usage, bool down)
+ {
+-	IOHIDEvent *event = IOHIDEvent::keyboardEvent(mach_absolute_time(), kHIDPage_Consumer, usage, down);
++	if (page == kHIDPage_Telephony && usage == kHIDUsage_Tfon_RingEnable) {
++		fRinger = down ? 1 : 0;
++	}
++	IOHIDEvent *event = IOHIDEvent::keyboardEvent(mach_absolute_time(), page, usage, down);
+ 
+ 	if (event) {
+-		IOLog("SWEET HID: key 0x%x %s (%u clients)\n", (unsigned)usage, down ? "down" : "up",
+-		    _clients ? _clients->getCount() : 0);
++		IOLog("SWEET HID: key 0x%x/0x%x %s (%u clients)\n", (unsigned)page, (unsigned)usage,
++		    down ? "down" : "up", _clients ? _clients->getCount() : 0);
+ 		dispatchEvent(event);
+ 		event->release();
+ 	}
+ }
+ 
++bool
++SweetHIDButtons::open(IOService *client, IOOptionBits options, void *context, Action action)
++{
++	if (!IOHIDEventService::open(client, options, context, action)) {
++		return false;
++	}
++	if (fRinger >= 0) {
++		key(kHIDPage_Telephony, kHIDUsage_Tfon_RingEnable, fRinger != 0);
++	}
++	return true;
++}
++
++IOHIDEvent *
++SweetHIDButtons::copyEvent(IOHIDEventType type, IOHIDEvent *matching, IOOptionBits options __unused)
++{
++	if (type != kIOHIDEventTypeKeyboard || fRinger < 0) {
++		return NULL;
++	}
++	if (matching &&
++	    ((UInt32)matching->getIntegerValue(kIOHIDEventFieldKeyboardUsagePage) != kHIDPage_Telephony ||
++	    (UInt32)matching->getIntegerValue(kIOHIDEventFieldKeyboardUsage) != kHIDUsage_Tfon_RingEnable)) {
++		return NULL;
++	}
++	return IOHIDEvent::keyboardEvent(mach_absolute_time(), kHIDPage_Telephony,
++	           kHIDUsage_Tfon_RingEnable, fRinger != 0);
++}
++
+ void
+ SweetHIDButtons::testFired(OSObject *owner, IOTimerEventSource *sender)
+ {
+@@ -420,7 +457,7 @@
+ 	 * screen waits for it. Even counts press, odd counts release.
+ 	 */
+ 	bool press = (self->fTestCount & 1) == 0;
+-	self->key(kHIDUsage_Csmr_Menu, press);
++	self->key(kHIDPage_Consumer, kHIDUsage_Csmr_Menu, press);
+ 	if (++self->fTestCount < 60) {
+ 		sender->setTimeoutMS(press ? 100 : self->fTestSecs * 1000);
+ 	}
+@@ -558,17 +595,23 @@
+ 	collection->release();
+ }
+ 
+-/* key: 0 power (side button), 1 volume up, 2 volume down, 3 home */
++/*
++ * key: 0 power (side button), 1 volume up, 2 volume down, 3 home,
++ * 4 ring/silent switch (down = ringer on, up = silent)
++ */
+ extern "C" void
+ sweet_hid_key(int key, int down)
+ {
+-	static const UInt32 usages[] = {
+-		kHIDUsage_Csmr_Power, kHIDUsage_Csmr_VolumeIncrement,
+-		kHIDUsage_Csmr_VolumeDecrement, kHIDUsage_Csmr_Menu,
++	static const UInt32 keys[][2] = {
++		{ kHIDPage_Consumer, kHIDUsage_Csmr_Power },
++		{ kHIDPage_Consumer, kHIDUsage_Csmr_VolumeIncrement },
++		{ kHIDPage_Consumer, kHIDUsage_Csmr_VolumeDecrement },
++		{ kHIDPage_Consumer, kHIDUsage_Csmr_Menu },
++		{ kHIDPage_Telephony, kHIDUsage_Tfon_RingEnable },
+ 	};
+ 
+-	if (gSweetButtons && key >= 0 && key < (int)(sizeof(usages) / sizeof(usages[0]))) {
+-		gSweetButtons->key(usages[key], down != 0);
++	if (gSweetButtons && key >= 0 && key < (int)(sizeof(keys) / sizeof(keys[0]))) {
++		gSweetButtons->key(keys[key][0], keys[key][1], down != 0);
+ 	}
+ }
+ 
