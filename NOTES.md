@@ -14,12 +14,17 @@
 - Patch 0112 adds `sweet_noconsole=1` as an alias for
   `sweetfb_noconsole=1`. Both mute framebuffer console drawing after the first
   GUI swap; persistent logging and panic drawing are preserved.
-- Patch 0113 fixes a real FP6 gap: `sweet_amfi.c` includes the permissive
-  `Sandbox` MAC policy for FP6, but the prior `bsd_init.c` call-site guard was
-  SWEET-only, so FP6 never registered that policy. Patch 0113 widens the call
-  guard to FP6 before root mount/process startup. A clean replay of 0099–0113
-  passed. This registers the policy but does not synthesize individual
-  sandbox profiles or container metadata; the next CI build is pending.
+- The attempted patch 0113 was redundant: existing patch 0035 already registers
+  `sweet_amfi_policy_register()` for SWEET and FP6. CI applied 0035 and then
+  failed when 0113 tried to rewrite the same call site. Removed 0113 from the
+  series. This registers the permissive policy but does not provide individual
+  sandbox profile files or container metadata.
+- `tools/fp6-package.py` now puts the README's kernel diagnostics into the
+  default FP6 images (`debug=0xc`, serial console, symbols, and kprintf spam),
+  starts the FP6 USB logger with `fp6usb=2`, and uses the UFS-root/write,
+  launchd, watchdog, and framebuffer arguments used in the previous test
+  packages. SWEET-only `sweetnull`/heap-scan/IOKit-trace selectors are not
+  treated as active FP6 diagnostics.
 - Updated `tools/sweet-root-tweaks.py` to change any launchd stdout/stderr
   override from `/dev/console` to `/dev/null`; the diagnostic-only
   `tools/patch-launchd-plist.py` uses `/dev/null` as well. The current local
@@ -147,15 +152,11 @@
 
 ## FP6 SWEET userspace-enablement patch audit (2026-10-20)
 
-- Correction from the 2026-10-21 clean replay: patch 0099 makes
-  `sweet_amfi.c` (including the permissive `Sandbox` MAC policy) compile for
-  FP6, but the replayed `bsd_init.c` registration call remains guarded by
-  `ARM64_BOARD_CONFIG_SWEET` only. Patch 0035's current copy contains the FP6
-  guard, but that change is absent from the source state after replaying the
-  existing patch baseline. Patch 0113 widens the call-site guard to FP6, so
-  `sweet_amfi_policy_register()` actually runs on that board. This registers
-  the permissive stand-in; it does not supply the individual sandbox profile
-  files or container metadata that some services may request.
+- Patch 0035 registers `sweet_amfi_policy_register()` for SWEET and FP6. A
+  later local replay gave a conflicting result, but the CI failure log confirms
+  patch 0035 is applied before the redundant 0113 call-site rewrite. The
+  permissive stand-in does not supply individual sandbox profile files or
+  container metadata that some services may request.
 - The FP6 `MASTER.arm64.fp6` config introduced by patch 0099 already omits
   `config_ext_resolver`, matching the effective SWEET configuration from
   patch 0057. Patch 0108 enables the AMP scheduler. Its CI build passed; phone

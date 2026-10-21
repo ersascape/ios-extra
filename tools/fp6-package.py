@@ -11,6 +11,12 @@ import sys
 import mkpayload
 
 ROOT = Path(__file__).resolve().parents[1]
+FP6_DEBUG_ARGS = 'debug=0xc serial=3 cpus=8 keepsyms=1 -enable_kprintf_spam -noprogress'
+FP6_UFS_ARGS = (
+    'rd=ufsroot0 fp6usb=2 unentitled_ios_sim_launch=1 ignition_level=1 '
+    'wdt_test=no_user_checkin ufsrw=1 rootrw=1 launchd_unsecure_cache=1 wdt=-1 '
+    'sweetfb_noconsole=1 sweet_noconsole=1 sweetfb_hz=30'
+)
 
 def main():
     ap = argparse.ArgumentParser(description=__doc__)
@@ -42,10 +48,16 @@ def main():
         ap.error('--ufs-root custom --cmdline must include rd=ufsroot0')
     if args.ufs_probe and args.cmdline and 'fp6ufsprobe=1' not in args.cmdline.split():
         ap.error('--ufs-probe custom --cmdline must include fp6ufsprobe=1')
-    cmdline = args.cmdline or ('debug=0xc serial=3 cpus=8 keepsyms=1 -noprogress' +
-                               (' rd=ufsroot0' if args.ufs_root else
-                                ' rd=md0 fp6ufsprobe=1 fp6gpio=1 fp6touch=1' if args.ufs_probe else
-                                ' rd=md0' if args.ramdisk else ''))
+    if args.cmdline:
+        cmdline = args.cmdline
+    elif args.ufs_root:
+        cmdline = FP6_DEBUG_ARGS + ' ' + FP6_UFS_ARGS
+    elif args.ufs_probe:
+        cmdline = FP6_DEBUG_ARGS + ' rd=md0 fp6ufsprobe=1 fp6gpio=1 fp6touch=1 fp6usb=2'
+    elif args.ramdisk:
+        cmdline = FP6_DEBUG_ARGS + ' rd=md0 fp6usb=2'
+    else:
+        cmdline = FP6_DEBUG_ARGS
     payload, info = mkpayload.build(str(args.kernel), str(args.adt), cmdline,
                                     str(args.ramdisk) if args.ramdisk else None)
     payload_path = out / 'fp6-payload.bin'
