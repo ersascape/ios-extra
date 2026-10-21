@@ -48,7 +48,11 @@
   ALLOCATE x2, program, START x2) and per transfer CONFIG0+GO+TX DMA / RX DMA
   TREs with EOT polling. The touch driver now also sets GPIO 107 and 19 to
   pull-up inputs and releases reset on GPIO 20 (low 10 ms, high, 300 ms).
-  Local arm64 compile passed; not built in CI or booted yet. Rails
+  Local arm64 compile passed. CI `39556553401` (head `9cdc23a`) build
+  passed; kernel SHA256SUMS verified. Image (wifimac ADT, console muted,
+  `fp6touch=2`): `/tmp/fp6-gpi-39556553401/img/fp6-shim-ufs-root-gpi-touch.img`,
+  SHA256 `85424b1ece61a39be62d9c97c91089bbf8bb7e884b168c94b0b416cb43f8b54d`,
+  temporarily booted 06:43:30 UTC; result pending. Rails
   (L22B/L9B) and PMIC are still untouched. Work is committed from a separate
   worktree on main because the shared checkout is on Codex's
   `fp6-adreno-gen711` branch.
