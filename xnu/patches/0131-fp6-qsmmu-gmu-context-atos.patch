@@ -90,7 +90,7 @@ diff --git a/bsd/dev/sweet_gpu.c b/bsd/dev/sweet_gpu.c
  	    FP6_GPU_SMMU_PA, FP6_GPU_SMMU_SIZE);
  	printf("QCOM SMMU: IDR0=0x%08x IDR1=0x%08x IDR2=0x%08x IDR7=0x%08x sCR0=0x%08x sGFSR=0x%08x\n",
  	    id0, id1, id2, id7, scr0, gfsr);
-@@ -2382,6 +2428,168 @@
+@@ -2382,6 +2428,173 @@
  		}
  	}
  	printf("QCOM SMMU: context banks with nonzero state=%u/%u\n", active_cbs, numcb);
@@ -136,13 +136,14 @@ diff --git a/bsd/dev/sweet_gpu.c b/bsd/dev/sweet_gpu.c
 +		uint64_t off = cb_base + ((uint64_t)i << pgshift);
 +		if (off + 0x1000u > FP6_GPU_SMMU_SIZE) break;
 +		uint32_t sctlr = fp6_smmu_read32(base, (uint32_t)off + FP6_SMMU_CB_SCTLR);
++		uint32_t fsr = fp6_smmu_read32(base, (uint32_t)off + FP6_SMMU_CB_FSR);
 +		uint32_t tcr2 = fp6_smmu_read32(base, (uint32_t)off + FP6_SMMU_CB_TCR2);
 +		uint32_t ttbr_lo = fp6_smmu_read32(base, (uint32_t)off + FP6_SMMU_CB_TTBR0);
 +		uint32_t ttbr_hi = fp6_smmu_read32(base, (uint32_t)off + FP6_SMMU_CB_TTBR0 + 4u);
 +		uint32_t tcr = fp6_smmu_read32(base, (uint32_t)off + FP6_SMMU_CB_TCR);
 +		uint32_t mair0 = fp6_smmu_read32(base, (uint32_t)off + FP6_SMMU_CB_MAIR0);
 +		uint32_t mair1 = fp6_smmu_read32(base, (uint32_t)off + FP6_SMMU_CB_MAIR1);
-+		if (cbar == 0 && cba2r == 0 && sctlr == 0 && tcr2 == 0 &&
++		if (cbar == 0 && cba2r == 0 && sctlr == 0 && fsr == 0 && tcr2 == 0 &&
 +		    ttbr_lo == 0 && ttbr_hi == 0 && tcr == 0 && mair0 == 0 && mair1 == 0) { cb = i; break; }
 +	}
 +	if (group == numsmrg || cb == numcb) {
@@ -186,19 +187,18 @@ diff --git a/bsd/dev/sweet_gpu.c b/bsd/dev/sweet_gpu.c
 +	fp6_smmu_write32(base, (off), (val)); \
 +	if (fp6_smmu_read32(base, (off)) != (val)) goto rollback; \
 +} while (0)
-+	FP6_SMMU_WRITE_CHECK(cb_off + FP6_SMMU_CB_TCR2, 1u);
++	/* Linux arm-smmu: SEP=upstream, AS=AArch64, PASIZE=36 bits. */
++	FP6_SMMU_WRITE_CHECK(cb_off + FP6_SMMU_CB_TCR2, 0x00038011u);
 +	FP6_SMMU_WRITE_CHECK(cb_off + FP6_SMMU_CB_TCR, 32u | (2u << 12) | (1u << 23));
 +	FP6_SMMU_WRITE_CHECK(cb_off + FP6_SMMU_CB_TTBR0, (uint32_t)table_pa);
 +	FP6_SMMU_WRITE_CHECK(cb_off + FP6_SMMU_CB_TTBR0 + 4u, (uint32_t)(table_pa >> 32));
 +	FP6_SMMU_WRITE_CHECK(cb_off + FP6_SMMU_CB_MAIR0, 0x44u);
 +	FP6_SMMU_WRITE_CHECK(cb_off + FP6_SMMU_CB_MAIR1, 0u);
 +	FP6_SMMU_WRITE_CHECK(cba2r_off, 1u);
-+	FP6_SMMU_WRITE_CHECK(cbar_off, 1u << 16);
-+	FP6_SMMU_WRITE_CHECK(cb_off + FP6_SMMU_CB_SCTLR, 0x27u);
-+	FP6_SMMU_WRITE_CHECK(s2cr_off, cb);
-+	FP6_SMMU_WRITE_CHECK(smr_off, (1u << 31) | FP6_SMMU_GMU_SID);
-+	route_live = 1;
-+
++	/* S1, non-shareable walk config, weakest WB memory type (Linux CBAR defaults). */
++	FP6_SMMU_WRITE_CHECK(cbar_off, 0x0001f300u);
++	fp6_smmu_write32(base, cb_off + FP6_SMMU_CB_FSR, 0xffffffffu); /* W1C stale faults */
++	if (fp6_smmu_read32(base, cb_off + FP6_SMMU_CB_FSR) != 0) goto rollback;
 +	fp6_smmu_write32(base, cb_off + FP6_SMMU_CB_TLBIALL, 0);
 +	fp6_smmu_write32(base, cb_off + FP6_SMMU_CB_TLBSYNC, 0);
 +	unsigned tlb_polls;
@@ -207,6 +207,11 @@ diff --git a/bsd/dev/sweet_gpu.c b/bsd/dev/sweet_gpu.c
 +		delay(10);
 +	}
 +	if (tlb_polls == 1000) goto rollback;
++	FP6_SMMU_WRITE_CHECK(cb_off + FP6_SMMU_CB_SCTLR, 0x27u);
++	FP6_SMMU_WRITE_CHECK(s2cr_off, cb);
++	FP6_SMMU_WRITE_CHECK(smr_off, (1u << 31) | FP6_SMMU_GMU_SID);
++	route_live = 1;
++
 +	fp6_smmu_write64(base, cb_off + FP6_SMMU_CB_ATS1PR, FP6_SMMU_GMU_IOVA);
 +	unsigned ats_polls;
 +	for (ats_polls = 0; ats_polls < 1000; ats_polls++) {

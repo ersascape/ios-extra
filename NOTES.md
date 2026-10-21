@@ -1579,3 +1579,22 @@ error::ResourceWarning -m unittest discover -s tests` (also with
   canvas-width=1125 and canvas-height=2436. Patch 0130 applies cleanly to the
   cached XNU source. No XNU CI build or phone observation has tested this yet;
   it is included with the next GPU SMMU CI build at the user's request.
+
+## FP6 GMU SMMU context programming correction (2026-10-21)
+
+- Rechecked the `fp6smmu=2` context image against the local Fairphone
+  `drivers/iommu/arm/arm-smmu` implementation. The initial probe omitted the
+  AArch64/SEP fields in `TCR2` and Linux's S1 defaults in `CBAR`. It now uses
+  `TCR2=0x00038011` (upstream SEP, AArch64 AS, 36-bit output PA) and
+  `CBAR=0x0001f300` (S1 plus NSH walk configuration and WB fallback).
+  `TCR=0x00802020` remains T0SZ=32, outer-shareable table walk, and EPD1;
+  the 4 KiB TG0 encoding is zero. The probe refuses a context with nonzero
+  FSR, clears stale W1C faults, invalidates/synchronizes its TLB before
+  enabling the context, and installs the SID5 route last.
+- Extended the FP6 MMIO harness to model FSR W1C behavior and require the
+  expected `TCR2`, `CBAR`, and FSR-clear writes. The complete 11-test host suite
+  passes; the GPU harness also passes ASan/UBSan, and `git diff --check` is
+  clean. This is source/model validation only: the corrected source has not
+  yet passed XNU CI or an arm64 XNU compile, and no SMMU write has been tested
+  on the phone. Do not use the earlier 0131 build for a translated-context
+  phone test.

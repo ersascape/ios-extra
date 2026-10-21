@@ -119,6 +119,7 @@ static uint32_t gcc[0x90000 / 4], cc[0x9000 / 4];
 static uint32_t fp6_gpucc[0x9800 / 4], fp6_gpucc_before[0x9800 / 4];
 static uint32_t fp6_smmu[0x40000 / 4];
 static uint32_t fp6_refuse_off; static unsigned fp6_refuse_nth, fp6_refuse_count;
+static uint32_t fp6_seen_tcr2, fp6_seen_cbar, fp6_seen_fsr_clear;
 static int present, mode, map_calls, fail_gcc, fail_cc;
 static int fp6_mode, fp6_smmu_mode;
 static unsigned fp6_map_calls, fp6_smmu_maps;
@@ -193,6 +194,11 @@ static void test_store32(vm_offset_t base, uint32_t off, uint32_t value)
     }
     if (base == (vm_offset_t)fp6_smmu && off == fp6_refuse_off &&
         fp6_refuse_nth && ++fp6_refuse_count == fp6_refuse_nth) return;
+    if (base == (vm_offset_t)fp6_smmu && value == 0x00038011u) fp6_seen_tcr2 = value;
+    if (base == (vm_offset_t)fp6_smmu && value == 0x0001f300u) fp6_seen_cbar = value;
+    if (base == (vm_offset_t)fp6_smmu && (off & 0xfffu) == 0x58 && value == 0xffffffffu) {
+        fp6_seen_fsr_clear = 1; value = 0; /* Context FSR is write-one-to-clear. */
+    }
     if (base == (vm_offset_t)fp6_smmu && (off == 0x20800 || off == 0x20804))
         fp6_smmu[0x208f0/4] = 1;
     if (smmu_sticky && base == (vm_offset_t)smmu_mem &&
@@ -1544,11 +1550,13 @@ int main(void)
     fp6_smmu[0x00/4] = 0x002c0406u;
     for (unsigned i = 0; i < 24; i++) fp6_smmu[(0xc00 + 4*i)/4] = 0x000200ffu;
     fp6_smmu_mode = 2; fp6_last_ats = 0; fake_pa_base = 0x90000000ull;
+    fp6_seen_tcr2 = fp6_seen_cbar = fp6_seen_fsr_clear = 0;
     fail_alloc = 0; alloc_calls = clean_calls = 0; all_mmio_writes = 0;
     output[0] = 0;
     fp6_smmu_inventory();
     assert(alloc_calls == 1 && clean_calls == 1 && clean_bytes == 0x3000);
     assert(all_mmio_writes > 0 && strstr(output, "ATOS IOVA=0x60000000"));
+    assert(fp6_seen_tcr2 == 0x00038011u && fp6_seen_cbar == 0x0001f300u && fp6_seen_fsr_clear);
     assert(strstr(output, "passed=1") && strstr(output, "rollback_ok=1 route_live=0"));
     assert(fp6_smmu[0x800/4] == 0 && fp6_smmu[0xc00/4] == 0x000200ffu);
     assert(fp6_smmu[0x20000/4] == 0 && fp6_smmu[0x20020/4] == 0 &&
