@@ -1,0 +1,61 @@
+--- a/bsd/dev/sweet_gpu.c
++++ b/bsd/dev/sweet_gpu.c
+@@ -2255,6 +2255,8 @@
+ 
+ __startup_func
+ static void fp6_smmu_inventory(void);
++static void fp6_smmu_fault_irq_inventory(void);
++static uint32_t fp6_smmu_read32(vm_offset_t, uint32_t);
+ static void
+ fp6_adreno_startup(void)
+ {
+@@ -2262,10 +2264,49 @@
+ 	fp6_qcom_pas_probe();
+ 	fp6_qcom_pas_zap_load();
+ 	fp6_smmu_inventory();
++	fp6_smmu_fault_irq_inventory();
+ }
+ STARTUP(EARLY_BOOT, STARTUP_RANK_LAST, fp6_adreno_startup);
+ #endif /* ARM64_BOARD_CONFIG_FP6 */
+ 
++/* The stock FP6 DT assigns the first qsmmu-v500 global-fault interrupt SPI
++ * 0x2a1 (GIC INTID 0x2a1 + 32 = 705). Read the distributor state only; this
++ * diagnostic does not mask it or change any interrupt routing. */
++#if defined(ARM64_BOARD_CONFIG_FP6)
++#define FP6_GICD_PA           0x17100000u
++#define FP6_GICD_SIZE         0x00010000u
++#define FP6_SMMU_GFAULT_INTID 705u
++#define FP6_GICD_ISENABLER(n) (0x100u + ((n) / 32u) * 4u)
++#define FP6_GICD_ISPENDR(n)   (0x200u + ((n) / 32u) * 4u)
++#define FP6_GICD_ICFGR(n)     (0xc00u + ((n) / 16u) * 4u)
++
++static void
++fp6_smmu_fault_irq_inventory(void)
++{
++	int mode = 0;
++	if (!PE_parse_boot_argn("fp6smmuirq", &mode, sizeof(mode)) || mode == 0)
++		return;
++	if (mode != 1) {
++		printf("QCOM GIC: unsupported fp6smmuirq=%d (0=off, 1=read-only SMMU IRQ state)\n", mode);
++		return;
++	}
++	vm_offset_t gicd = ml_io_map(FP6_GICD_PA, FP6_GICD_SIZE);
++	if (gicd == 0) {
++		printf("QCOM GIC: distributor map failed; SMMU global IRQ state unknown\n");
++		return;
++	}
++	uint32_t bit = 1u << (FP6_SMMU_GFAULT_INTID % 32u);
++	uint32_t typer = fp6_smmu_read32(gicd, 0x004u);
++	uint32_t enable = fp6_smmu_read32(gicd, FP6_GICD_ISENABLER(FP6_SMMU_GFAULT_INTID));
++	uint32_t pending = fp6_smmu_read32(gicd, FP6_GICD_ISPENDR(FP6_SMMU_GFAULT_INTID));
++	uint32_t config = fp6_smmu_read32(gicd, FP6_GICD_ICFGR(FP6_SMMU_GFAULT_INTID));
++	printf("QCOM GIC: SMMU global IRQ SPI=0x2a1 INTID=%u GICD_TYPER=0x%08x enable=0x%08x pending=0x%08x config=0x%08x enabled=%u edge=%u; read-only, no DMA-safe claim\n",
++	    FP6_SMMU_GFAULT_INTID, typer, enable, pending, config,
++	    (enable & bit) != 0,
++	    (config & (2u << ((FP6_SMMU_GFAULT_INTID % 16u) * 2u))) != 0);
++}
++#endif /* ARM64_BOARD_CONFIG_FP6 */
++
+ /* Read-only inspection of the dedicated FP6 qsmmu-v500. It does not claim
+  * SID ownership, allocate a context, issue ATOS, or change SMMU state. */
+ #if defined(ARM64_BOARD_CONFIG_FP6)

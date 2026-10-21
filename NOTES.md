@@ -22,20 +22,21 @@
   Header-v2 payload, shim, and embedded-DTB round-trip checks passed. This is
   a packaged image only; it has not been booted on the phone.
 
-## FP6 SMMU ATOSNS software-walk draft (2026-10-22)
+## FP6 SMMU ATOSNS software walk (2026-10-22)
 
 - Reviewed `/tmp/claude-1000/-home-ersa-Dev-ios-extra/febca858-d68f-4e09-bdd9-8bdf4a7eb119/scratchpad/gmu-boot4.log`. The boot reports GPU SMMU `IDR0=0x4c017e18`; after the CB TCR2 readback it logs `context-bank ATOS IOVA=0x60000000 PAR=0x0 expected=0x90361b000 passed=0`, then contains the failure before any master runs. IDR0 bit 26 (`ATOSNS`) is set, so the zero PAR is consistent with unsupported ATOS rather than evidence of a bad PTE. The same log's setup reached TCR2 but does not include a successful TCR readback.
-- Patch `0145-fp6-smmu-soft-walk.patch` is an uncommitted draft. Its CPU walk uses the configured 4 KiB SMMU granule and T0SZ=32, and it checks the expected physical page for both the temporary table and persistent GMU table ranges when ATOSNS is set. It does not prove SMMU table fetch, SID5 routing or GMU DMA.
+- Patch `0145-fp6-smmu-soft-walk.patch` uses the configured 4 KiB SMMU granule and T0SZ=32, and checks the expected physical page for both temporary and persistent GMU table ranges when ATOSNS is set. CI `39663527285` passed on `ced5799`; the packaged image and phone result are recorded above. It does not prove SMMU table fetch, SID5 routing or GMU DMA.
 - Replaced the persistent-table physical-address scan (up to 2,048 candidate L3 entries on every page walk) with direct L1/L2/L3 selection from the IOVA, while retaining physical-address checks. Corrected the patch hunk count; `git apply --numstat` parses it. Host coverage now checks the ATOSNS path issues no ATS write and returns the expected PA, and checks direct persistent table lookup at all three levels.
-- `python3 tests/test_gpu_probe.py` passes. Full host suite: 12 tests pass normally and with ASan/UBSan (`ASAN_OPTIONS=detect_leaks=0`). No full XNU build, CI run or phone test has been made for 0145; hardware testing remains pending.
+- `python3 tests/test_gpu_probe.py` passes. Full host suite: 12 tests pass normally and with ASan/UBSan (`ASAN_OPTIONS=detect_leaks=0`). The phone report passes the software walk; no screen confirmation is recorded.
 
 ## Current FP6 GPU path
 
 The target is FP6 Adreno 810 Gen8.3. The immediate sequence is:
 
-1. Build patch 0145 in XNU CI and validate its temporary SMMU context test on the phone. The host ATOSNS and table-walk tests now pass. Keep CM3 held in reset; a software walk validates CPU-visible PTEs, not a hardware SMMU fetch or SID5 route.
-2. After the SMMU context test passes, validate the bounded first GMU start in patch 0140: firmware upload, CM3 release/init result, and initial HFI controller status. This is the first GMU execution attempt; do not infer success from firmware upload or a software table walk.
-3. After GMU startup/HFI succeeds, validate GMU-driven GPU power-up, then SQE/CP initialization and one bounded command that writes a known value to mapped memory. GPU execution and a Metal bridge are not yet established.
+1. Patch 0145's ATOSNS software walk passed on the phone: IOVA `0x60000000` mapped to expected PA `0x903617000`. The SMMU context was left disabled/reserved, so this is CPU-visible PTE validation only.
+2. Patch 0146 adds an opt-in read-only GIC check for the stock SMMU global-fault SPI (0x2a1 / INTID 705), reporting enable, pending, and trigger configuration without writes. Host normal and ASan/UBSan tests pass; full XNU CI and phone result are pending. This check does not contain global faults.
+3. Keep CM3 held in reset until the global-fault interrupt has a measured containment path. Then make one bounded first GMU start, prove its init/HFI status, and retain its mapped buffers until reset is verified. GMU DMA and GPU execution have not been measured.
+4. After GMU startup/HFI succeeds, validate GMU-driven GX power, SQE/CP initialization, then one bounded command that writes a known value to mapped memory. GPU execution and a Metal bridge are not established.
 
 Phone work uses the repository's temporary-boot helper and fastboot checks described below. Source/host results and phone measurements are recorded separately. See [FP6 GMU first boot](docs/FP6_GMU_FIRST_BOOT.md) and [FP6 SMMU power](docs/FP6_SMMU_POWER.md) for implementation details.
 

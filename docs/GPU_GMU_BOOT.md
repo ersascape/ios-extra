@@ -294,6 +294,15 @@ masks do not cover SMMU faults. Resolve/test global-fault containment before
 first DMA; preserve fault recording and translation, never assume exact SID5
 ATOS proves real master routing. No sCR0 write has been made.
 
+Patch 0146 adds the opt-in `fp6smmuirq=1` read-only GIC distributor inventory
+for this source. In the selected stock FP6 DTB, `kgsl-smmu@3da0000` declares
+one global interrupt, SPI specifier `0x2a1`; with the GIC SPI offset this is
+INTID 705. GICD `ISENABLER` word offset `0x158` (bit 1), `ISPENDR` `0x258`,
+and `ICFGR` `0xcb0` (field bits 3:2) report enabled, pending, and edge/level
+configuration. The probe only reads these words and `GICD_TYPER`; it does not
+mask, clear, or reroute the interrupt. This tells us whether the source is
+currently enabled, but does not prove delivery handling or make GMU DMA safe.
+
 ## Rails and clocks (0082-0085)
 
 ARC raw level tables from the command DB (hardware requests carry the table **index**,

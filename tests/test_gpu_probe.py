@@ -117,6 +117,7 @@ class GPUProbeTests(unittest.TestCase):
             self.assertIn('PASS: FP6 GPUCC inventory is opt-in, read-only, and bounded', result.stdout)
             self.assertIn('PASS: FP6 Qualcomm SCM PAS query is opt-in and never authenticates firmware', result.stdout)
             self.assertIn('PASS: FP6 signed ZAP PAS load is opt-in, stage-ordered, and shuts down on failure', result.stdout)
+            self.assertIn('PASS: FP6 SMMU global IRQ inventory is opt-in, read-only, and bounded', result.stdout)
             self.assertIn('PASS: FP6 Adreno work starts from its dedicated EARLY_BOOT hook', result.stdout)
 
 
@@ -141,6 +142,7 @@ static int probe_printf(const char *, ...);
 static uint32_t gcc[0x90000 / 4], cc[0x9000 / 4];
 static uint32_t fp6_gpucc[0x9800 / 4], fp6_gpucc_before[0x9800 / 4];
 static uint32_t fp6_smmu[0x40000 / 4];
+static uint32_t fp6_gicd[0x10000 / 4];
 static uint32_t fp6_gcc_gpu[0x1000 / 4];
 static int fp6_clock_refuse = -1;
 static int fp6_power_mode;
@@ -155,6 +157,8 @@ static int fp6_mode, fp6_smmu_mode;
 static unsigned fp6_map_calls, fp6_smmu_maps;
 static int fp6_pas_mode;
 static int fp6_zap_mode, zap_map_fail;
+static int fp6_smmu_irq_mode, fail_fp6_gicd_map;
+static unsigned fp6_gicd_maps;
 static uint64_t scm_status[2], scm_value[2], scm_fid[2], scm_arginfo[2], scm_arg0[2];
 static unsigned scm_calls;
 static struct { uint64_t fid, arginfo, arg0, arg1, arg2, status, value; } scm_full[8];
@@ -453,6 +457,11 @@ int PE_parse_boot_argn(const char *name, void *value, int length)
 		if (fp6_smmu_mode != 0) memcpy(value, &fp6_smmu_mode, sizeof(fp6_smmu_mode));
 		return fp6_smmu_mode != 0;
 	}
+	if (strcmp(name, "fp6smmuirq") == 0) {
+		assert(length == sizeof(fp6_smmu_irq_mode));
+		if (fp6_smmu_irq_mode != 0) memcpy(value, &fp6_smmu_irq_mode, sizeof(fp6_smmu_irq_mode));
+		return fp6_smmu_irq_mode != 0;
+	}
     assert(strcmp(name, "sweetgpu") == 0 && length == sizeof(mode));
     if (present) memcpy(value, &mode, sizeof(mode));
     return present;
@@ -460,6 +469,10 @@ int PE_parse_boot_argn(const char *name, void *value, int length)
 
 vm_offset_t ml_io_map(vm_offset_t physical, vm_size_t size)
 {
+    if (physical == 0x17100000 && size == sizeof(fp6_gicd)) {
+        fp6_gicd_maps++;
+        return fail_fp6_gicd_map ? 0 : (vm_offset_t)fp6_gicd;
+    }
     if (physical == 0x03d90000 && size == sizeof(fp6_gpucc)) {
         fp6_map_calls++;
         return (vm_offset_t)fp6_gpucc;
@@ -1598,6 +1611,31 @@ int main(void)
     assert(strstr(output, "CB2 CBAR=0x00001234 CBA2R=0x00005678"));
     assert(strstr(output, "read-only inventory complete; no writes or ATOS requests"));
     puts("PASS: FP6 GPU SMMU route inventory is opt-in and read-only");
+
+    /* Read the SMMU global-fault SPI state from the GIC distributor; no write,
+     * clear, affinity change, or firmware start is permitted in this probe. */
+    memset(fp6_gicd, 0, sizeof(fp6_gicd));
+    fp6_smmu_irq_mode = 0; fp6_gicd_maps = 0; fail_fp6_gicd_map = 0;
+    fp6_smmu_fault_irq_inventory();
+    assert(fp6_gicd_maps == 0);
+    fp6_smmu_irq_mode = 2;
+    fp6_smmu_fault_irq_inventory();
+    assert(fp6_gicd_maps == 0 && strstr(output, "unsupported fp6smmuirq=2"));
+    fp6_smmu_irq_mode = 1; fail_fp6_gicd_map = 1;
+    fp6_smmu_fault_irq_inventory();
+    assert(fp6_gicd_maps == 1 && strstr(output, "distributor map failed"));
+    fail_fp6_gicd_map = 0;
+    fp6_gicd[0x004/4] = 0x00000007u; /* GICD_TYPER */
+    fp6_gicd[0x158/4] = 1u << 1;     /* INTID 705 enabled */
+    fp6_gicd[0x258/4] = 0;           /* no pending global fault */
+    fp6_gicd[0xcb0/4] = 2u << 2;     /* SPI level/edge config field for INTID 705 */
+    uint32_t gic_before[0x10000/4]; memcpy(gic_before, fp6_gicd, sizeof(gic_before));
+    int gic_writes_before = all_mmio_writes;
+    fp6_smmu_fault_irq_inventory();
+    assert(fp6_gicd_maps == 2 && all_mmio_writes == gic_writes_before);
+    assert(!memcmp(gic_before, fp6_gicd, sizeof(gic_before)));
+    assert(strstr(output, "INTID=705") && strstr(output, "enabled=1 edge=1"));
+    puts("PASS: FP6 SMMU global IRQ inventory is opt-in, read-only, and bounded");
 
     /* Clock prerequisites use the exact stock DT consumer order, borrow the
      * powered CX domain, and release only enable votes acquired here. */

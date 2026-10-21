@@ -72,6 +72,14 @@ No host RSCC/PDC init on Gen8 (firmware/AOP). The RSCC wake handshake
 (`RSCC_CONTROL_REQ`=BIT1, ACK BIT1, rscc `SEQ_BUSY_DRV0` 0x3d50404 == 0) is
 used only after a sleep sequence.
 
+Before permitting the GMU to become an SMMU master, inspect the SMMU global
+fault interrupt independently. The stock FP6 DT assigns global SPI 0x2a1
+(GIC INTID 705); GMU AO/HFI masks do not cover it. Patch 0146's
+`fp6smmuirq=1` only reads GICD enable, pending, and trigger configuration. It
+does not contain or mask the source, so a positive read-only result is not
+authorization to release CM3. The first DMA attempt remains gated on a
+separate, measured global-fault containment step and verified rollback.
+
 ## HFI (hwsched)
 
 - Queue table: header 6 dwords {version 0, size dwords, qhdr0_offset 6,
