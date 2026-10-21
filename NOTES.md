@@ -1,5 +1,30 @@
 # ios-extra — current state
 
+## FP6 touch, HID services and ring switch (2026-10-21)
+
+- Patches 0115 (SweetHID button/touch services registered on FP6, touch
+  geometry from the boot framebuffer), 0116 (ring/silent switch as Telephony
+  RingEnable via `sweet_hid_key(4)`, position returned by copyEvent and sent
+  to new clients) and 0117 (`bsd/dev/qcom_geni.c/.h` polled GENI FIFO/SPI
+  core; `bsd/dev/fp6_touch.c` ESWIN EPH86xx on SE0 SPI mode 3 ~1.9 MHz CS0,
+  vendor TLV protocol, X inverted on 1116x2484, GPIO 107 slider to the ring
+  switch; `fp6touch=1` read-only probe, `fp6touch=2` live). Hardware facts
+  re-checked against Fairphone kernel sources: Volcano TLMM REG_BASE
+  0x100000 (GPIO n at 0x0f100000+0x1000n, 168 GPIOs), SE0 pins 0-3 func 1,
+  GCC vote 0x52008 bits 18-22, halts 0x23018/0x23008/0x23000/0x23004/0x18004,
+  non-DFS RCG 0x18010 with XO in its table, FIFO full-duplex opcode 3.
+  The repo's earlier Cliffs TLMM description (179 GPIOs, reserved 56-60) and
+  "SPI pins 94-97" are wrong for FP6 and not used by this driver.
+- Local arm64 compile (system clang, CI flags via xnu-cc replay) passed for
+  the new files and SweetHID.cpp. CI `39554419254` (head `43fdbd7`) build
+  job passed; kernel SHA256SUMS verified, symbols present.
+- Image (wifimac ADT, console muted, `fp6touch=2`):
+  `/tmp/fp6-touch-39554419254/img/fp6-shim-ufs-root-touch.img`, SHA256
+  `39175f461e09eeb9dd2f1af9ecf225841cee49f28646f4a9ff8345820ffbf6b0`.
+  Temporarily booted 06:23:21 UTC (`fastboot boot` OKAY); result pending.
+  The driver does not touch reset, L22B/L9B or PMIC; slider polarity
+  (mainline: GPIO 107 high = muted) is unverified.
+
 ## FP6 home screen (2026-10-21)
 
 - **User reports the iOS home screen on FP6** after booting
