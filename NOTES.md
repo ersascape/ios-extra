@@ -1,5 +1,39 @@
 # ios-extra — current state
 
+## FP6 GPU power review and fixes (2026-10-21)
+
+- Recovered an interrupted session's unpushed work from `/tmp/fp6-smmu-work`
+  onto branch `codex-gpu-rescue`: commits 3896b67/e63291f/ab3faae/22d527c and
+  uncommitted 0134 (opt-in `fp6smmupower=1` CX ARC floor + CX GDSC + hub CXO),
+  0135 (`fp6gmuload=1` GMU upload with CM3 held in reset), 0136 (GMU clock
+  preparation), `docs/FP6_SMMU_POWER.md` and host tests. CI `39641511245`
+  built it.
+- Phone evidence (console photo, earlier kernel): `CX_GDSCR=0x0022f001`
+  (SW_COLLAPSE set), GPU SMMU groups 10-23 invalid with S2CR fault type,
+  `context banks with nonzero state=0/22`. The SMMU (`kgsl-smmu@3da0000`,
+  `vdd-supply = gpu_cc_cx_gdsc`) sits in the collapsed CX domain, which is
+  the leading explanation for CB2 TCR2 reading back 0.
+- Source review against Fairphone `gdsc-regulator.c`, `rpmh-rsc.c`,
+  `arm-smmu.c` and KGSL gen8 found, and patch 0137 fixes: CX GDSC power
+  status is GPUCC+0x9094 (DT `hw-ctrl-addr`), not GDSCR bit 31; GDSC enable
+  now sets clk-dis-wait 8 and RETAIN_FF like Linux; RSC votes no longer mask
+  the slot IRQ and poll gated IRQ status - they use Linux's two-step
+  trigger/mode clear and poll CMD_STATUS ISSUED|COMPL and TCS idle; the ARC
+  floor is LOW_SVS (0x40) instead of the TURBO boot-proxy 0x180; GMU clock
+  preparation no longer reads GMU registers before all six KGSL GMU clocks
+  run (adds hub_cx_int 0x90e8) and refuses if the GMU core clock is already
+  on; FP6 GPU MMIO is single LDR/STR inline asm with register sources and
+  TLBIALL/TLBSYNC write QCOM_DUMMY_VAL (-1), per arm-smmu.c's hypervisor
+  note. The earlier 0131 rollback abort matches Gunyah refusing a stage-2
+  CBAR (TYPE=0) restore. Host model updated (status register, GDSC bits,
+  LOW_SVS index); 12/12 host tests pass; local arm64 compile passes; FP6 GPU
+  functions contain no WZR/XZR MMIO stores or write-back MMIO accesses.
+- Not yet fixed (latent): PAS/zap SMCs use FAST call IDs, leave x6
+  uninitialized and do not handle INTERRUPTED/WAITQ returns (Linux uses STD,
+  x6=0, retries); the zap carve-out stays mapped after load. FP6's GPU is
+  Adreno 810, Gen8.3 (`qcom,adreno-gpu-gen8-3-0`, gen80300 firmware, KGSL
+  hwsched path); the GMU is at 0x3d37000/0x68000 per the stock DT.
+
 ## CX power state observed on phone (2026-10-21)
 
 - User supplied a console photo from the clock-prerequisite build. It shows

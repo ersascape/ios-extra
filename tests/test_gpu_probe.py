@@ -42,8 +42,19 @@ class GPUProbeTests(unittest.TestCase):
                 text = '__asm__ volatile("%s" ::: "memory");' % name
                 self.assertEqual(source.count(text), 4)
                 source = source.replace(text, '__asm__ volatile("" ::: "memory");')
+            # FP6 accessors are single LDR/STR inline asm (hypervisor-trap safe);
+            # model them as plain host loads and the same store hooks.
+            asm_load32 = '__asm__ volatile("ldr %w0, [%1]" : "=r"(value) : "r"(base + off) : "memory");'
+            self.assertEqual(source.count(asm_load32), 2)
+            source = source.replace(asm_load32, 'value = *(volatile uint32_t *)(base + off);')
+            asm_store32 = '__asm__ volatile("str %w0, [%1]" : : "r"(value), "r"(base + off) : "memory");'
+            self.assertEqual(source.count(asm_store32), 1)
+            source = source.replace(asm_store32, 'test_store32(base, off, value);')
+            asm_store64 = '__asm__ volatile("str %x0, [%1]" : : "r"(value), "r"(base + off) : "memory");'
+            self.assertEqual(source.count(asm_store64), 1)
+            source = source.replace(asm_store64, 'test_store64(base, off, value);')
             store32 = '*(volatile uint32_t *)(base + off) = value;'
-            self.assertEqual(source.count(store32), 2)
+            self.assertEqual(source.count(store32), 1)
             source = source.replace(store32, 'test_store32(base, off, value);')
             mask = '__asm__ volatile("and %0, %0, #0xffffffff" : "+r" (got));'
             self.assertEqual(source.count(mask), 1)
@@ -52,7 +63,7 @@ class GPUProbeTests(unittest.TestCase):
             self.assertEqual(source.count(narrow_input), 1)
             source = source.replace(narrow_input, 'value &= 0xffffffffULL;')
             store64 = '*(volatile uint64_t *)(base + off) = value;'
-            self.assertEqual(source.count(store64), 2)
+            self.assertEqual(source.count(store64), 1)
             source = source.replace(store64, 'test_store64(base, off, value);')
             (work / 'sweet_gpu.c').write_text(source)
             headers = {
@@ -186,7 +197,8 @@ static void test_store32(vm_offset_t base, uint32_t off, uint32_t value)
         }
     }
     if (base == (vm_offset_t)fp6_gpucc && fp6_power_mode) {
-        if (off == 0x9080 && !(value & 1u)) value |= 1u << 31;
+        /* gpucc CX GDSC: PWR_ON is reported in the hw-ctrl status register. */
+        if (off == 0x9080) fp6_gpucc[0x9094/4] = (value & 1u) ? 0 : (1u << 31);
         if (off == 0x93ec && (value & 2u)) value &= ~((1u << 31) | 1u);
     }
     if ((base == (vm_offset_t)fp6_gpucc &&
@@ -1594,7 +1606,7 @@ int main(void)
     struct fp6_smmu_clocks clocks = {0};
     all_mmio_writes = 0;
     assert(!fp6_smmu_clocks_get(&clocks) && all_mmio_writes == 0);
-    fp6_gpucc[0x9080/4] = 0x80000000u;
+    fp6_gpucc[0x9094/4] = 0x80000000u;   /* CX on: status register PWR_ON */
     fp6_gpucc[0x93ec/4] = 0x80000000u;
     assert(!fp6_smmu_clocks_get(&clocks) && all_mmio_writes == 0);
     fp6_gpucc[0x93ec/4] = 0;
@@ -1633,19 +1645,23 @@ int main(void)
     fp6_cmd_db[0x210/4] = 64u << 16;
     fp6_cmd_db[0x214/4] = 0x180u;
     assert(fp6_arc_level((vm_offset_t)fp6_cmd_db, 0, &arc_address, &arc_level));
-    assert(arc_address == 0x30000u && arc_level == 2);
+    /* LOW_SVS floor: aux levels {0, 64, 0x180} -> index 1, not TURBO's 2. */
+    assert(arc_address == 0x30000u && arc_level == 1);
     fp6_rsc[0] = 3u << 16;
     fp6_rsc[0x0c/4] = (16u << 27) | (8u << 12);
     fp6_rsc[(0xd00+0x28)/4] = 1;
-    fp6_gpucc[0x9080/4] = 1;
+    fp6_gpucc[0x9080/4] = 0xf001u;       /* collapsed, clk-dis-wait 0xf */
+    fp6_gpucc[0x9094/4] = 0;
     fp6_gpucc[0x93ec/4] = 0x80000000u;
     fp6_power_mode = 1;
     assert(fp6_smmu_clocks_get(&clocks));
-    assert(fp6_gpucc[0x9080/4] == 0x80000000u);
+    /* SW_COLLAPSE cleared, clk-dis-wait 8, RETAIN_FF set; PWR_ON in status. */
+    assert(fp6_gpucc[0x9080/4] == 0x8800u);
+    assert(fp6_gpucc[0x9094/4] == 0x80000000u);
     assert(fp6_gpucc[0x93f0/4] == 0x100001u);
     assert(fp6_gpucc[0x93ec/4] == 2);
     assert(fp6_rsc[(0xd00+0x38)/4] == 0x30000u);
-    assert(fp6_rsc[(0xd00+0x3c)/4] == 2);
+    assert(fp6_rsc[(0xd00+0x3c)/4] == 1);
     assert(fp6_rsc[(0xd00+0x24)/4] == 0 && fp6_rsc[(0xd00+0x2c)/4] == 0);
     fp6_smmu_clocks_put(&clocks);
     fp6_power_mode = 0;
