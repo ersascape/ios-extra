@@ -24,6 +24,7 @@ def main():
     for pattern in ('*.patch', '*.sh'):
         for path in (ROOT / 'xnu/patches').glob(pattern):
             shutil.copyfile(path, patch_dir / path.name)
+    shutil.copyfile(ROOT / 'tools/fp6-gmu-fw.py', patch_dir / 'fp6-gmu-fw.py')
     script = args.directory / 'build.sh'
     text = script.read_text()
     old = 'warning "Skipping patch ${PATCH} (already upstream, previously applied, or malformed): ${APPLY_CHECK}"'

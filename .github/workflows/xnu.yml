@@ -32,6 +32,7 @@ on:
       - "tools/sweet-init.S"
       - "tools/mkinit.py"
       - "tools/prepare-xnu-build.py"
+      - "tools/fp6-gmu-fw.py"
       - "tools/mkbootv4.py"
       - "tools/unpack_bootv2.py"
       - "docs/FAIRPHONE6.md"

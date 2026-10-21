@@ -117,9 +117,10 @@ static int probe_printf(const char *, ...);
 
 static uint32_t gcc[0x90000 / 4], cc[0x9000 / 4];
 static uint32_t fp6_gpucc[0x9800 / 4], fp6_gpucc_before[0x9800 / 4];
+static uint32_t fp6_smmu[0x40000 / 4];
 static int present, mode, map_calls, fail_gcc, fail_cc;
-static int fp6_mode;
-static unsigned fp6_map_calls;
+static int fp6_mode, fp6_smmu_mode;
+static unsigned fp6_map_calls, fp6_smmu_maps;
 static int fp6_pas_mode;
 static int fp6_zap_mode, zap_map_fail;
 static uint64_t scm_status[2], scm_value[2], scm_fid[2], scm_arginfo[2], scm_arg0[2];
@@ -353,6 +354,11 @@ int PE_parse_boot_argn(const char *name, void *value, int length)
 		if (fp6_mode != 0) memcpy(value, &fp6_mode, sizeof(fp6_mode));
 		return fp6_mode != 0;
 	}
+	if (strcmp(name, "fp6smmu") == 0) {
+		assert(length == sizeof(fp6_smmu_mode));
+		if (fp6_smmu_mode != 0) memcpy(value, &fp6_smmu_mode, sizeof(fp6_smmu_mode));
+		return fp6_smmu_mode != 0;
+	}
     assert(strcmp(name, "sweetgpu") == 0 && length == sizeof(mode));
     if (present) memcpy(value, &mode, sizeof(mode));
     return present;
@@ -363,6 +369,10 @@ vm_offset_t ml_io_map(vm_offset_t physical, vm_size_t size)
     if (physical == 0x03d90000 && size == sizeof(fp6_gpucc)) {
         fp6_map_calls++;
         return (vm_offset_t)fp6_gpucc;
+    }
+    if (physical == 0x03da0000 && size == sizeof(fp6_smmu)) {
+        fp6_smmu_maps++;
+        return (vm_offset_t)fp6_smmu;
     }
     map_calls++;
     if (physical == GPU_GCC_PA && size == GPU_GCC_SIZE)
@@ -1471,6 +1481,27 @@ int main(void)
     assert(memcmp(fp6_gpucc_before, fp6_gpucc, sizeof(fp6_gpucc)) == 0);
     puts("PASS: FP6 GPUCC inventory is opt-in, read-only, and bounded");
 
+    /* The dedicated FP6 SMMU route inventory is also opt-in and read-only. */
+    memset(fp6_smmu, 0, sizeof(fp6_smmu));
+    fp6_smmu_maps = 0; fp6_smmu_mode = 0;
+    fp6_smmu_inventory();
+    assert(fp6_smmu_maps == 0);
+    fp6_smmu_mode = 1;
+    fp6_smmu[0x20 / 4] = (1u << 27) | 8u; /* stream matching, 8 groups */
+    fp6_smmu[0x24 / 4] = (1u << 28) | 8u; /* 4 KiB pages, 8 context banks */
+    fp6_smmu[0x800 / 4] = 0x80000005u; /* valid SID 5 */
+    fp6_smmu[0xc00 / 4] = 2u; /* translate through CB2 */
+    fp6_smmu[0x1000 / 4 + 2] = 0x1234u;
+    fp6_smmu[0x1800 / 4 + 2] = 0x5678u;
+    fp6_smmu[0x6000 / 4] = 0x1u;
+    int writes_before_smmu_inventory = all_mmio_writes;
+    fp6_smmu_inventory();
+    assert(fp6_smmu_maps == 1 && all_mmio_writes == writes_before_smmu_inventory);
+    assert(strstr(output, "SID 5 entry=0"));
+    assert(strstr(output, "CB2 CBAR=0x00001234 CBA2R=0x00005678"));
+    assert(strstr(output, "read-only inventory complete; no writes or ATOS requests"));
+    puts("PASS: FP6 GPU SMMU route inventory is opt-in and read-only");
+
     /* The PAS probe only checks SCM call availability and PAS ID 13. */
     scm_calls = 0; fp6_pas_mode = 0; fp6_qcom_pas_probe();
     assert(scm_calls == 0);
@@ -1535,7 +1566,7 @@ int main(void)
     assert(zap_region[0x1000] == 1 && zap_region[0x1001] == 2 && zap_region[0x1002] == 3);
     assert(zap_region[0] == 4 && zap_region[1] == 5 && zap_region[2] == 6 && zap_region[0xfff] == 0);
     puts("PASS: FP6 signed ZAP PAS load is opt-in, stage-ordered, and shuts down on failure");
-    fp6_map_calls = 0; fp6_mode = fp6_pas_mode = 1; fp6_zap_mode = 0; scm_calls = 0;
+    fp6_map_calls = 0; fp6_mode = fp6_pas_mode = 1; fp6_zap_mode = fp6_smmu_mode = 0; scm_calls = 0;
     fp6_adreno_startup();
     assert(fp6_map_calls == 1 && scm_calls == 2);
     puts("PASS: FP6 Adreno work starts from its dedicated EARLY_BOOT hook");

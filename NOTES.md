@@ -1,5 +1,55 @@
 # ios-extra — current state
 
+## FP6 Gen8.3 GMU firmware staging and SMMU inventory draft (2026-10-21)
+
+- The local Fairphone kernel modules tree is the hardware reference. Its
+  `adreno_gen8_gmu.c` confirms Gen8 firmware blocks are loaded into ITCM/DTCM
+  or backing memory from zero-size preallocation records; HFI and CM3 startup
+  are still separate stages. The XNU port does not yet consume the generated
+  firmware header or start CM3.
+- Added `tools/fp6-gmu-fw.py`, pinned to FairBlobs commit
+  `e58a5be8fa0fb6bc5a5f2e29cc01c036ccf75710` and SHA-256
+  `6adcbf43b162fb4bdc00154824f44c5f96d82a223cfbe7012d5904098f5bf2fc`. It
+  validates the 88,708-byte Gen8.3 GMU image and emits 11 preallocation
+  descriptors plus four data blocks into a generated header. The firmware
+  itself remains outside Git. `0129-stage-fp6-gen80300-gmu.sh` stages that
+  header in FP6 CI builds; it is not wired into a runtime loader yet.
+- Repaired `0128-fp6-qsmmu-readonly-inventory.patch` and extended the host
+  harness to check that `fp6smmu=1` reads SID 0/2/5 routing and context-bank
+  registers without MMIO writes. This models the diagnostic only; the actual
+  FP6 SMMU window has not been read by this build or tested on the phone.
+- Host GPU probe suite passes, including the new SMMU inventory case; the six
+  GMU firmware parser tests pass and the staging shell script parses. No XNU
+  CI build or device test has run for these in-progress changes. No GMU firmware
+  has been loaded and no GPU commands have executed.
+
+## FP6 PAS/ZAP retest image (2026-10-21)
+
+- CI run `39583564215` completed the corrected kernel build for commit
+  `2c6ab5ee519f433b899616217eb9d74f9a2b57b3`. The kernel checksum verified;
+  the matching ADT SHA-256 is
+  `50247d49f727ef9b2b588c2522250bed4d3b742d139ed2d994ffe79634823a65`.
+  The workflow skipped boot-image packaging because `FP6_STOCK_DTB_URL` is not
+  configured, so the matching CI kernel and ADT were packaged locally with the
+  verified stock `tree-04.dtb` and minimal init ramdisk.
+- Temporary image:
+  `/tmp/fp6-zap-39583564215/image/fp6-shim-fp6zap-fixed.img`, SHA-256
+  `94036ddf12326342ed7432cbd570aa7aac0ee3048ef0a51ae25f5190a6c97644`.
+  It enables `fp6gpu=1 fp6pas=1 fp6zap=1 fp6touch=2 fp6usb=2` and includes the
+  mapped-virtual-address cache-clean fix for the prior `phystokv_range` panic.
+- User-provided console photo from this image confirms the phone reached all
+  three firmware stages: `PAS_INIT_IMAGE fid=0xc2000201`,
+  `PAS_MEM_SETUP fid=0xc2000203`, and `PAS_AUTH_AND_RESET fid=0xc2000205` each
+  returned `smc=0x0 result=0x0`; the kernel then reported “GPU ZAP authenticated
+  and reset; PAS remains active.” This validates the SMC route, metadata and
+  image mapping, cache-clean fix, TrustZone authentication, and peripheral
+  reset on FP6. The screenshot also shows the touch/HID and framebuffer
+  services registering. The log was captured from the screen, not a host pcap.
+  GMU CM3 startup, HFI, GPU SMMU configuration and command execution remain
+  untested.
+- A fresh `fastboot devices` check after the report returned zero devices, so
+  no further boot was attempted in this turn.
+
 ## FP6 quiet-console package defaults (2026-10-21)
 
 - Updated `tools/fp6-package.py` so every generated FP6 image omits
