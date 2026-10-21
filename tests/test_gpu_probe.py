@@ -118,6 +118,8 @@ static int probe_printf(const char *, ...);
 static uint32_t gcc[0x90000 / 4], cc[0x9000 / 4];
 static uint32_t fp6_gpucc[0x9800 / 4], fp6_gpucc_before[0x9800 / 4];
 static uint32_t fp6_smmu[0x40000 / 4];
+#define FP6_TEST_CB 2u
+#define FP6_TEST_CB_BASE 0x22000u
 static uint32_t fp6_refuse_off; static unsigned fp6_refuse_nth, fp6_refuse_count;
 static uint32_t fp6_seen_tcr2, fp6_seen_cbar, fp6_seen_fsr_clear;
 static int present, mode, map_calls, fail_gcc, fail_cc;
@@ -199,8 +201,9 @@ static void test_store32(vm_offset_t base, uint32_t off, uint32_t value)
     if (base == (vm_offset_t)fp6_smmu && (off & 0xfffu) == 0x58 && value == 0xffffffffu) {
         fp6_seen_fsr_clear = 1; value = 0; /* Context FSR is write-one-to-clear. */
     }
-    if (base == (vm_offset_t)fp6_smmu && (off == 0x20800 || off == 0x20804))
-        fp6_smmu[0x208f0/4] = 1;
+    if (base == (vm_offset_t)fp6_smmu &&
+        (off == FP6_TEST_CB_BASE + 0x800 || off == FP6_TEST_CB_BASE + 0x804))
+        fp6_smmu[(FP6_TEST_CB_BASE + 0x8f0)/4] = 1;
     if (smmu_sticky && base == (vm_offset_t)smmu_mem &&
         ((off == GPU_SMMU_S2CR + 12 && value == GPU_SMMU_S2CR_FAULT) ||
          (off == GPU_SMMU_CBAR + 12 && value == 0))) return;
@@ -260,7 +263,7 @@ static void smmu_sim(void)
 
 static void fp6_smmu_sim(void)
 {
-    const unsigned cb = 0x20000; /* IDR1.NUMPAGE=32, 4 KiB register pages */
+    const unsigned cb = FP6_TEST_CB_BASE; /* Linux leaves CB0/1 to GPU; test SID5 on CB2 */
     uint64_t cur = fp6_smmu[ (cb + 0x800) / 4 ] |
         (uint64_t)fp6_smmu[(cb + 0x804) / 4] << 32;
     if (cur == fp6_last_ats) return;
@@ -1555,20 +1558,25 @@ int main(void)
     output[0] = 0;
     fp6_smmu_inventory();
     assert(alloc_calls == 1 && clean_calls == 1 && clean_bytes == 0x3000);
-    assert(all_mmio_writes > 0 && strstr(output, "ATOS IOVA=0x60000000"));
+    assert(all_mmio_writes > 0 && strstr(output, "context-bank ATOS IOVA=0x60000000"));
     assert(fp6_seen_tcr2 == 0x00038011u && fp6_seen_cbar == 0x0001f300u && fp6_seen_fsr_clear);
     assert(strstr(output, "passed=1") && strstr(output, "contained=1 route_live=0 bank_reserved=1"));
     assert(fp6_smmu[0x800/4] == 0 && fp6_smmu[0xc00/4] == 0x00020000u);
-    assert(fp6_smmu[0x20000/4] == 0 && fp6_smmu[0x20020/4] == 0 &&
-        fp6_smmu[0x20030/4] == 0 && fp6_smmu[0x1000/4] == 0x0001f300u && fp6_smmu[0x1800/4] == 1);
+    assert(strstr(output, "cb=2"));
+    assert(fp6_smmu[0x20000/4] == 0 && fp6_smmu[0x20004/4] == 0);
+    assert(fp6_smmu[(FP6_TEST_CB_BASE+0x00)/4] == 0 &&
+        fp6_smmu[(FP6_TEST_CB_BASE+0x20)/4] == 0 &&
+        fp6_smmu[(FP6_TEST_CB_BASE+0x30)/4] == 0 &&
+        fp6_smmu[(0x1000+4*FP6_TEST_CB)/4] == 0x0001f300u &&
+        fp6_smmu[(0x1800+4*FP6_TEST_CB)/4] == 1);
     assert(dma_rd64(fake_pa_base + 8) == ((fake_pa_base + 0x1000) | 3));
     assert(dma_rd64(fake_pa_base + 0x1000 + 8*256) == ((fake_pa_base + 0x2000) | 3));
     assert(dma_rd64(fake_pa_base + 0x2000) == ((fake_pa_base + 0x3000) | (3ull | (1ull<<10) | (2ull<<8) | (1ull<<6) | (1ull<<11) | (1ull<<54))));
-    puts("PASS: FP6 GMU SID5 4 KiB context maps by ATOS and disables its route");
+    puts("PASS: FP6 CB2 4 KiB context maps by ATOS and disables its stream match");
 
     /* Failure on each first-write stage aborts and disables the stream route. */
-    const unsigned fp6_stage_writes[] = {0x1800,0x1000,0x20010,0x20030,
-        0x20020,0x20024,0x20038,0x2003c,0x20000,0xc00,0x800};
+    const unsigned fp6_stage_writes[] = {0x1808,0x1008,0x22010,0x22030,
+        0x22020,0x22024,0x22038,0x2203c,0x22000,0xc00,0x800};
     for (unsigned n = 0; n < sizeof(fp6_stage_writes)/sizeof(fp6_stage_writes[0]); n++) {
         memset(fp6_smmu, 0, sizeof(fp6_smmu));
         fp6_smmu[0x20/4] = (1u << 27) | 24u;
@@ -1581,7 +1589,7 @@ int main(void)
         fp6_smmu_inventory();
         assert(strstr(output, "contained=1 route_live=0 bank_reserved=1"));
         assert(fp6_smmu[0x800/4] == 0 && fp6_smmu[0xc00/4] == 0x00020000u);
-        assert(fp6_smmu[0x20000/4] == 0 && fp6_smmu[0x800/4] == 0 &&
+        assert(fp6_smmu[(FP6_TEST_CB_BASE+0)/4] == 0 && fp6_smmu[0x800/4] == 0 &&
             fp6_smmu[0xc00/4] == 0x00020000u);
     }
     fp6_refuse_off = 0; fp6_refuse_nth = fp6_refuse_count = 0;

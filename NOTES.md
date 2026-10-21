@@ -12,10 +12,33 @@
 - Patch 0131 now avoids writing CBAR/CBA2R during rollback. It leaves the
   candidate bank configured but disabled (`SCTLR=0`), invalidates the temporary
   stream match, restores the fault route, and intentionally reserves the bank
-  and permanent page-table allocation for the rest of that boot. The host
+  and permanent page-table allocation for the rest of that boot. The probe now
+  selects CB2 or higher, matching Linux's reservation of CB0/CB1 for GPU
+  pagetable switching. The host
   harness verifies that success and each injected setup failure leave no active
   stream match. Normal and ASan/UBSan GPU probe tests pass. This is a source
   change and containment hypothesis only; no rebuilt image or phone result yet.
+- Fairphone KGSL/SMMU cross-check: the cloned module tree identifies the exact
+  `qcom,adreno-gpu-gen7-11-0` profile and the firmware names
+  `gen71100_gmu.bin`, `gen71100_sqe.fw`, `gen71100_zap.mbn`. The current XNU
+  `fp6gpu=1`/`fp6pas=1` code only inventories GPUCC and queries PAS availability;
+  it does not implement those firmware flows or GPU register programming.
+  Linux's QSMMUv500 path allocates CB0/CB1 to GPU SID0/1 and other clients from
+  CB2 onward; patch 0131 now respects that rule. Its CBAR/TCR/TTBR/MAIR ordering
+  follows `arm_smmu_write_context_bank`, but the probe's fixed SCTLR `0x27` is
+  not Linux's complete fault/coherency setup.
+- Important limit: patch 0131 triggers CB `ATS1PR`, which checks context-bank
+  page translation but does **not** prove the SID5 stream route end to end.
+  Fairphone QSMMUv500 resolves SID-specific ATOS through the corresponding TBU
+  ECATS path (halt TBU, disable fault/stall handling temporarily, trigger ECATS,
+  inspect/clear FSR, restore SCTLR, resume). Thus the test output is now named
+  context-bank ATOS, and SID5 routing remains unverified. The next proper route
+  test needs exact FP6 TBU mapping/ownership and a bounded ECATS sequence.
+- The Tensor progress screenshot describes user-space AIR shader compilation,
+  pipeline import and texture setup, with no compositor draw yet. Those are
+  meaningful user-space milestones but do not transfer as a percent-complete
+  estimate for FP6: this tree has not started GMU firmware execution, SQE/CP,
+  GPU submission, or a Metal bridge.
 - Tegu USB source review: `shim/tegu/usb.c` is a pre-XNU polled DWC3 EP0 gadget;
   Tegu also carries the transport into XNU via patch 0088 so its console can
   collect later XNU output. Its shim and XNU versions rely on Tegu-specific

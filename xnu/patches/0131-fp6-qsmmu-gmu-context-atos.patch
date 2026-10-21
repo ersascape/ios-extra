@@ -90,7 +90,7 @@ diff --git a/bsd/dev/sweet_gpu.c b/bsd/dev/sweet_gpu.c
  	    FP6_GPU_SMMU_PA, FP6_GPU_SMMU_SIZE);
  	printf("QCOM SMMU: IDR0=0x%08x IDR1=0x%08x IDR2=0x%08x IDR7=0x%08x sCR0=0x%08x sGFSR=0x%08x\n",
  	    id0, id1, id2, id7, scr0, gfsr);
-@@ -2382,6 +2428,173 @@
+@@ -2382,6 +2428,174 @@
  		}
  	}
  	printf("QCOM SMMU: context banks with nonzero state=%u/%u\n", active_cbs, numcb);
@@ -101,8 +101,8 @@ diff --git a/bsd/dev/sweet_gpu.c b/bsd/dev/sweet_gpu.c
 +	}
 +
 +	/*
-+	 * First live SMMU step: validate one 4 KiB stage-1 mapping for the GMU
-+	 * stream. The route is not left enabled, and CM3 remains in reset.
++	 * First live SMMU step: validate one 4 KiB stage-1 context with CB ATS1PR.
++	 * This is not an SID-routed TBU/ECATS test; CM3 remains in reset.
 +	 */
 +	if ((id0 & FP6_SMMU_ID0_SMS) == 0 || pgshift != 12 || numcb == 0 ||
 +	    numsmrg == 0 || scr0 == 0xffffffffu || (scr0 & 1u) != 0 || gfsr != 0 ||
@@ -130,8 +130,9 @@ diff --git a/bsd/dev/sweet_gpu.c b/bsd/dev/sweet_gpu.c
 +		printf("QCOM SMMU: live test refused: SID5 already has a stream match\n");
 +		return;
 +	}
++	/* Linux reserves CB0/CB1 for GPU pagetable switching; SID5 is a client. */
 +	unsigned cb = numcb;
-+	for (unsigned i = 0; i < numcb; i++) {
++	for (unsigned i = 2; i < numcb; i++) {
 +		uint32_t cbar = fp6_smmu_read32(base, gr1 + 4u * i);
 +		uint32_t cba2r = fp6_smmu_read32(base, gr1 + 0x800u + 4u * i);
 +		uint64_t off = cb_base + ((uint64_t)i << pgshift);
@@ -221,7 +222,7 @@ diff --git a/bsd/dev/sweet_gpu.c b/bsd/dev/sweet_gpu.c
 +		uint64_t par = fp6_smmu_read64(base, cb_off + FP6_SMMU_CB_PAR);
 +		uint64_t expected = table_pa + 0x3000u;
 +		passed = !(par & 1u) && (par & 0x0000fffffffff000ULL) == expected;
-+		printf("QCOM SMMU: GMU SID5 ATOS IOVA=0x%08x PAR=0x%llx expected=0x%llx passed=%u\n",
++		printf("QCOM SMMU: context-bank ATOS IOVA=0x%08x PAR=0x%llx expected=0x%llx passed=%u\n",
 +		    FP6_SMMU_GMU_IOVA, (unsigned long long)par,
 +		    (unsigned long long)expected, passed);
 +	} else {
@@ -259,7 +260,7 @@ diff --git a/bsd/dev/sweet_gpu.c b/bsd/dev/sweet_gpu.c
 +	    fp6_smmu_read32(base, smr_off) != old_smr ||
 +	    fp6_smmu_read32(base, s2cr_off) != old_s2cr) contained = 0;
 +report:
-+	printf("QCOM SMMU: GMU SID5 context group=%u cb=%u mapped=%u contained=%u route_live=%u bank_reserved=%u result=%s\n",
++	printf("QCOM SMMU: context test group=%u cb=%u mapped=%u contained=%u route_live=%u bank_reserved=%u result=%s\n",
 +	    group, cb, passed, contained, route_live, contained,
 +	    passed && contained ? "ATOS pass; bank disabled and reserved" : "test failed; no master run");
 +#undef FP6_SMMU_WRITE_CHECK
