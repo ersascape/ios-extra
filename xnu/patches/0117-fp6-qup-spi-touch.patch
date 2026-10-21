@@ -1,0 +1,857 @@
+--- a/bsd/conf/files
++++ b/bsd/conf/files
+@@ -112,6 +112,8 @@
+ bsd/dev/sweet_spmi.c			standard
+ bsd/dev/sweet_usb.c			standard
+ bsd/dev/sweet_gpu.c			standard
++bsd/dev/qcom_geni.c			standard
++bsd/dev/fp6_touch.c			standard
+ bsd/dev/mem.c				standard
+ bsd/dev/munge.c 			optional config_requires_u32_munging
+ bsd/dev/unix_startup.c			standard
+--- /dev/null
++++ b/bsd/dev/fp6_touch.c
+@@ -0,0 +1,397 @@
++/*
++ * FP6 touch screen (ESWIN EPH86xx on QUPv3 SE0 SPI) and side slider.
++ *
++ * Boot-arg fp6touch:
++ *   1  read only: GCC/SE0 clock state, SE0 registers (only with clocks
++ *      running), TLMM pins 0-3 (SPI), 19 (CHG/IRQ), 20 (reset) and 107
++ *      (slider). Nothing is written.
++ *   2  live: turn on SE0's clocks (vote + XO), set SE0 to SPI FIFO mode
++ *      (mode 3, ~1.9 MHz, CS0), mux pins 0-3 to SE0, query the controller's
++ *      device information once, then poll: while CHG (GPIO 19) is low, read
++ *      TLV reports and feed SweetHID touch; the slider feeds SweetHID's ring
++ *      switch. The controller keeps its firmware in flash; nothing is
++ *      flashed. Reset, supplies (L22B/L9B) and PMIC are not touched: if
++ *      ABL left the controller unpowered or in reset, the query fails and
++ *      the driver stops.
++ * fp6touchdelay=S (default 30) delays the start after boot.
++ *
++ * Protocol from the Fairphone ESWIN driver (touch-drivers/eswin_touch):
++ * every SPI transfer is full duplex with CS held; a read clocks out 0xff.
++ * Messages are TLV: type(1) len(2, LE, payload only) payload. A read is
++ * two-stage: 3 header bytes, 50 us, then header+payload again.
++ * Report 0x23 carries events {type<<4|len, id, x(2), y(2), w, h}; type 1
++ * contact, 2 release. Panel 1116x2484, X inverted (DT eswin,panel-invert-x).
++ */
++#include <pexpert/arm64/board_config.h>
++#if defined(ARM64_BOARD_CONFIG_FP6)
++#include <sys/param.h>
++#include <sys/systm.h>
++#include <sys/errno.h>
++#include <string.h>
++#include <kern/clock.h>
++#include <kern/thread.h>
++#include <kern/sched_prim.h>
++#include <machine/machine_routines.h>
++#include <pexpert/pexpert.h>
++
++#include "qcom_geni.h"
++
++extern vm_offset_t ml_io_map(vm_offset_t, vm_size_t);
++extern kern_return_t thread_terminate(thread_t);
++extern void sweet_hid_touch(int finger, int down, int x, int y);
++extern void sweet_hid_key(int key, int down);
++void fp6_touch_init(uint32_t mode);
++
++#define TLMM_PA                 0x0f100000u     /* Volcano TLMM REG_BASE */
++#define TLMM_SIZE               0x6c000u        /* through GPIO 107 */
++#define GPIO_CFG(n)             ((uint32_t)(n) * 0x1000u)
++#define GPIO_IO(n)              (GPIO_CFG(n) + 4u)
++#define PIN_CHG                 19u
++#define PIN_RESET               20u
++#define PIN_SLIDER              107u
++#define RING_KEY                4               /* sweet_hid_key ring switch */
++
++#define PANEL_W                 1116
++#define PANEL_H                 2484
++#define FINGERS                 10u
++#define MSG_MAX                 256u
++#define TLV_HDR                 3u
++#define TLV_DEVICE_INFO         0x01u
++#define TLV_DEVICE_STATUS       0x22u
++#define TLV_REPORT              0x23u
++#define EVT_CONTACT             1u
++#define EVT_RELEASE             2u
++
++static const struct qgeni_clk se0_clk = {
++	.vote_reg = 0x52008u,
++	/* wrap0 core_2x, core, m_ahb, s_ahb, SE0 (gcc-volcano.c) */
++	.vote_mask = (1u << 18) | (1u << 19) | (1u << 20) | (1u << 21) | (1u << 22),
++	.rcg = 0x18010u,
++	.halts = { 0x23018u, 0x23008u, 0x23000u, 0x23004u, 0x18004u, 0 },
++};
++
++static struct qgeni_se se0 = {
++	.name = "SE0",
++	.se_pa = 0x00a80000u,
++	.gcc_pa = 0x00100000u,
++	.gcc_size = 0x60000u,
++	.clk = &se0_clk,
++};
++
++static struct {
++	bool started;
++	uint32_t mode;
++	vm_offset_t tlmm;
++	uint8_t buf[MSG_MAX + TLV_HDR];
++	uint8_t ff[MSG_MAX + TLV_HDR];
++	bool down[FINGERS];
++	int x[FINGERS], y[FINGERS];
++	int slider;
++	bool chg_seen;
++	unsigned reports, contacts, errors;
++} ft;
++static int ft_sleep_chan;
++
++static uint32_t
++rd(vm_offset_t base, uint32_t off)
++{
++	uint32_t v = *(volatile uint32_t *)(base + off);
++	__asm__ volatile ("dmb oshld" ::: "memory");
++	return v;
++}
++
++static void
++wr(vm_offset_t base, uint32_t off, uint32_t val)
++{
++	__asm__ volatile ("dmb oshst" ::: "memory");
++	*(volatile uint32_t *)(base + off) = val;
++	__asm__ volatile ("dsb osh" ::: "memory");
++}
++
++static void
++ft_sleep(unsigned ms)
++{
++	uint64_t deadline;
++	clock_interval_to_deadline(ms, NSEC_PER_MSEC, &deadline);
++	(void)assert_wait_deadline(&ft_sleep_chan, THREAD_UNINT, deadline);
++	thread_block(THREAD_CONTINUE_NULL);
++}
++
++static bool
++chg_low(void)
++{
++	return !(rd(ft.tlmm, GPIO_IO(PIN_CHG)) & 1u);
++}
++
++static void
++tlmm_dump(void)
++{
++	static const unsigned pins[] = { 0, 1, 2, 3, PIN_CHG, PIN_RESET, PIN_SLIDER };
++	for (unsigned i = 0; i < sizeof(pins) / sizeof(pins[0]); ++i) {
++		uint32_t cfg = rd(ft.tlmm, GPIO_CFG(pins[i]));
++		printf("FP6 TOUCH: gpio%u cfg=%#x (func %u pull %u drv %u oe %u) io=%#x\n", pins[i],
++		    cfg, (cfg >> 2) & 0xfu, cfg & 3u, (cfg >> 6) & 7u, (cfg >> 9) & 1u,
++		    rd(ft.tlmm, GPIO_IO(pins[i])));
++	}
++}
++
++/* SE0 function 1 on GPIO 0-3, 6 mA, no pull (volcano-mtp qupv3_se0_spi). */
++static void
++spi_pinmux(void)
++{
++	for (unsigned pin = 0; pin < 4u; ++pin) {
++		uint32_t cfg = rd(ft.tlmm, GPIO_CFG(pin));
++		uint32_t want = (cfg & ~0x3ffu) | (1u << 2) | (2u << 6);
++		if (cfg != want) {
++			wr(ft.tlmm, GPIO_CFG(pin), want);
++		}
++	}
++}
++
++/* One read stage: 0xff out, n bytes in; retried once if not ready. */
++static int
++spi_read(uint8_t *buf, unsigned n)
++{
++	for (unsigned attempt = 0; attempt < 2u; ++attempt) {
++		int err = qgeni_spi_xfer(&se0, ft.ff, buf, n);
++		if (err) {
++			return err;
++		}
++		bool null = true;
++		for (unsigned i = 0; i < n && null; ++i) {
++			null = buf[i] == 0;
++		}
++		if (!null && buf[0] != 0xffu) {
++			return 0;
++		}
++		delay(200);
++	}
++	return EAGAIN;
++}
++
++/* Two-stage TLV read into ft.buf; returns the total message length. */
++static int
++read_message(unsigned *total)
++{
++	int err = spi_read(ft.buf, TLV_HDR);
++	if (err) {
++		return err;
++	}
++	unsigned len = TLV_HDR + (ft.buf[1] | ((unsigned)ft.buf[2] << 8));
++	if (len > MSG_MAX) {
++		printf("FP6 TOUCH: oversized message type %#x len %u\n", ft.buf[0], len);
++		return EMSGSIZE;
++	}
++	delay(50);
++	err = qgeni_spi_xfer(&se0, ft.ff, ft.buf, len);
++	if (err) {
++		return err;
++	}
++	/* Vendor fix-up: clock was low at the start and the header repeats. */
++	if (len >= 2u * TLV_HDR && ft.buf[0] == ft.buf[3] && ft.buf[1] == ft.buf[4] &&
++	    ft.buf[2] == ft.buf[5]) {
++		unsigned payload = len - TLV_HDR;
++		memmove(ft.buf, ft.buf + TLV_HDR, payload);
++		err = qgeni_spi_xfer(&se0, ft.ff, ft.buf + payload, TLV_HDR);
++		if (err) {
++			return err;
++		}
++	}
++	*total = len;
++	return 0;
++}
++
++static void
++release_all(void)
++{
++	for (unsigned id = 0; id < FINGERS; ++id) {
++		if (ft.down[id]) {
++			sweet_hid_touch((int)id, 0, ft.x[id], ft.y[id]);
++			ft.down[id] = false;
++		}
++	}
++}
++
++static void
++handle_report(unsigned total)
++{
++	for (unsigned off = TLV_HDR; off < total;) {
++		const uint8_t *e = ft.buf + off;
++		unsigned type = e[0] >> 4, elen = e[0] & 0x0fu;
++		if (off + elen + 1u > total) {
++			break;
++		}
++		if ((type == EVT_CONTACT || type == EVT_RELEASE) && elen >= 5u && e[1] < FINGERS) {
++			unsigned id = e[1];
++			int x = PANEL_W - (int)(e[2] | ((unsigned)e[3] << 8));
++			int y = (int)(e[4] | ((unsigned)e[5] << 8));
++			bool down = type == EVT_CONTACT;
++			if (down || ft.down[id]) {
++				sweet_hid_touch((int)id, down, x, y);
++			}
++			if (down && !ft.down[id] && ft.contacts++ < 8u) {
++				printf("FP6 TOUCH: contact %u at %d,%d\n", id, x, y);
++			}
++			ft.down[id] = down;
++			ft.x[id] = x;
++			ft.y[id] = y;
++		}
++		off += elen + 1u;
++	}
++}
++
++static void
++poll_slider(void)
++{
++	/* Mainline milos-fairphone-fp6: SW_MUTE_DEVICE, GPIO 107 active high. */
++	int high = (int)(rd(ft.tlmm, GPIO_IO(PIN_SLIDER)) & 1u);
++	if (high == ft.slider) {
++		return;
++	}
++	ft_sleep(15);   /* DT debounce-interval 15 ms */
++	if ((int)(rd(ft.tlmm, GPIO_IO(PIN_SLIDER)) & 1u) != high) {
++		return;
++	}
++	ft.slider = high;
++	printf("FP6 SLIDER: gpio107=%d -> %s\n", high, high ? "silent" : "ringer");
++	sweet_hid_key(RING_KEY, !high);
++}
++
++static int
++device_info(void)
++{
++	static const uint8_t query[TLV_HDR] = { TLV_DEVICE_INFO, 0, 0 };
++	int err = qgeni_spi_xfer(&se0, query, NULL, sizeof(query));
++	if (err) {
++		return err;
++	}
++	delay(100);
++	unsigned total = 0;
++	for (unsigned tries = 0; tries < 10u; ++tries) {
++		err = read_message(&total);
++		if (err == 0 && ft.buf[0] == TLV_DEVICE_INFO) {
++			printf("FP6 TOUCH: device info len %u:", total);
++			for (unsigned i = 0; i < total && i < 24u; ++i) {
++				printf(" %02x", ft.buf[i]);
++			}
++			printf("\n");
++			return 0;
++		}
++		if (err == 0) {
++			printf("FP6 TOUCH: waiting for info, got type %#x len %u\n", ft.buf[0], total);
++		}
++		ft_sleep(10);
++	}
++	return err ? err : ENODEV;
++}
++
++static void
++touch_thread(void *arg __unused, wait_result_t wr_result __unused)
++{
++	unsigned delay_s = 30;
++	(void)PE_parse_boot_argn("fp6touchdelay", &delay_s, sizeof(delay_s));
++	printf("FP6 TOUCH: mode %u, starting in %u s\n", ft.mode, delay_s);
++	ft_sleep(delay_s * 1000u);
++
++	ft.tlmm = ml_io_map(TLMM_PA, TLMM_SIZE);
++	if (!ft.tlmm || qgeni_map(&se0)) {
++		printf("FP6 TOUCH: MMIO mapping failed\n");
++		goto out;
++	}
++	memset(ft.ff, 0xff, sizeof(ft.ff));
++	tlmm_dump();
++	qgeni_dump(&se0);
++	if (ft.mode < 2u) {
++		printf("FP6 TOUCH: read-only probe done\n");
++		goto out;
++	}
++
++	ft.slider = -1;
++	poll_slider();
++	int err = qgeni_clocks_on(&se0);
++	if (!err) {
++		qgeni_dump(&se0);
++		err = qgeni_fifo_init(&se0, QGENI_PROTO_SPI);
++	}
++	if (!err) {
++		/* volcano-mtp: spi-max-frequency 2 MHz, mode 3; vendor CS-clock delay 200. */
++		err = qgeni_spi_setup(&se0, 3u, 0u, 2000000u, 200u);
++	}
++	if (err) {
++		printf("FP6 TOUCH: SE0 setup failed %d; touch disabled, slider polling\n", err);
++		for (;;) {
++			poll_slider();
++			ft_sleep(50);
++		}
++	}
++	spi_pinmux();
++	printf("FP6 TOUCH: chg=%u reset io=%#x\n", chg_low() ? 0u : 1u,
++	    rd(ft.tlmm, GPIO_IO(PIN_RESET)));
++	err = device_info();
++	if (err) {
++		printf("FP6 TOUCH: no reply from controller (%d, irq seen %#x); is it powered and out of reset?\n",
++		    err, se0.irq_seen);
++		tlmm_dump();
++		for (;;) {
++			poll_slider();
++			ft_sleep(50);
++		}
++	}
++	printf("FP6 TOUCH: polling, %dx%d, x inverted\n", PANEL_W, PANEL_H);
++	for (;;) {
++		poll_slider();
++		if (!ft.chg_seen && chg_low()) {
++			ft.chg_seen = true;
++			printf("FP6 TOUCH: first CHG assertion\n");
++		}
++		/* Drain while CHG is asserted, bounded per tick. */
++		for (unsigned n = 0; n < 8u && chg_low() && !se0.dead; ++n) {
++			unsigned total = 0;
++			err = read_message(&total);
++			if (err) {
++				if ((ft.errors++ % 100u) == 0) {
++					printf("FP6 TOUCH: read error %d (irq seen %#x)\n", err, se0.irq_seen);
++				}
++				if (ft.errors == 10u) {
++					release_all();
++				}
++				break;
++			}
++			ft.errors = 0;
++			ft.reports++;
++			if (ft.buf[0] == TLV_REPORT) {
++				handle_report(total);
++			} else if (ft.buf[0] == TLV_DEVICE_STATUS) {
++				printf("FP6 TOUCH: device status %02x %02x\n",
++				    total > 3u ? ft.buf[3] : 0, total > 4u ? ft.buf[4] : 0);
++			}
++		}
++		if (se0.dead) {
++			printf("FP6 TOUCH: SE0 disabled after a failed abort; touch stopped\n");
++			release_all();
++			break;
++		}
++		ft_sleep(8);
++	}
++out:
++	(void)thread_terminate(current_thread());
++	thread_block(THREAD_CONTINUE_NULL);
++}
++
++void
++fp6_touch_init(uint32_t mode)
++{
++	thread_t thread;
++	if (ft.started || mode == 0) {
++		return;
++	}
++	ft.started = true;
++	ft.mode = mode;
++	kern_return_t kr = kernel_thread_start(touch_thread, NULL, &thread);
++	if (kr == KERN_SUCCESS) {
++		thread_deallocate(thread);
++	} else {
++		printf("FP6 TOUCH: kernel_thread_start failed %d\n", kr);
++	}
++}
++#endif /* ARM64_BOARD_CONFIG_FP6 */
+--- /dev/null
++++ b/bsd/dev/qcom_geni.c
+@@ -0,0 +1,361 @@
++/*
++ * Qualcomm QUPv3 GENI serial engine core (polled FIFO mode). See qcom_geni.h.
++ *
++ * Everything here runs on the caller's thread. The SE is only touched after
++ * its GCC branches report running: an access to an unclocked SE can stall
++ * the bus. FIFO-mode setup is the sequence of Linux geni_se_init(),
++ * geni_se_select_mode(GENI_SE_FIFO) and spi-geni-qcom.c setup_fifo_params(),
++ * and the same one SWEET's touch driver uses on SM7150 hardware.
++ */
++#include <pexpert/arm64/board_config.h>
++#if defined(ARM64_BOARD_CONFIG_FP6)
++#include <sys/param.h>
++#include <sys/systm.h>
++#include <sys/errno.h>
++#include <kern/clock.h>
++#include <machine/machine_routines.h>
++
++#include "qcom_geni.h"
++
++extern vm_offset_t ml_io_map(vm_offset_t, vm_size_t);
++
++#define SE_FORCE_DEFAULT        0x020u
++#define SE_OUTPUT_CTRL          0x024u
++#define SE_CGC_CTRL             0x028u
++#define SE_STATUS               0x040u
++#define SE_M_CLK_CFG            0x048u
++#define SE_IF_DISABLE           0x064u
++#define SE_FW_REV               0x068u
++#define SE_CLK_SEL              0x07cu
++#define SE_SPI_CPHA             0x224u
++#define SE_SPI_LOOPBACK         0x22cu
++#define SE_SPI_CPOL             0x230u
++#define SE_SPI_DEMUX_INV        0x24cu
++#define SE_SPI_DEMUX_SEL        0x250u
++#define SE_BYTE_GRAN            0x254u
++#define SE_DMA_MODE             0x258u
++#define SE_SPI_TRANS_CFG        0x25cu
++#define SE_TX_PACK0             0x260u
++#define SE_TX_PACK1             0x264u
++#define SE_SPI_WORD_LEN         0x268u
++#define SE_SPI_TX_LEN           0x26cu
++#define SE_SPI_RX_LEN           0x270u
++#define SE_SPI_DELAYS           0x278u
++#define SE_RX_PACK0             0x284u
++#define SE_RX_PACK1             0x288u
++#define SE_M_CMD0               0x600u
++#define SE_M_CMD_CTRL           0x604u
++#define SE_M_IRQ                0x610u
++#define SE_M_IRQ_EN             0x614u
++#define SE_M_IRQ_CLR            0x618u
++#define SE_S_IRQ_EN             0x644u
++#define SE_S_IRQ_CLR            0x648u
++#define SE_TX_FIFO              0x700u
++#define SE_RX_FIFO              0x780u
++#define SE_TX_STATUS            0x800u
++#define SE_RX_STATUS            0x804u
++#define SE_TX_WM                0x80cu
++#define SE_RX_WM                0x810u
++#define SE_RX_RFR_WM            0x814u
++#define SE_IOS                  0x908u
++#define SE_GSI_EVENT_EN         0xe18u
++#define SE_IRQ_EN               0xe1cu
++#define SE_HW_PARAM0            0xe24u
++#define SE_HW_PARAM1            0xe28u
++#define SE_DMA_GENERAL_CFG      0xe30u
++
++#define M_CMD_DONE              (1u << 0)
++#define M_CMD_ABORT_DONE        (1u << 5)
++#define M_ERRORS                (0x1eu | (3u << 24) | (3u << 28))
++#define M_EVENTS                (M_CMD_DONE | M_ERRORS | (1u << 5) | (3u << 26) | (1u << 30))
++#define TX_WC(v)                ((v) & 0x0fffffffu)
++#define RX_WC(v)                ((v) & 0x01ffffffu)
++#define SPI_FULL_DUPLEX         3u      /* SPI_TX_ONLY | SPI_RX_ONLY */
++#define SPI_CS_TOGGLE           (1u << 1)
++/* geni_se_config_packing(8, 4, msb_first, tx, rx): MSB on the wire. */
++#define PACK0_8BIT              0x0007f8feu
++#define PACK1_8BIT              0x000ffefeu
++#define XO_HZ                   19200000u
++#define CLK_OFF                 (1u << 31)
++
++static uint32_t
++rd(vm_offset_t base, uint32_t off)
++{
++	uint32_t v = *(volatile uint32_t *)(base + off);
++	__asm__ volatile ("dmb oshld" ::: "memory");
++	return v;
++}
++
++static void
++wr(vm_offset_t base, uint32_t off, uint32_t val)
++{
++	__asm__ volatile ("dmb oshst" ::: "memory");
++	*(volatile uint32_t *)(base + off) = val;
++	__asm__ volatile ("dsb osh" ::: "memory");
++}
++
++static bool
++wait_clear(vm_offset_t base, uint32_t off, uint32_t mask)
++{
++	for (unsigned i = 0; i < 5000; ++i) {
++		if (!(rd(base, off) & mask)) {
++			return true;
++		}
++		delay(1);
++	}
++	return false;
++}
++
++int
++qgeni_map(struct qgeni_se *se)
++{
++	if (!se->base) {
++		se->base = ml_io_map((vm_offset_t)se->se_pa, 0x4000);
++	}
++	if (!se->gcc) {
++		se->gcc = ml_io_map((vm_offset_t)se->gcc_pa, se->gcc_size);
++	}
++	return (se->base && se->gcc) ? 0 : ENOMEM;
++}
++
++bool
++qgeni_clocks_running(struct qgeni_se *se)
++{
++	for (unsigned i = 0; i < 6 && se->clk->halts[i]; ++i) {
++		if (rd(se->gcc, se->clk->halts[i]) & CLK_OFF) {
++			return false;
++		}
++	}
++	return true;
++}
++
++void
++qgeni_dump(struct qgeni_se *se)
++{
++	const struct qgeni_clk *c = se->clk;
++	printf("QGENI %s: gcc vote %#x=%#x (need %#x) rcg %#x=%#x cfg=%#x\n", se->name,
++	    c->vote_reg, rd(se->gcc, c->vote_reg), c->vote_mask,
++	    c->rcg, rd(se->gcc, c->rcg), rd(se->gcc, c->rcg + 4u));
++	for (unsigned i = 0; i < 6 && c->halts[i]; ++i) {
++		printf("QGENI %s: branch %#x=%#x\n", se->name, c->halts[i], rd(se->gcc, c->halts[i]));
++	}
++	if (!qgeni_clocks_running(se)) {
++		printf("QGENI %s: clocks off; SE registers not read\n", se->name);
++		return;
++	}
++	uint32_t fw = rd(se->base, SE_FW_REV);
++	printf("QGENI %s: fw=%#x proto=%u if_disable=%#x status=%#x hw=%#x/%#x dma=%#x mclk=%#x clksel=%#x\n",
++	    se->name, fw, (fw >> 8) & 0xffu, rd(se->base, SE_IF_DISABLE), rd(se->base, SE_STATUS),
++	    rd(se->base, SE_HW_PARAM0), rd(se->base, SE_HW_PARAM1), rd(se->base, SE_DMA_MODE),
++	    rd(se->base, SE_M_CLK_CFG), rd(se->base, SE_CLK_SEL));
++	printf("QGENI %s: spi cpha=%#x cpol=%#x demux=%#x inv=%#x trans=%#x word=%#x delays=%#x ios=%#x fifo=%#x/%#x\n",
++	    se->name, rd(se->base, SE_SPI_CPHA), rd(se->base, SE_SPI_CPOL),
++	    rd(se->base, SE_SPI_DEMUX_SEL), rd(se->base, SE_SPI_DEMUX_INV),
++	    rd(se->base, SE_SPI_TRANS_CFG), rd(se->base, SE_SPI_WORD_LEN),
++	    rd(se->base, SE_SPI_DELAYS), rd(se->base, SE_IOS),
++	    rd(se->base, SE_TX_STATUS), rd(se->base, SE_RX_STATUS));
++}
++
++int
++qgeni_clocks_on(struct qgeni_se *se)
++{
++	const struct qgeni_clk *c = se->clk;
++	/* Add only this SE's bits; other voters' bits are preserved. */
++	wr(se->gcc, c->vote_reg, rd(se->gcc, c->vote_reg) | c->vote_mask);
++	uint32_t cfg = rd(se->gcc, c->rcg + 4u);
++	/* XO source 0, half-integer divider 1, no M/N: 19.2 MHz. */
++	if ((cfg & 0x371fu) != 1u) {
++		wr(se->gcc, c->rcg + 4u, (cfg & ~0x371fu) | 1u);
++		wr(se->gcc, c->rcg, rd(se->gcc, c->rcg) | 1u);
++		if (!wait_clear(se->gcc, c->rcg, 1u)) {
++			printf("QGENI %s: RCG update timeout cmd=%#x\n", se->name, rd(se->gcc, c->rcg));
++			return ETIMEDOUT;
++		}
++	}
++	for (unsigned i = 0; i < 6 && c->halts[i]; ++i) {
++		if (!wait_clear(se->gcc, c->halts[i], CLK_OFF)) {
++			printf("QGENI %s: branch %#x stays off (%#x)\n", se->name, c->halts[i],
++			    rd(se->gcc, c->halts[i]));
++			return ETIMEDOUT;
++		}
++	}
++	return 0;
++}
++
++int
++qgeni_fifo_init(struct qgeni_se *se, unsigned proto)
++{
++	if (!qgeni_clocks_running(se)) {
++		return ENXIO;
++	}
++	uint32_t fw = rd(se->base, SE_FW_REV);
++	uint32_t p0 = rd(se->base, SE_HW_PARAM0), p1 = rd(se->base, SE_HW_PARAM1);
++	se->tx_depth = (p0 >> 16) & 0xffu;
++	se->rx_depth = (p1 >> 16) & 0xffu;
++	if (((fw >> 8) & 0xffu) != proto) {
++		printf("QGENI %s: firmware protocol %u, need %u (boot chain loads it)\n",
++		    se->name, (fw >> 8) & 0xffu, proto);
++		return ENODEV;
++	}
++	if ((rd(se->base, SE_IF_DISABLE) & 1u) || ((p0 >> 24) & 0x3fu) != 32u ||
++	    ((p1 >> 24) & 0x3fu) != 32u || se->tx_depth < 2u || se->rx_depth < 2u) {
++		printf("QGENI %s: no usable 32-bit FIFO (if_disable=%#x hw=%#x/%#x)\n",
++		    se->name, rd(se->base, SE_IF_DISABLE), p0, p1);
++		return ENODEV;
++	}
++	if (rd(se->base, SE_STATUS) & 0x1001u) {
++		printf("QGENI %s: engine busy (status=%#x)\n", se->name, rd(se->base, SE_STATUS));
++		return EBUSY;
++	}
++	se->proto = proto;
++	wr(se->base, SE_GSI_EVENT_EN, 0);
++	wr(se->base, SE_IRQ_EN, 0);             /* polled: no wrapper interrupt */
++	wr(se->base, SE_S_IRQ_EN, 0);
++	wr(se->base, SE_M_IRQ_CLR, 0xffffffffu);
++	wr(se->base, SE_S_IRQ_CLR, 0xffffffffu);
++	wr(se->base, SE_DMA_MODE, 0);
++	wr(se->base, SE_CGC_CTRL, rd(se->base, SE_CGC_CTRL) | 0x7fu);
++	wr(se->base, SE_DMA_GENERAL_CFG, rd(se->base, SE_DMA_GENERAL_CFG) | 0x0fu);
++	wr(se->base, SE_OUTPUT_CTRL, 0x7f);
++	wr(se->base, SE_FORCE_DEFAULT, 1);
++	wr(se->base, SE_BYTE_GRAN, 0);
++	wr(se->base, SE_TX_PACK0, PACK0_8BIT);
++	wr(se->base, SE_TX_PACK1, PACK1_8BIT);
++	wr(se->base, SE_RX_PACK0, PACK0_8BIT);
++	wr(se->base, SE_RX_PACK1, PACK1_8BIT);
++	wr(se->base, SE_TX_WM, 0);
++	wr(se->base, SE_RX_WM, 0);
++	wr(se->base, SE_RX_RFR_WM, se->rx_depth - 1u);
++	wr(se->base, SE_M_IRQ_EN, M_EVENTS);
++	if (rd(se->base, SE_TX_PACK0) != PACK0_8BIT || rd(se->base, SE_RX_PACK1) != PACK1_8BIT) {
++		printf("QGENI %s: packing readback mismatch\n", se->name);
++		return EIO;
++	}
++	if (TX_WC(rd(se->base, SE_TX_STATUS)) || RX_WC(rd(se->base, SE_RX_STATUS))) {
++		printf("QGENI %s: inherited FIFO data\n", se->name);
++		return EIO;
++	}
++	printf("QGENI %s: FIFO mode, proto %u, fifo %u/%u words\n", se->name, proto,
++	    se->tx_depth, se->rx_depth);
++	return 0;
++}
++
++int
++qgeni_spi_setup(struct qgeni_se *se, unsigned mode, unsigned cs, unsigned hz,
++    unsigned cs_clk_delay)
++{
++	if (se->proto != QGENI_PROTO_SPI || hz == 0 || cs > 3u) {
++		return EINVAL;
++	}
++	unsigned div = (XO_HZ + hz - 1u) / hz;
++	if (div == 0u || div > 0xfffu) {
++		return EINVAL;
++	}
++	wr(se->base, SE_CLK_SEL, 0);
++	wr(se->base, SE_M_CLK_CFG, (div << 4) | 1u);
++	wr(se->base, SE_SPI_LOOPBACK, 0);
++	wr(se->base, SE_SPI_DEMUX_SEL, cs);
++	wr(se->base, SE_SPI_DEMUX_INV, 0);
++	wr(se->base, SE_SPI_CPHA, (mode & 1u) ? 1u : 0u);
++	wr(se->base, SE_SPI_CPOL, (mode & 2u) ? 4u : 0u);
++	wr(se->base, SE_SPI_WORD_LEN, 8u - 4u);
++	/* CS stays asserted for the whole command. */
++	wr(se->base, SE_SPI_TRANS_CFG, rd(se->base, SE_SPI_TRANS_CFG) & ~SPI_CS_TOGGLE);
++	wr(se->base, SE_SPI_DELAYS, (cs_clk_delay & 0x3ffu) << 10);
++	printf("QGENI %s: SPI mode %u cs %u %u Hz (div %u) cs-clk %u\n", se->name, mode, cs,
++	    XO_HZ / div, div, cs_clk_delay);
++	return 0;
++}
++
++static void
++qgeni_abort(struct qgeni_se *se)
++{
++	wr(se->base, SE_M_CMD_CTRL, 2u);        /* M_GENI_CMD_ABORT */
++	bool done = false;
++	for (unsigned i = 0; i < 5000; ++i) {
++		if (rd(se->base, SE_M_IRQ) & M_CMD_ABORT_DONE) {
++			done = true;
++			break;
++		}
++		delay(1);
++	}
++	if (!done || !wait_clear(se->base, SE_STATUS, 1u)) {
++		se->dead = true;
++		printf("QGENI %s: abort failed status=%#x irq=%#x; engine disabled\n", se->name,
++		    rd(se->base, SE_STATUS), rd(se->base, SE_M_IRQ));
++	}
++	for (unsigned i = 0; i < 64 && RX_WC(rd(se->base, SE_RX_STATUS)); ++i) {
++		(void)rd(se->base, SE_RX_FIFO);
++	}
++	wr(se->base, SE_M_IRQ_CLR, 0xffffffffu);
++	if (TX_WC(rd(se->base, SE_TX_STATUS))) {
++		se->dead = true;
++		printf("QGENI %s: TX FIFO not empty after abort; engine disabled\n", se->name);
++	}
++}
++
++int
++qgeni_spi_xfer(struct qgeni_se *se, const uint8_t *tx, uint8_t *rx, unsigned len)
++{
++	unsigned sent = 0, got = 0;
++
++	if (se->dead || se->proto != QGENI_PROTO_SPI || len == 0 || len > 0xffffu) {
++		return EIO;
++	}
++	if (!wait_clear(se->base, SE_STATUS, 1u)) {
++		se->dead = true;
++		return EBUSY;
++	}
++	wr(se->base, SE_M_IRQ_CLR, 0xffffffffu);
++	wr(se->base, SE_SPI_TX_LEN, len);
++	wr(se->base, SE_SPI_RX_LEN, len);
++	wr(se->base, SE_M_CMD0, SPI_FULL_DUPLEX << 27);
++	for (unsigned i = 0; i < 50000; ++i) {
++		uint32_t irq = rd(se->base, SE_M_IRQ);
++		se->irq_seen |= irq;
++		if (irq & M_ERRORS) {
++			printf("QGENI %s: transfer error irq=%#x tx=%u rx=%u/%u\n", se->name, irq,
++			    sent, got, len);
++			break;
++		}
++		/* Keep the TX FIFO fed: the clock only runs while it has data. */
++		while (sent < len && TX_WC(rd(se->base, SE_TX_STATUS)) < se->tx_depth) {
++			uint32_t word = 0;
++			for (unsigned j = 0; j < 4u && sent < len; ++j, ++sent) {
++				word |= (uint32_t)(tx ? tx[sent] : 0xffu) << (8u * j);
++			}
++			wr(se->base, SE_TX_FIFO, word);
++		}
++		for (uint32_t wc = RX_WC(rd(se->base, SE_RX_STATUS)); wc; --wc) {
++			uint32_t word = rd(se->base, SE_RX_FIFO);
++			for (unsigned j = 0; j < 4u && got < len; ++j, ++got) {
++				if (rx) {
++					rx[got] = (uint8_t)(word >> (8u * j));
++				}
++			}
++		}
++		if (irq & M_CMD_DONE) {
++			for (uint32_t wc = RX_WC(rd(se->base, SE_RX_STATUS)); wc; --wc) {
++				uint32_t word = rd(se->base, SE_RX_FIFO);
++				for (unsigned j = 0; j < 4u && got < len; ++j, ++got) {
++					if (rx) {
++						rx[got] = (uint8_t)(word >> (8u * j));
++					}
++				}
++			}
++			irq = rd(se->base, SE_M_IRQ);
++			wr(se->base, SE_M_IRQ_CLR, irq);
++			if (!(irq & M_ERRORS) && sent == len && got == len) {
++				return 0;
++			}
++			printf("QGENI %s: short transfer irq=%#x tx=%u rx=%u/%u\n", se->name, irq,
++			    sent, got, len);
++			break;
++		}
++		wr(se->base, SE_M_IRQ_CLR, irq & ((3u << 26) | (1u << 30)));
++		delay(1);
++	}
++	qgeni_abort(se);
++	return EIO;
++}
++#endif /* ARM64_BOARD_CONFIG_FP6 */
+--- /dev/null
++++ b/bsd/dev/qcom_geni.h
+@@ -0,0 +1,59 @@
++/*
++ * Qualcomm QUPv3 GENI serial engine (SE) core: polled FIFO mode only.
++ *
++ * One struct qgeni_se per engine. The board supplies the SE and GCC
++ * physical addresses and the engine's GCC clock description; this core
++ * maps them, brings the clocks up (vote + XO source), checks the firmware
++ * loaded by the boot chain, and runs FIFO transfers. No DMA, no GSI, no
++ * interrupts: callers poll from their own thread.
++ *
++ * Register offsets and sequences follow Linux drivers/soc/qcom/qcom-geni-se.c
++ * and drivers/spi/spi-geni-qcom.c.
++ */
++#ifndef _BSD_DEV_QCOM_GENI_H_
++#define _BSD_DEV_QCOM_GENI_H_
++
++#include <sys/types.h>
++#include <stdbool.h>
++#include <mach/vm_types.h>
++
++#define QGENI_PROTO_SPI         1u
++#define QGENI_PROTO_UART        2u
++#define QGENI_PROTO_I2C         3u
++
++/* GCC clocks of one serial engine. */
++struct qgeni_clk {
++	uint32_t        vote_reg;       /* branch vote register (APCS) */
++	uint32_t        vote_mask;      /* wrapper core/2x/AHB + SE bits */
++	uint32_t        rcg;            /* SE RCG CMD register (CFG at +4) */
++	uint32_t        halts[6];       /* branch status registers, 0 ends */
++};
++
++struct qgeni_se {
++	const char             *name;
++	uint64_t                se_pa, gcc_pa;
++	uint32_t                gcc_size;
++	const struct qgeni_clk *clk;
++	vm_offset_t             base, gcc;
++	unsigned                proto;
++	unsigned                tx_depth, rx_depth;     /* FIFO words */
++	bool                    dead;
++	uint32_t                irq_seen;               /* diagnostics */
++};
++
++int qgeni_map(struct qgeni_se *se);
++/* Read only: true when every branch of the SE reports its clock running. */
++bool qgeni_clocks_running(struct qgeni_se *se);
++/* Read only: GCC and (only with clocks running) SE state to the console. */
++void qgeni_dump(struct qgeni_se *se);
++/* Vote the branches, set the RCG to XO (19.2 MHz) and wait for them. */
++int qgeni_clocks_on(struct qgeni_se *se);
++/* Check firmware protocol and FIFO availability, then FIFO-mode setup. */
++int qgeni_fifo_init(struct qgeni_se *se, unsigned proto);
++/* SPI mode 0..3, chip select, clock (from 19.2 MHz), CS-to-clock delay. */
++int qgeni_spi_setup(struct qgeni_se *se, unsigned mode, unsigned cs,
++    unsigned hz, unsigned cs_clk_delay);
++/* One full-duplex transfer with CS held throughout. rx may be NULL. */
++int qgeni_spi_xfer(struct qgeni_se *se, const uint8_t *tx, uint8_t *rx, unsigned len);
++
++#endif /* _BSD_DEV_QCOM_GENI_H_ */
+--- a/iokit/bsddev/IOKitBSDInit.cpp
++++ b/iokit/bsddev/IOKitBSDInit.cpp
+@@ -786,12 +786,11 @@
+ 		IOLog("FP6 GPIO: passive probe %s (%d)\n",
+ 		    probe_error ? "failed" : "complete", probe_error);
+ 	}
+-	uint32_t fp6_touch_probe_arg = 0;
+-	if (PE_parse_boot_argn("fp6touch", &fp6_touch_probe_arg, sizeof(fp6_touch_probe_arg)) && fp6_touch_probe_arg) {
+-		extern int fp6_touch_probe(void);
+-		int probe_error = fp6_touch_probe();
+-		IOLog("FP6 TOUCH: passive SPI probe %s (%d)\n",
+-		    probe_error ? "failed" : "complete", probe_error);
++	/* fp6touch=1 read-only probe, 2 live driver (bsd/dev/fp6_touch.c) */
++	uint32_t fp6_touch_mode = 0;
++	if (PE_parse_boot_argn("fp6touch", &fp6_touch_mode, sizeof(fp6_touch_mode)) && fp6_touch_mode) {
++		extern void fp6_touch_init(uint32_t mode);
++		fp6_touch_init(fp6_touch_mode);
+ 	}
+ #endif
+ 
