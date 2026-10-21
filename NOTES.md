@@ -52,7 +52,23 @@
   passed; kernel SHA256SUMS verified. Image (wifimac ADT, console muted,
   `fp6touch=2`): `/tmp/fp6-gpi-39556553401/img/fp6-shim-ufs-root-gpi-touch.img`,
   SHA256 `85424b1ece61a39be62d9c97c91089bbf8bb7e884b168c94b0b416cb43f8b54d`,
-  temporarily booted 06:43:30 UTC; result pending. Rails
+  temporarily booted 06:43:30 UTC. Result: kernel data abort at PC
+  0xfffffe00074f57f0 (LR 0xfffffe00074f5738) = `qgeni_smmu_passthrough+0xe8`,
+  the first SMR load of the stream-match scan (SMMU base + 0x800 + 4i); the
+  sCR0/IDR0/IDR1 loads before it completed, so the GPII 0 idle check had
+  passed. FAR/ESR not captured. Unlike sweet_ufs.c, which reads the same
+  SMRs on this phone, the new scan did not cap the IDR0 group count at 128.
+- Patch 0120 caps the SMR scan at 128 groups as sweet_ufs.c does and logs
+  sCR0/IDR0/IDR1 before scanning (diagnosis is source-based until the next
+  boot). Patch 0121 adds `bsd/dev/fp6_keys.c`: read-only polling (20 ms, two
+  equal samples) of PMK8550 PON_RT_STS 0x1310 (bit 7 power, bit 6 volume
+  down; GEN3 subtype 0x09 checked at 0x1305) and PM7550 GPIO 6 RT_STS
+  0x8d10 bit 0 (volume up, active low; used only if EN_CTL bit 7 and
+  digital-input mode) through the v7 arbiter observer channel for EE 0
+  (core 0x0c400000 APID map +0x2000+4n, cnfg 0x0c42d000 owner +4n, obs
+  0x0c440000 +0x20*apid; offsets checked in spmi-pmic-arb.c). The only MMIO
+  write is the observer read command; `fp6keys=0` disables. Both compile
+  locally. Rails
   (L22B/L9B) and PMIC are still untouched. Work is committed from a separate
   worktree on main because the shared checkout is on Codex's
   `fp6-adreno-gen711` branch.

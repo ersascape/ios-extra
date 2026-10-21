@@ -1,0 +1,22 @@
+--- a/bsd/dev/qcom_geni.c
++++ b/bsd/dev/qcom_geni.c
+@@ -454,11 +454,19 @@
+ 	unsigned pages = 1u << (((idr1 >> 28) & 7u) + 1u);
+ 	unsigned matches = 0, slot = 0, free_slot = UINT32_MAX;
+ 
++	printf("QGENI %s: SMMU sCR0=%#x idr0=%#x idr1=%#x\n", se->name, scr0, idr0, idr1);
+ 	if (!(idr0 & (1u << 30)) || !groups || banks < 2u || banks > 128u ||
+ 	    (uint64_t)(pages + banks) * pgsize > SMMU_MAP_BYTES) {
+ 		printf("QGENI %s: unsupported SMMU idr0=%#x idr1=%#x\n", se->name, idr0, idr1);
+ 		return ENXIO;
+ 	}
++	/*
++	 * As the UFS driver (sweet_ufs.c), which reads these on this phone: only
++	 * the first 128 stream-match groups are accessible; IDR0 may report more.
++	 */
++	if (groups > 128u) {
++		groups = 128u;
++	}
+ 	for (unsigned i = 0; i < groups; i++) {
+ 		uint32_t smr = rd(smmu, SMMU_SMR(i));
+ 		if (!(smr & 0x80000000u)) {
