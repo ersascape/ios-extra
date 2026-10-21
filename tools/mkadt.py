@@ -254,6 +254,10 @@ def build_fp6(seed=None, phys_base=None, mem_size=None):
         # Sweet/Phoenix. chip-id and the security status are those of the
         # A11 / dev-fused D22AP whose userland runs here (see build()).
         ('unique-chip-id', struct.pack('<Q', 0x4650360000000001)),
+        # MobileGestalt reads CFData here before waiting for a Wi-Fi service;
+        # without it lsd's database seeding blocks and SpringBoard never
+        # draws (seen on tegu). Locally administered stand-in, no Wi-Fi.
+        ('mac-address-wifi0', bytes.fromhex('024650360001')),
         ('chip-id', u32(0x8015)),
         ('certificate-production-status', u32(0)),
         ('effective-production-status-ap', u32(0)),

@@ -44,6 +44,18 @@
   cache and has the migration marker. Tegu's history shows a cache written
   under a wrong identity breaks SpringBoard until a clean root is used, so
   the clean root should first boot with the D22AP ADT. Not flashed.
+- Phone observation (user): the fixes image showed a solid Apple logo (backboardd
+  presenting; no progress bar, no flicker) and stayed there. Tegu hit the same
+  stall: lsd's database seeding waited in MobileGestalt for a Wi-Fi identity
+  (it reads `/chosen/mac-address-wifi0` first), so SpringBoard never drew;
+  adding that CFData fixed it there. Added a locally administered
+  `mac-address-wifi0` (`02:46:50:36:00:01`) to the FP6 ADT. Repacked with
+  console text visible (no `sweetfb_noconsole`):
+  `/tmp/fp6-fixes-39550549760/img-wifimac/fp6-shim-ufs-root-wifimac-console.img`,
+  SHA256 `5ebfd2d58eeeeaaebca1796004190804e2eb9b7398790644e9419b49500851cd`.
+  Not yet booted. For reference, SWEET's logo-to-UI time without migration was
+  under a minute (`exec SpringBoard` at ~47 s on cpus=1); Tegu's first
+  Setup/home screen came a few minutes after the logo once lsd was unblocked.
 - Not changed, from review: 0108 with the macOS Edge scheduler leaves P cores
   4–7 mostly idle (E→P migration/steal disallowed; throughput only); 0100
   probe images ignore `ufsrw=1`; 0105 SMMU geometry decode and power-query
