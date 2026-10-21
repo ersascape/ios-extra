@@ -1,5 +1,30 @@
 # ios-extra — current state
 
+## FP6 exact SMMU refusal and SpringBoard capture (2026-10-21)
+
+- Phone console photo reports `setup failed: register readback +0x22010
+  want=0x00038011 got=0x00000000`: CB2 TCR2 did not retain the requested
+  value. CBA2R/CBAR checks precede it and passed. Translation and GMU execution
+  remain unproven; do not accept zero as successful setup. Investigating the
+  Fairphone driver's SMMU power/clock and access prerequisites.
+- CI `39630788262` succeeded for `69f987818adc6ebe628e8f453a1f10f668c7dd5f`.
+  Local visible-console package:
+  `/tmp/fp6-smmu-69f9878/image/fp6-shim-smmu-failure-visible.img`, SHA-256
+  `bd604be97cf92049048ad5751efbad7663077b49a18c129a8f5ec1296cabc3b4`.
+  Uses selected stock DTB, UFS root, existing ECM transport; no Tegu draft.
+  Packaging checks passed. Photo alone does not independently identify its image.
+- Passive USB capture `/tmp/fp6-blackboot-69f9878.pcap` recorded 4575 packets,
+  zero capture drops. Capture filename is not proof of running kernel identity.
+  Decoded packet text `/tmp/fp6-blackboot-packets.txt` shows repeated SpringBoard
+  SIGABRT with `_UIScreenComplexBoundingPathUtilities` assertion: missing
+  `BoundingPathBitmap-1125x2436-375x812-3.00x`. This establishes a userspace crash;
+  it does not establish the cause of the reported gradual display darkening.
+  Rootfs asset/identity investigation is separate from SMMU/GMU startup.
+- Auth-to-Metal audit is in `docs/FP6_ADRENO_METAL_AUDIT.md`. UniXNU has a
+  Darwin Turnip backend worth adapting. AirNir currently hard-gates generation7
+  and its host script selects A740; FP6 needs the A810 target. This is source
+  evidence, not an FP6 runtime result.
+
 ## FP6 CB2 test phone observation and failure diagnostics (2026-10-21)
 
 - User's new console photo shows `context banks with nonzero state=0/22`,
