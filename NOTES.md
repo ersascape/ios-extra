@@ -1,5 +1,21 @@
 # ios-extra — current state
 
+## Patch 0145 build and local FP6 image (2026-10-22)
+
+- CI run `39663527285` passed for `ced5799de0456a1f06a1fb90291eff40e4e17bfd`;
+  kernel artifact SHA256SUMS verified. The CI `fp6-boot` job skipped image
+  packaging because the repository variable `FP6_STOCK_DTB_URL` is unset.
+- Locally packaged the CI kernel with the full product ADT (SHA256
+  `6435ed347b1091a80ae59e695f6decc4f2c89ef647f493b83d2ebf2578a3e752`) and
+  verified stock FP6 DTB (SHA256
+  `8198534128258bfe7b05bbb5b227affc181aa49b376884c08eae8564fce124e3`). The
+  UFS-root command line enables `fp6smmu=2 fp6smmupower=1` for the SMMU
+  software-walk validation.
+- Image: `/tmp/fp6-gpu-ced5799-39663527285/fp6-shim-0145-soft-walk.img`, SHA256
+  `b0555fbcbfb28a9ad8dae5fb3123ec130fabc8a83c2f03f6639d91a7314ad1db`.
+  Header-v2 payload, shim, and embedded-DTB round-trip checks passed. This is
+  a packaged image only; it has not been booted on the phone.
+
 ## FP6 SMMU ATOSNS software-walk draft (2026-10-22)
 
 - Reviewed `/tmp/claude-1000/-home-ersa-Dev-ios-extra/febca858-d68f-4e09-bdd9-8bdf4a7eb119/scratchpad/gmu-boot4.log`. The boot reports GPU SMMU `IDR0=0x4c017e18`; after the CB TCR2 readback it logs `context-bank ATOS IOVA=0x60000000 PAR=0x0 expected=0x90361b000 passed=0`, then contains the failure before any master runs. IDR0 bit 26 (`ATOSNS`) is set, so the zero PAR is consistent with unsupported ATOS rather than evidence of a bad PTE. The same log's setup reached TCR2 but does not include a successful TCR readback.
