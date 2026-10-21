@@ -1,0 +1,123 @@
+--- a/bsd/dev/sweet_gpu.c
++++ b/bsd/dev/sweet_gpu.c
+@@ -2859,14 +2859,16 @@
+  * Gen8 GMU first boot (docs/FP6_GMU_FIRST_BOOT.md; KGSL hwsched order),
+  * opt-in fp6gmuboot=1 after a successful fp6gmuload=1 upload. Polled: every
+  * GMU interrupt stays masked. This step stops after HFI_CTRL_INIT; no HFI
+- * message is sent yet. On failure CM3 goes back into reset.
++ * message is sent yet. Always return CM3 to reset after the bounded probe;
++ * preserve mappings and votes even if reset cannot be verified.
+  */
+ #define FP6_GMU_HFI_SIZE        0x12000u        /* 840 + 16 + 17 x 4 KiB, page rounded */
+ #define FP6_GMU_HFI_QUEUES      17u
+ #define FP6_GMU_HFI_QUEUE0      0x350u          /* ALIGN(table, 16) */
+ #define FP6_GMU_LOG_SIZE        0x10000u
+ #define FP6_GMU_VRB_SIZE        0x1000u
+-static uint32_t fp6_gmu_hfi_va, fp6_gmu_log_va, fp6_gmu_vrb_va;
++#define FP6_GMU_TRACE_SIZE      0x4000u
++static uint32_t fp6_gmu_hfi_va, fp6_gmu_log_va, fp6_gmu_vrb_va, fp6_gmu_trace_va;
+ 
+ static int
+ fp6_gmu_boot_wanted(void)
+@@ -2898,8 +2900,8 @@
+ 	return va + size > 0x80000000u ? 0 : (uint32_t)va;
+ }
+ 
+-/* Reserve HFI, log and VRB before the domain is published (frozen), and
+- * fill the queue table and VRB header so publish cleans them to memory. */
++/* Reserve HFI, log, VRB and trace before the domain is published (frozen);
++ * publication cleans every host-initialized header to memory. */
+ static int
+ fp6_gmu_boot_reserve(void)
+ {
+@@ -2909,9 +2911,12 @@
+ 	if (!fp6_gmu_log_va || fp6_gmu_domain_reserve(&fp6_gmu_domain, fp6_gmu_log_va, FP6_GMU_LOG_SIZE, 0)) return -1;
+ 	fp6_gmu_vrb_va = fp6_gmu_next_va(FP6_GMU_VRB_SIZE);
+ 	if (!fp6_gmu_vrb_va || fp6_gmu_domain_reserve(&fp6_gmu_domain, fp6_gmu_vrb_va, FP6_GMU_VRB_SIZE, 0)) return -1;
++	fp6_gmu_trace_va = fp6_gmu_next_va(FP6_GMU_TRACE_SIZE);
++	if (!fp6_gmu_trace_va || fp6_gmu_domain_reserve(&fp6_gmu_domain, fp6_gmu_trace_va, FP6_GMU_TRACE_SIZE, 0)) return -1;
++	uint32_t *trace = (uint32_t *)(void *)fp6_gmu_range_va(fp6_gmu_trace_va);
+ 	uint32_t *t = (uint32_t *)(void *)fp6_gmu_range_va(fp6_gmu_hfi_va);
+ 	uint32_t *vrb = (uint32_t *)(void *)fp6_gmu_range_va(fp6_gmu_vrb_va);
+-	if (!t || !vrb) return -1;
++	if (!t || !vrb || !trace) return -1;
+ 	/* hfi_queue_table: version, size (dwords), qhdr0 offset, qhdr size, num_q, num_active_q. */
+ 	t[0] = 0;
+ 	t[1] = (24u + FP6_GMU_HFI_QUEUES * 48u) / 4u;
+@@ -2930,8 +2935,16 @@
+ 		/* msg_size 0 (variable), unused, read_index 0, write_index 0 */
+ 	}
+ 	vrb[0] = FP6_GMU_VRB_SIZE / 4u;
+-	printf("QCOM GMU: boot buffers HFI 0x%08x log 0x%08x VRB 0x%08x\n",
+-	    fp6_gmu_hfi_va, fp6_gmu_log_va, fp6_gmu_vrb_va);
++	vrb[2] = fp6_gmu_trace_va;
++	/* Gen8 hwsched trace v1: GMU owns magic, payload and write index. */
++	trace[1] = (1u << 30) | 1u; /* drop mode, version 1 */
++	trace[2] = 80u;            /* full-buffer threshold percent */
++	trace[3] = FP6_GMU_TRACE_SIZE;
++	trace[8] = fp6_gmu_trace_va; /* 64-bit cookie, high word remains zero */
++	trace[10] = 5u;            /* timeout in milliseconds */
++	trace[11] = 1u;            /* HWSCHED log type */
++	printf("QCOM GMU: boot buffers HFI 0x%08x log 0x%08x VRB 0x%08x trace 0x%08x\n",
++	    fp6_gmu_hfi_va, fp6_gmu_log_va, fp6_gmu_vrb_va, fp6_gmu_trace_va);
+ 	return 0;
+ }
+ 
+@@ -2941,8 +2954,8 @@
+ 	for (unsigned i = 0; i < 1000; i++) {                   /* 100 us steps, 100 ms */
+ 		uint32_t v = fp6_smmu_read32(g, off);
+ 		*last = v;
++		if (off == 0x47070u && (v & 0xe00u)) return 0;          /* reset/NMI: firmware assert */
+ 		if ((v & mask) == want) return 1;
+-		if (off == 0x47070u && (v & 0xe00u)) return 0;          /* reset/NMI: firmware assert */
+ 		delay(100);
+ 	}
+ 	return 0;
+@@ -3002,25 +3015,30 @@
+ 	fp6_smmu_write32(g, 0x47000u, 0);                       /* CM3_SYSRESET */
+ 	int alive = fp6_gmu_poll(g, 0x47070u, 0x1ffu, 0x100u, &v);
+ 	printf("QCOM GMU: FW_INIT_RESULT=0x%08x %s intr_info=0x%08x ao_status=0x%08x cb_fsr=0x%08x\n",
+-	    v, alive ? "(running)" : "(no 0x100)", fp6_smmu_read32(g, 0x47648u),
++	    v, alive ? "(running)" : "(not ready or firmware fault)", fp6_smmu_read32(g, 0x47648u),
+ 	    fp6_smmu_read32(g, 0x57c14u), fp6_smmu_read32(smmu, cb_off + FP6_SMMU_CB_FSR));
+ 	if (alive) {
+ 		fp6_smmu_write32(g, 0x47618u, 1u);              /* HFI_CTRL_INIT */
+ 		int hfi = fp6_gmu_poll(g, 0x47600u, 1u, 1u, &v);
+-		printf("QCOM GMU: HFI_CTRL_STATUS=0x%08x %s; GMU left running, interrupts masked\n",
++		printf("QCOM GMU: HFI_CTRL_STATUS=0x%08x %s; bounded probe complete\n",
+ 		    v, hfi ? "(HFI initialized)" : "(HFI init timeout)");
+-		if (hfi) return;
+-	}
+-	/* Safe stop: CM3 back into reset, interrupts masked/cleared, fence allow. */
++	}
++	/* No HFI command service exists yet. Stop on success as well as failure.
++	 * Do not remove SID/context/votes: reset readback alone does not prove
++	 * outstanding bus transactions have drained. All backing is permanent. */
+ 	fp6_smmu_write32(g, 0x4764cu, 0xffffffffu);
+ 	fp6_smmu_write32(g, 0x57c18u, 0xffffffffu);
++	fp6_smmu_write32(g, 0x47000u, 1u);                      /* CM3_SYSRESET */
++	uint32_t reset = 0;
++	if (!fp6_gmu_poll(g, 0x47000u, 0xffffffffu, 1u, &reset)) {
++		printf("QCOM GMU: reset UNVERIFIED SYSRESET=0x%08x; SID/context/clock votes retained\n", reset);
++		return;
++	}
+ 	fp6_smmu_write32(g, 0x47644u, 0xffffffffu);
+ 	fp6_smmu_write32(g, 0x57c10u, 0xffffffffu);
+ 	fp6_smmu_write32(g, 0x57c50u, 7u);                      /* AHB_FENCE_STATUS_CLR */
+ 	fp6_smmu_write32(g, 0x57c40u, 0);                       /* AHB_FENCE_CTRL: allow */
+-	fp6_smmu_write32(g, 0x47000u, 1u);                      /* CM3_SYSRESET */
+-	printf("QCOM GMU: first boot failed; CM3 back in reset (SYSRESET=0x%08x)\n",
+-	    fp6_smmu_read32(g, 0x47000u));
++	printf("QCOM GMU: bounded boot probe stopped; CM3 reset verified; SID/context/clock votes retained\n");
+ }
+ 
+ /* Called only after temporary ATS passes. Success retains a persistent context;
+@@ -3540,7 +3558,7 @@
+ checked:
+ 
+ 	if (passed && fp6_gmu_persistent_upload(base, cb_off, smr_off, old_smr, &clocks)) {
+-		printf("QCOM GMU: retaining persistent context and clock votes; no firmware execution yet\n");
++		printf("QCOM GMU: retaining persistent context and clock votes after upload/probe\n");
+ 		return;
+ 	}
+ 

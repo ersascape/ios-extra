@@ -1,0 +1,173 @@
+--- a/bsd/dev/sweet_gpu.c
++++ b/bsd/dev/sweet_gpu.c
+@@ -2361,6 +2361,9 @@
+ /* RPMh LOW_SVS: enough for the hub (200 MHz), GMU (350 MHz) and SMMU. The
+  * stock 0x180 (TURBO) is only the boot proxy level Linux later drops. */
+ #define FP6_ARC_FLOOR           0x40u
++/* GPU PLL700 needs SVS; Lucid OLE calibration needs SVS_L1. Keep that
++ * MX vote for this boot. CX stays at LOW_SVS for GMU350/HUB200. */
++#define FP6_GMU_MX_FLOOR        0xc0u
+ #define FP6_SMMU_TABLE_BYTES    0x4000u
+ #define FP6_SMMU_PTE_PAGE       (3ULL | (1ULL << 10) | (2ULL << 8) | (1ULL << 6) | (1ULL << 11) | (1ULL << 54))
+ #define FP6_SMMU_GMU_IOVA       0x60000000u
+@@ -2448,7 +2451,7 @@
+ 				if (!i && value) return 0;
+ 				if (i && !value) break;
+ 				if (i && value <= previous) return 0;
+-				if (!chosen && value >= FP6_ARC_FLOOR) chosen = i;
++				if (!chosen && value >= (mx ? FP6_GMU_MX_FLOOR : FP6_ARC_FLOOR)) chosen = i;
+ 				previous = value;
+ 			}
+ 			if (!chosen) return 0;
+@@ -2476,7 +2479,10 @@
+ fp6_power_write(vm_offset_t base, uint32_t off, uint32_t value)
+ {
+ 	fp6_smmu_write32(base, off, value);
+-	return fp6_smmu_read32(base, off) == value;
++	uint32_t got = fp6_smmu_read32(base, off);
++	if (got != value)
++		printf("QCOM SMMU: power write failed +0x%x want=0x%08x got=0x%08x\n", off, value, got);
++	return got == value;
+ }
+ 
+ /* A successful ACTIVE command leaves an acknowledged CX floor for this boot.
+@@ -2548,7 +2554,7 @@
+ 	if (!fp6_power_write(tcs, b + 0x2cu, 0) || !fp6_power_write(tcs, b + 0x20u, 0)) goto quarantine;
+ 	fp6_smmu_write32(tcs, 8u, bit); /* IRQ_CLEAR, W1C: drop the latched completion. */
+ 	complete[mx] = 1;
+-	printf("QCOM SMMU: FP6 %s ARC floor 0x%x acknowledged level=%u TCS=%u; vote retained\n", mx ? "MX" : "CX", FP6_ARC_FLOOR, level, slot);
++	printf("QCOM SMMU: FP6 %s ARC floor 0x%x acknowledged level=%u TCS=%u; vote retained\n", mx ? "MX" : "CX", mx ? FP6_GMU_MX_FLOOR : FP6_ARC_FLOOR, level, slot);
+ 	return 1;
+ quarantine:
+ 	printf("QCOM SMMU: FP6 power TCS=%u quarantined control=0x%08x status=0x%08x cmd=0x%08x irq=0x%08x; slot not reused\n",
+@@ -3114,12 +3120,23 @@
+ /* GMU-only boot path; no reset writes and no CM3 release. Ownership is retained
+  * for this boot. A partial failure never authorizes TCM or CM3 execution. */
+ static int
++fp6_gmu_clock_check(int passed, const char *stage)
++{
++	if (!passed) printf("QCOM GMU: clock setup failed at %s\n", stage);
++	return passed;
++}
++
++static int
+ fp6_gmu_branch_on(vm_offset_t base, uint32_t off, int poll)
+ {
+ 	uint32_t value = fp6_smmu_read32(base, off);
+-	if (value == 0xffffffffu) return 0;
++	if (!fp6_gmu_clock_check(value != 0xffffffffu, "branch read")) return 0;
+ 	fp6_smmu_write32(base, off, value | 1u);
+-	if (!(fp6_smmu_read32(base, off) & 1u)) return 0;
++	uint32_t got = fp6_smmu_read32(base, off);
++	if (got == 0xffffffffu || (!(got & 1u) && (got & (1u << 31)))) {
++		printf("QCOM GMU: branch +0x%x enable failed before=0x%08x got=0x%08x\n", off, value, got);
++		return 0;
++	}
+ 	if (!poll) { delay(10); return 1; }
+ 	return fp6_power_poll(base, off, 1u << 31, 0, 1000u);
+ }
+@@ -3132,6 +3149,8 @@
+ 	/* Force parent root, change only source/div/mode/HW-control, latch update.
+ 	 * Preserve ROOT_EN for the persistent firmware domain. */
+ 	fp6_smmu_write32(cc, cmd, before | 2u);
++	/* clk_rcg2_enable waits for the forced root before changing its CFG. */
++	if (!fp6_power_poll(cc, cmd, 1u << 31, 0, 1000u)) return 0;
+ 	uint32_t mask = 0x1fu | (7u << 8) | (3u << 12) | (1u << 20);
+ 	if (!fp6_power_write(cc, cmd + 4, (cfg & ~mask) | config)) return 0;
+ 	fp6_smmu_write32(cc, cmd, fp6_smmu_read32(cc, cmd) | 3u);
+@@ -3144,30 +3163,42 @@
+ 	uint32_t mode = fp6_smmu_read32(cc, 0), l = fp6_smmu_read32(cc, 0x10);
+ 	uint32_t alpha = fp6_smmu_read32(cc, 0x14), user = fp6_smmu_read32(cc, 0x18);
+ 	uint32_t op = fp6_smmu_read32(cc, 4);
+-	if (mode == 0xffffffffu || user == 0xffffffffu || (user & (1u << 25))) return 0;
++	printf("QCOM GMU: PLL0 mode=0x%08x op=0x%08x L=0x%08x alpha=0x%08x user=0x%08x\n",
++	    mode, op, l, alpha, user);
++	if (!fp6_gmu_clock_check(mode != 0xffffffffu && user != 0xffffffffu &&
++	    l != 0xffffffffu && alpha != 0xffffffffu && op != 0xffffffffu,
++	    "PLL0 registers readable")) return 0;
++	/* GPUCC has no exported software FSM vote register in gpucc-volcano. */
++	if (!fp6_gmu_clock_check(!(user & (1u << 25)), "PLL0 software ownership")) return 0;
++	alpha &= 0xffffu;
+ 	int running = (mode & 1u) && op == 1u;
+ 	if ((l & 0xffffu) && ((l & 0xffffu) != 0x24u || alpha != 0x7555u)) {
+ 		printf("QCOM GMU: unsupported inherited PLL0 rate L=0x%x alpha=0x%x\n", l, alpha);
+ 		return 0;
+ 	}
+ 	if (running) {
+-		/* Do not tune or change an enabled PLL. Even postdivider must match. */
+-		return (mode & (1u << 31)) && ((user >> 10) & 15u) == 1u && (user & 7u) == 7u;
++		/* Linux config enables outputs even on an inherited PLL. Preserve
++		 * its frequency and divider; only enable the required outputs. */
++		if (!fp6_gmu_clock_check((l & 0xffffu) == 0x24u && alpha == 0x7555u &&
++		    (mode & (1u << 31)) && ((user >> 10) & 15u) == 1u,
++		    "PLL0 inherited rate/lock/divider")) return 0;
++		return fp6_power_write(cc, 0x18u, user | 7u);
+ 	}
+ 	/* Reject another live consumer before configuring an unused PLL. */
+ 	uint32_t gmu_mux = (fp6_smmu_read32(cc, 0x931cu) >> 8) & 7u;
+ 	uint32_t hub_mux = (fp6_smmu_read32(cc, 0x93f0u) >> 8) & 7u;
+-	if (hub_mux >= 1 && hub_mux <= 3) return 0;
+-	if (gmu_mux >= 1 && gmu_mux <= 3 &&
++	printf("QCOM GMU: PLL0 consumer muxes GMU=%u HUB=%u\n", gmu_mux, hub_mux);
++	if (!fp6_gmu_clock_check(!(hub_mux >= 1 && hub_mux <= 3), "PLL0 HUB consumer idle")) return 0;
++	if (!fp6_gmu_clock_check(!(gmu_mux >= 1 && gmu_mux <= 3 &&
+ 	    (!(fp6_smmu_read32(cc, 0x90d4u) & (1u << 31)) ||
+-	     !(fp6_smmu_read32(cc, 0x9060u) & (1u << 31)))) return 0;
++	     !(fp6_smmu_read32(cc, 0x9060u) & (1u << 31)))), "PLL0 GMU consumers idle")) return 0;
+ 	if (!(l & 0xffffu)) {
+ 		/* Exact gpucc-volcano 700MHz configuration, Lucid OLE register map.
+ 		 * Linux skips this configuration if boot firmware already set L. */
+ 		static const struct { uint32_t off, value; } setup[] = {
+ 			{0x10,0x44440024}, {0x14,0x7555}, {0x20,0x20485699},
+ 			{0x24,0x00182261}, {0x28,0x82aa299c}, {0x18,0x407},
+-			{0x1c,5}, {0x30,3}, {0x34,0x00009000}, {0x38,0x00000034},
++			{0x1c,5}, {0x2c,0}, {0x30,3}, {0x34,0x00009000}, {0x38,0x00000034},
+ 		};
+ 		for (unsigned i = 0; i < sizeof(setup)/sizeof(setup[0]); i++)
+ 			if (!fp6_power_write(cc, setup[i].off, setup[i].value)) return 0;
+@@ -3220,7 +3251,7 @@
+ 	 * PLL rate rather than retuning a SoC-wide parent used by other devices. */
+ 	vm_offset_t gccpll = ml_io_map(0x00100000u, 0x1000u);
+ 	vm_offset_t votes = ml_io_map(0x00152000u, 0x1000u);
+-	if (!gccpll || !votes) return 0;
++	if (!fp6_gmu_clock_check(gccpll && votes, "GCC PLL/vote mapping")) return 0;
+ 	uint32_t l = fp6_smmu_read32(gccpll, 0x10u) & 0xffffu;
+ 	uint32_t alpha = fp6_smmu_read32(gccpll, 0x14u) & 0xffffu;
+ 	uint64_t rate = (19200000ULL * (((uint64_t)l << 16) | alpha)) >> 16;
+@@ -3229,21 +3260,25 @@
+ 		return 0;
+ 	}
+ 	uint32_t enable = fp6_smmu_read32(votes, 0x20u), branch = fp6_smmu_read32(votes, 0);
+-	if (enable == 0xffffffffu || branch == 0xffffffffu ||
+-	    !fp6_power_write(votes, 0x20u, enable | 1u) ||
+-	    !fp6_power_poll(gccpll, 0, 1u << 31, 1u << 31, 1500u) ||
+-	    !fp6_power_write(votes, 0, branch | (1u << 15))) return 0;
++	printf("QCOM GMU: GPLL0 rate=%llu mode=0x%08x vote=0x%08x branch=0x%08x\n",
++	    (unsigned long long)rate, fp6_smmu_read32(gccpll, 0), enable, branch);
++	if (!fp6_gmu_clock_check(enable != 0xffffffffu && branch != 0xffffffffu, "GCC vote registers")) return 0;
++	if (!fp6_gmu_clock_check(fp6_power_write(votes, 0x20u, enable | 1u), "GPLL0 vote")) return 0;
++	if (!fp6_gmu_clock_check(fp6_power_poll(gccpll, 0, 1u << 31, 1u << 31, 1500u), "GPLL0 lock")) return 0;
++	if (!fp6_gmu_clock_check(fp6_power_write(votes, 0, branch | (1u << 15)), "GPLL0 GPU source gate")) return 0;
+ 	delay(10);
+-	if (!fp6_gmu_pll700(cc)) return 0;
+-	if (!fp6_gmu_rcg_set(cc, 0x93ecu, 0x100505u) ||
+-	    !fp6_gmu_rcg_set(cc, 0x9318u, 0x100201u) ||
+-	    !fp6_gmu_branch_on(cc, 0x90d4u, 1) ||
+-	    !fp6_gmu_branch_on(cc, 0x90e8u, 1)) return 0;
++	if (!fp6_gmu_clock_check(fp6_gmu_pll700(cc), "GPU PLL0 700MHz")) return 0;
++	if (!fp6_gmu_clock_check(fp6_gmu_rcg_set(cc, 0x93ecu, 0x100505u), "HUB RCG 200MHz")) return 0;
++	if (!fp6_gmu_clock_check(fp6_gmu_rcg_set(cc, 0x9318u, 0x100201u), "GMU RCG 350MHz")) return 0;
++	if (!fp6_gmu_clock_check(fp6_gmu_branch_on(cc, 0x90d4u, 1), "GMU branch")) return 0;
++	if (!fp6_gmu_clock_check(fp6_gmu_branch_on(cc, 0x90e8u, 1), "HUB CX branch")) return 0;
+ 	/* Match Linux gpucc-volcano probe's always-on support gates. */
+ 	static const uint32_t gates[] = {0x93a4u,0x9008u,0x9010u,0x9064u,0x93a8u,0x9004u,0x90ccu};
+ 	for (unsigned i = 0; i < sizeof(gates)/sizeof(gates[0]); i++)
+-		if (!fp6_gmu_branch_on(cc, gates[i], 0)) return 0;
+-	/* All GMU clocks run now: the first GMU register access. */
++		if (!fp6_gmu_branch_on(cc, gates[i], 0)) {
++			printf("QCOM GMU: support gate failed +0x%x\n", gates[i]); return 0;
++		}
++	/* All GMU clocks run now: confirm CM3 stayed in reset. */
+ 	uint32_t reset = fp6_smmu_read32(regs, 0x47000u);
+ 	if (reset != 1u) {
+ 		printf("QCOM GMU: clock preparation refused CM3_SYSRESET=0x%08x; votes retained\n", reset);

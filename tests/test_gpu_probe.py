@@ -144,6 +144,8 @@ static uint32_t fp6_gpucc[0x9800 / 4], fp6_gpucc_before[0x9800 / 4];
 static uint32_t fp6_smmu[0x40000 / 4];
 static uint32_t fp6_gicd[0x10000 / 4];
 static uint32_t fp6_gcc_gpu[0x1000 / 4];
+static uint32_t fp6_gmu_regs[0x68000/4], fp6_gcc_pll[0x1000/4], fp6_gcc_votes[0x1000/4];
+static int fp6_gmu_clock_model, fp6_root_stuck, fp6_fail_pll_map;
 static int fp6_clock_refuse = -1;
 static int fp6_power_mode;
 static uint32_t fp6_rsc[0x10000 / 4], fp6_cmd_db[0x20000 / 4];
@@ -192,6 +194,12 @@ static int smmu_sticky; /* hardware that refuses to take the ABL default back in
 static void test_store32(vm_offset_t base, uint32_t off, uint32_t value)
 {
     all_mmio_writes++;
+    if (fp6_gmu_clock_model && base == (vm_offset_t)fp6_gpucc) {
+        if (off == 0x931c || off == 0x93f0)
+            assert(!(fp6_gpucc[(off-4)/4] & (1u << 31))); /* root before CFG */
+        if ((off == 0x9318 || off == 0x93ec) && (value & 2u) && !fp6_root_stuck)
+            value &= ~((1u << 31) | 1u);
+    }
     if (base == (vm_offset_t)fp6_rsc + 0xd00) {
         if (off == 8) { fp6_rsc[(0xd00+4)/4] &= ~value; return; }
         if (off == 0x24 && value == 0x1010000) {
@@ -469,6 +477,10 @@ int PE_parse_boot_argn(const char *name, void *value, int length)
 
 vm_offset_t ml_io_map(vm_offset_t physical, vm_size_t size)
 {
+    if (physical == 0x03d37000 && size == sizeof(fp6_gmu_regs)) return (vm_offset_t)fp6_gmu_regs;
+    if (physical == 0x00100000 && size == sizeof(fp6_gcc_pll))
+        return fp6_fail_pll_map ? 0 : (vm_offset_t)fp6_gcc_pll;
+    if (physical == 0x00152000 && size == sizeof(fp6_gcc_votes)) return (vm_offset_t)fp6_gcc_votes;
     if (physical == 0x17100000 && size == sizeof(fp6_gicd)) {
         fp6_gicd_maps++;
         return fail_fp6_gicd_map ? 0 : (vm_offset_t)fp6_gicd;
@@ -1908,6 +1920,66 @@ int main(void)
     fp6_adreno_startup();
     assert(fp6_map_calls == 1 && scm_calls == 2);
     puts("PASS: FP6 Adreno work starts from its dedicated EARLY_BOOT hook");
+
+    /* Exercise the actual GMU clock path, including the inherited phone state.
+     * The earlier inventory tests intentionally leave fp6gmuload disabled. */
+    fp6_gmu_clock_model = 1;
+    memset(fp6_gpucc, 0, sizeof(fp6_gpucc));
+    memset(fp6_gcc_gpu, 0, sizeof(fp6_gcc_gpu));
+    fp6_gpucc[0x9094/4] = 1u << 31;
+    fp6_gpucc[0x90d4/4] = 0x2001;
+    fp6_gpucc[0] = 0x80000005u;
+    fp6_gpucc[4/4] = 1;
+    fp6_gpucc[0x10/4] = 0x44440024;
+    fp6_gpucc[0x14/4] = 0x7555;
+    fp6_gpucc[0x18/4] = 0x400; /* correct divider, outputs still disabled */
+    fp6_gcc_pll[0] = 0x80000005u;
+    fp6_gcc_pll[0x10/4] = 31;
+    fp6_gcc_pll[0x14/4] = 0x4000; /* 600 MHz */
+    clocks.gpucc = (vm_offset_t)fp6_gpucc;
+    clocks.gcc = (vm_offset_t)fp6_gcc_gpu;
+    clocks.acquired = 4;
+    /* Never touch clocks when inherited CM3 is running. */
+    fp6_gmu_regs[0x47000/4] = 0;
+    all_mmio_writes = 0;
+    assert(!fp6_gmu_clocks_prepare(&clocks) && all_mmio_writes == 0);
+    fp6_gmu_regs[0x47000/4] = 1;
+    /* Replace cmd-db entry with MX; CX already acknowledged by earlier test. */
+    fp6_cmd_db[0x190/4] = 0x6c2e786d;
+    fp6_cmd_db[0x1a0/4] = 0x30010;
+    fp6_cmd_db[0x1a4/4] = 10;
+    fp6_cmd_db[0x210/4] = 64u << 16;
+    fp6_cmd_db[0x214/4] = 128u | (192u << 16);
+    fp6_cmd_db[0x218/4] = 384u;
+    assert(fp6_arc_level((vm_offset_t)fp6_cmd_db, 1, &arc_address, &arc_level));
+    assert(arc_level == 3); /* SVS_L1 calibration floor, never LOW_SVS */
+    assert(fp6_gmu_clocks_prepare(&clocks));
+    assert(fp6_gpucc[0x18/4] == 0x407); /* inherited output enables repaired */
+    assert(fp6_gpucc[0x10/4] == 0x44440024 && fp6_gpucc[0x14/4] == 0x7555);
+    assert(fp6_gpucc[0x931c/4] == 0x100201 && fp6_gpucc[0x93f0/4] == 0x100505);
+    assert(fp6_gcc_votes[0x20/4] == 1 && fp6_gcc_votes[0] == (1u << 15));
+    assert(fp6_rsc[(0xd00+0x3c)/4] == 3);
+    assert(fp6_gmu_regs[0x47000/4] == 1); /* clock setup never releases CM3 */
+    /* Unsupported live rate/divider/FSM cannot be silently retuned. */
+    const unsigned bad_off[] = {0x10, 0x10, 0x18, 0x18, 4, 0x14};
+    const uint32_t bad_value[] = {0, 0x43, 7, 0x2000407, 0xffffffff, 0xffffffff};
+    for (unsigned i = 0; i < sizeof(bad_off)/sizeof(bad_off[0]); i++) {
+        unsigned off = bad_off[i]/4;
+        uint32_t saved = fp6_gpucc[off]; fp6_gpucc[off] = bad_value[i];
+        all_mmio_writes = 0;
+        assert(!fp6_gmu_pll700((vm_offset_t)fp6_gpucc) && all_mmio_writes == 0);
+        fp6_gpucc[off] = saved;
+    }
+    /* A stuck root must prevent changing CFG; mapping failure is diagnosed. */
+    fp6_root_stuck = 1; fp6_gpucc[0x9318/4] = 1u << 31;
+    assert(!fp6_gmu_rcg_set((vm_offset_t)fp6_gpucc, 0x9318, 0x100001));
+    assert(fp6_gpucc[0x931c/4] == 0x100201);
+    fp6_root_stuck = 0; fp6_gpucc[0x9318/4] = 0;
+    fp6_fail_pll_map = 1; output[0] = 0;
+    assert(!fp6_gmu_clocks_prepare(&clocks));
+    assert(strstr(output, "GCC PLL/vote mapping"));
+    fp6_fail_pll_map = 0; fp6_gmu_clock_model = 0;
+    puts("PASS: FP6 GMU clock setup, inherited PLL outputs, MX calibration floor and failure gates");
     return 0;
 }
 '''

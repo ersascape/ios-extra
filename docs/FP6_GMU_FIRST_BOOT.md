@@ -122,3 +122,39 @@ Safe stop when the GMU never came up: `CM3_SYSRESET`=1, mask and clear
 GMU2HOST/AO interrupts, `AHB_FENCE_STATUS_CLR`=7 then `AHB_FENCE_CTRL`=0,
 undo any GBIF halt, then clocks and CX power in reverse order; keep the GMU
 SMMU mappings.
+
+## Runtime review and bounded probe correction (2026-10-22)
+
+Patch 0149 reserves the missing 16 KiB trace allocation, publishes its Gen8
+hwsched v1 header and places its GMU VA in VRB dword 2. The trace metadata is
+`0x40000001` (drop mode in bits 31:30 and version 1), threshold 80 percent,
+timeout 5 ms and log type 1. The packed 64-bit cookie starts at dword 8.
+Reference: `kgsl_gmu_core.c:gmu_core_trace_header_init`,
+`kgsl_gmu_core.h:struct gmu_trace_header`, and
+`adreno_gen8_hwsched.c:gen8_hwsched_gmu_memory_init`.
+
+The probe now requests and verifies CM3 reset after both successful HFI
+initialization and failures. It does not yet service HFI commands or interrupts,
+so successful HFI initialization must not leave firmware running indefinitely.
+SID, translation tables, backing allocations and clock votes remain retained,
+including when reset readback fails. A reset readback alone does not establish
+that outstanding DMA transactions have drained. Firmware reset/NMI bits take
+precedence over the ready field; `FW_INIT_RESULT=0x300` is a failure.
+The dedicated host test injects successful HFI, rejected reset, combined
+ready/fault bits and firmware/HFI timeouts; it also checks the trace header.
+These are modeled results, not phone observations.
+
+Remaining differences from the Fairphone first-boot sequence include CX timer
+synchronization (`adreno_gen8.c:gen8_cx_timer_init`), SCM CX register setup
+(`gen8_scm_gpu_init_cx_regs`) and minimum DDR bandwidth voting before CM3
+release (`adreno_gen8_hwsched.c:gen8_hwsched_gmu_first_boot`). GMU interrupt
+masks do not mask the SMMU global fault interrupt. The read-only GIC inspection
+in 0146 must not be described as interrupt containment.
+
+After HFI initialization the port still needs command/reply processing,
+performance and bandwidth tables, start-time memory requests, GPU MMU/OOB,
+Gen8 SQE initialization and hardware scheduler boot/submission. Existing
+NativeAdreno targets A740; its BO/queue/fence ABI and Darwin Turnip backend are
+reuse candidates, while its board register setup and GPU target require an
+explicit Gen8.3 implementation. No Metal execution is established by this
+probe.
