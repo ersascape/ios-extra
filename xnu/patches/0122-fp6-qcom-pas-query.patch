@@ -1,0 +1,97 @@
+diff --git a/bsd/dev/sweet_gpu.c b/bsd/dev/sweet_gpu.c
+index b05ab85..3c4a9dd 100644
+--- a/bsd/dev/sweet_gpu.c
++++ b/bsd/dev/sweet_gpu.c
+@@ -2038,4 +2038,75 @@ fp6_gpu_inventory(void)
+ 	}
+ 	printf("QCOM GPU: GPU core, GMU and SMMU not mapped; no hardware writes\n");
+ }
+ #endif /* ARM64_BOARD_CONFIG_FP6 */
++
++/* Qualcomm SCM, called only to query the PAS service (no firmware actions). */
++#if defined(ARM64_BOARD_CONFIG_FP6)
++#define FP6_SCM_FID_INFO_IS_CALL_AVAIL 0xC2000601ULL /* SVC_INFO 6, IS_CALL_AVAIL 1 */
++#define FP6_SCM_FID_PAS_IS_SUPPORTED   0xC2000207ULL
++#define FP6_SCM_SIP_OWNER              0x02ULL
++#define FP6_SCM_PAS_ID_GPU             13ULL
++#define FP6_SCM_PAS_SUPPORTED_CALL     ((2ULL << 8) | 7ULL | (FP6_SCM_SIP_OWNER << 24))
++
++#if defined(FP6_SCM_TEST)
++extern void fp6_scm_test_call(uint64_t, uint64_t, uint64_t, uint64_t *, uint64_t *);
++#endif
++
++static void
++fp6_scm_invoke(uint64_t fid, uint64_t arginfo, uint64_t arg0,
++    uint64_t *status, uint64_t *value)
++{
++	*status = ~0ULL;
++	*value = 0;
++#if defined(FP6_SCM_TEST)
++	fp6_scm_test_call(fid, arginfo, arg0, status, value);
++#elif defined(__aarch64__)
++	register uint64_t x0 __asm__("x0") = fid;
++	register uint64_t x1 __asm__("x1") = arginfo;
++	register uint64_t x2 __asm__("x2") = arg0;
++	__asm__ volatile("smc #0" : "+r"(x0), "+r"(x1), "+r"(x2) : :
++	    "x3", "x4", "x5", "x6", "x7", "x8", "x9", "x10", "x11",
++	    "x12", "x13", "x14", "x15", "x16", "x17", "cc", "memory");
++	*status = x0;
++	*value = x1;
++#endif
++}
++
++void
++fp6_qcom_pas_probe(void)
++{
++	int mode = 0;
++	if (!PE_parse_boot_argn("fp6pas", &mode, sizeof(mode)) || mode == 0) {
++		return;
++	}
++	if (mode != 1) {
++		printf("QCOM SCM: unsupported fp6pas=%d (0=off, 1=PAS query only)\n", mode);
++		return;
++	}
++
++	uint64_t status = 0, value = 0;
++	printf("QCOM SCM: querying PAS support for GPU peripheral 13; no firmware load/auth/reset\n");
++	fp6_scm_invoke(FP6_SCM_FID_INFO_IS_CALL_AVAIL, 1,
++	    FP6_SCM_PAS_SUPPORTED_CALL, &status, &value);
++	if (status != 0) {
++		printf("QCOM SCM: call-availability query failed status=0x%llx\n",
++		    (unsigned long long)status);
++		return;
++	}
++	if (value == 0) {
++		printf("QCOM SCM: PAS_IS_SUPPORTED service not advertised\n");
++		return;
++	}
++	printf("QCOM SCM: PAS_IS_SUPPORTED service advertised\n");
++
++	fp6_scm_invoke(FP6_SCM_FID_PAS_IS_SUPPORTED, 1,
++	    FP6_SCM_PAS_ID_GPU, &status, &value);
++	if (status != 0) {
++		printf("QCOM SCM: PAS ID 13 query failed status=0x%llx\n",
++		    (unsigned long long)status);
++		return;
++	}
++	printf("QCOM SCM: GPU PAS ID 13 supported=%llu (query only)\n",
++	    (unsigned long long)(value != 0));
++}
++#endif /* ARM64_BOARD_CONFIG_FP6 */
+diff --git a/bsd/dev/sweet_ufs.c b/bsd/dev/sweet_ufs.c
+index 86eec24..dd4e7e1 100644
+--- a/bsd/dev/sweet_ufs.c
++++ b/bsd/dev/sweet_ufs.c
+@@ -60,3 +60,4 @@ extern void sweet_gpu_probe(void);
+ #if defined(ARM64_BOARD_CONFIG_FP6)
+ extern void fp6_gpu_inventory(void);
++extern void fp6_qcom_pas_probe(void);
+ #endif
+@@ -1023,6 +1024,7 @@ sweet_ufs_init(bool allow_write)
+ #if defined(ARM64_BOARD_CONFIG_FP6)
+ 	/* Read-only and opt-in via fp6gpu=1; GPU remains untouched by default. */
+ 	fp6_gpu_inventory();
++	fp6_qcom_pas_probe();
+ #endif
+ 	return 0;
+ }

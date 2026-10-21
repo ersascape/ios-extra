@@ -1,0 +1,107 @@
+diff --git a/bsd/dev/sweet_gpu.c b/bsd/dev/sweet_gpu.c
+index 696a1df..b05ab85 100644
+--- a/bsd/dev/sweet_gpu.c
++++ b/bsd/dev/sweet_gpu.c
+@@ -1965,3 +1965,77 @@ sweet_gpu_replay(void)
+ 	}
+ }
+ #endif /* ARM64_BOARD_CONFIG_SWEET */
++
++/*
++ * FP6 / SM7635 / Adreno Gen7.11: opt-in, read-only GPUCC branch inventory.
++ *
++ * The physical base/size and cliffs compatible are from the exact FP6 stock
++ * DTB. Register offsets below are the branch enable/halt registers consumed
++ * by the matching Fairphone Linux gpucc-cliffs clock driver. This intentionally
++ * does not map the GPU core, GMU, or GPU SMMU and never writes MMIO, requests a
++ * clock/rail, allocates DMA, or starts firmware. Values are raw because Linux
++ * branch halt semantics differ by clock type. Reading still assumes GPUCC's
++ * bus window is accessible; keep disabled by default and test only on FP6.
++ */
++#if defined(ARM64_BOARD_CONFIG_FP6)
++#include <sys/param.h>
++#include <sys/systm.h>
++#include <pexpert/pexpert.h>
++
++extern vm_offset_t ml_io_map(vm_offset_t, vm_size_t);
++
++#define FP6_GPUCC_PA       0x03d90000
++#define FP6_GPUCC_SIZE     0x0000a000
++
++struct fp6_gpucc_reg {
++	const char *name;
++	uint32_t off;
++};
++
++/* `drivers/clk/qcom/gpucc-cliffs.c`; each is a branch enable/halt register. */
++static const struct fp6_gpucc_reg fp6_gpucc_branches[] = {
++	{ "freq-measure", 0x9008 },
++	{ "ahb",          0x90c8 },
++	{ "crc-ahb",      0x90cc },
++	{ "cx-gmu",       0x90e4 },
++	{ "cxo",          0x90f0 },
++	{ "hub-cx-int",   0x90f4 },
++	{ "memnoc-gfx",   0x90fc },
++	{ "cx-accu-shift",0x9108 },
++	{ "mnd1x-0-gfx3d",0x9158 },
++	{ "mnd1x-1-gfx3d",0x915c },
++	{ "hub-aon",      0x9198 },
++};
++
++void
++fp6_gpu_inventory(void)
++{
++	int mode = 0;
++	if (!PE_parse_boot_argn("fp6gpu", &mode, sizeof(mode)) || mode == 0) {
++		return;
++	}
++	if (mode != 1) {
++		printf("QCOM GPU: unsupported fp6gpu=%d (0=off, 1=GPUCC read-only inventory)\n", mode);
++		return;
++	}
++	printf("QCOM GPU: FP6 Adreno Gen7.11 GPUCC inventory; stock-DTB base=0x%llx size=0x%llx\n",
++	    (unsigned long long)FP6_GPUCC_PA, (unsigned long long)FP6_GPUCC_SIZE);
++	vm_offset_t base = ml_io_map(FP6_GPUCC_PA, FP6_GPUCC_SIZE);
++	if (base == 0) {
++		printf("QCOM GPU: GPUCC mapping failed; no GPU/GMU/SMMU access\n");
++		return;
++	}
++	for (unsigned int i = 0; i < sizeof(fp6_gpucc_branches) / sizeof(fp6_gpucc_branches[0]); i++) {
++		uint32_t off = fp6_gpucc_branches[i].off;
++		if (off > FP6_GPUCC_SIZE - sizeof(uint32_t)) {
++			printf("QCOM GPU: refusing out-of-window register +0x%x\n", off);
++			return;
++		}
++		uint32_t value = *(volatile uint32_t *)(base + off);
++		__asm__ volatile("dmb oshld" ::: "memory");
++		printf("QCOM GPU: GPUCC %-14s +0x%04x = 0x%08x (raw, read-only)\n",
++		    fp6_gpucc_branches[i].name, off, value);
++	}
++	printf("QCOM GPU: GPU core, GMU and SMMU not mapped; no hardware writes\n");
++}
++#endif /* ARM64_BOARD_CONFIG_FP6 */
+diff --git a/bsd/dev/sweet_ufs.c b/bsd/dev/sweet_ufs.c
+index 166c63d..86eec24 100644
+--- a/bsd/dev/sweet_ufs.c
++++ b/bsd/dev/sweet_ufs.c
+@@ -56,6 +56,9 @@ extern void sweet_touch_init(void);
+ extern void sweet_usb_probe(void);
+ extern void sweet_gpu_probe(void);
+ #endif
++#if defined(ARM64_BOARD_CONFIG_FP6)
++extern void fp6_gpu_inventory(void);
++#endif
+ 
+ #define REG_CAP         0x00
+ #define REG_IS          0x20
+@@ -1017,6 +1020,10 @@ sweet_ufs_init(bool allow_write)
+ 	sweet_touch_init();
+ 	sweet_usb_probe();
+ 	sweet_gpu_probe();
++#endif
++#if defined(ARM64_BOARD_CONFIG_FP6)
++	/* Read-only and opt-in via fp6gpu=1; GPU remains untouched by default. */
++	fp6_gpu_inventory();
+ #endif
+ 	return 0;
+ }

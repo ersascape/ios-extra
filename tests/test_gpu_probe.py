@@ -25,10 +25,10 @@ class GPUProbeTests(unittest.TestCase):
                                     str(patch)], cwd=work, check=True)
             source = (work / 'bsd/dev/sweet_gpu.c').read_text()
             barrier = '__asm__ volatile("dmb oshld" ::: "memory");'
-            self.assertEqual(source.count(barrier), 2)
+            self.assertEqual(source.count(barrier), 3)  # SWEET 32/64-bit + FP6 read barrier
             for name in ('dmb oshld', 'dmb oshst', 'dsb osh'):
                 text = '__asm__ volatile("%s" ::: "memory");' % name
-                self.assertEqual(source.count(text), 2)  # 32- and 64-bit accessors
+                self.assertEqual(source.count(text), 3 if name == 'dmb oshld' else 2)
                 source = source.replace(text, '__asm__ volatile("" ::: "memory");')
             store32 = '*(volatile uint32_t *)(base + off) = value;'
             self.assertEqual(source.count(store32), 1)
@@ -84,6 +84,8 @@ class GPUProbeTests(unittest.TestCase):
             self.assertIn('PASS: 29 pre-boot registers', result.stdout)
             self.assertIn('PASS: GMU buffers 29 ATOS checks', result.stdout)
             self.assertIn('PASS: 14 clock/cache cases, 30 ARC cases + 512 mutations, 61 CX experiment cases', result.stdout)
+            self.assertIn('PASS: FP6 GPUCC inventory is opt-in, read-only, and bounded', result.stdout)
+            self.assertIn('PASS: FP6 Qualcomm SCM PAS query is opt-in and never authenticates firmware', result.stdout)
 
 
 HARNESS = r'''
@@ -99,11 +101,19 @@ static void test_store64(vm_offset_t base, uint32_t off, uint64_t value);
 static int probe_printf(const char *, ...);
 #define printf probe_printf
 #define ARM64_BOARD_CONFIG_SWEET 1
+#define ARM64_BOARD_CONFIG_FP6 1
+#define FP6_SCM_TEST 1
 #include "sweet_gpu.c"
 #undef printf
 
 static uint32_t gcc[0x90000 / 4], cc[0x9000 / 4];
+static uint32_t fp6_gpucc[0xa000 / 4], fp6_gpucc_before[0xa000 / 4];
 static int present, mode, map_calls, fail_gcc, fail_cc;
+static int fp6_mode;
+static unsigned fp6_map_calls;
+static int fp6_pas_mode;
+static uint64_t scm_status[2], scm_value[2], scm_fid[2], scm_arginfo[2], scm_arg0[2];
+static unsigned scm_calls;
 static uint32_t locator[2], database[1024];
 static uint32_t gmu_mem[GPU_GMU_SIZE / 4];
 static int gmu_maps, fail_gmu_map;
@@ -309,6 +319,16 @@ static int probe_printf(const char *fmt, ...)
 
 int PE_parse_boot_argn(const char *name, void *value, int length)
 {
+	if (strcmp(name, "fp6pas") == 0) {
+		assert(length == sizeof(fp6_pas_mode));
+		if (fp6_pas_mode != 0) memcpy(value, &fp6_pas_mode, sizeof(fp6_pas_mode));
+		return fp6_pas_mode != 0;
+	}
+	if (strcmp(name, "fp6gpu") == 0) {
+		assert(length == sizeof(fp6_mode));
+		if (fp6_mode != 0) memcpy(value, &fp6_mode, sizeof(fp6_mode));
+		return fp6_mode != 0;
+	}
     assert(strcmp(name, "sweetgpu") == 0 && length == sizeof(mode));
     if (present) memcpy(value, &mode, sizeof(mode));
     return present;
@@ -316,6 +336,10 @@ int PE_parse_boot_argn(const char *name, void *value, int length)
 
 vm_offset_t ml_io_map(vm_offset_t physical, vm_size_t size)
 {
+    if (physical == 0x03d90000 && size == sizeof(fp6_gpucc)) {
+        fp6_map_calls++;
+        return (vm_offset_t)fp6_gpucc;
+    }
     map_calls++;
     if (physical == GPU_GCC_PA && size == GPU_GCC_SIZE)
         return fail_gcc ? 0 : (vm_offset_t)gcc;
@@ -343,6 +367,18 @@ vm_offset_t ml_io_map(vm_offset_t physical, vm_size_t size)
         return fail_db ? 0 : (vm_offset_t)database;
     assert(!"probe tried to map a GPU/GMU/SMMU or unknown region");
     return 0;
+}
+
+void fp6_scm_test_call(uint64_t fid, uint64_t arginfo, uint64_t arg0,
+                       uint64_t *status, uint64_t *value)
+{
+    assert(scm_calls < 2);
+    scm_fid[scm_calls] = fid;
+    scm_arginfo[scm_calls] = arginfo;
+    scm_arg0[scm_calls] = arg0;
+    *status = scm_status[scm_calls];
+    *value = scm_value[scm_calls];
+    scm_calls++;
 }
 
 static void reset(void)
@@ -1373,6 +1409,51 @@ int main(void)
     arc_reset(); cc[GPU_CX_GDSCR / 4] = GPU_CX_IDLE_GDSCR; arc_run();
     assert(!gpu_boot_inventory.power.requested && vote_count == 0 && delay_calls == 0);
     puts("PASS: 14 clock/cache cases, 30 ARC cases + 512 mutations, 61 CX experiment cases");
+
+    /* FP6 is a separate read-only GPUCC inventory; the default SWEET probe
+     * and all SWEET register profiles remain unchanged. */
+    memset(fp6_gpucc, 0, sizeof(fp6_gpucc));
+    for (unsigned i = 0; i < sizeof(fp6_gpucc) / sizeof(fp6_gpucc[0]); i++)
+        fp6_gpucc[i] = 0x5a000000u ^ i;
+    memcpy(fp6_gpucc_before, fp6_gpucc, sizeof(fp6_gpucc));
+    fp6_mode = 0; fp6_gpu_inventory();
+    assert(fp6_map_calls == 0 && memcmp(fp6_gpucc_before, fp6_gpucc, sizeof(fp6_gpucc)) == 0);
+    fp6_mode = 2; fp6_gpu_inventory();
+    assert(fp6_map_calls == 0);
+    fp6_mode = 1; fp6_gpu_inventory();
+    assert(fp6_map_calls == 1);
+    assert(strstr(output, "unsupported fp6gpu=2"));
+    assert(strstr(output, "FP6 Adreno Gen7.11 GPUCC inventory"));
+    assert(strstr(output, "GPU core, GMU and SMMU not mapped"));
+    assert(memcmp(fp6_gpucc_before, fp6_gpucc, sizeof(fp6_gpucc)) == 0);
+    puts("PASS: FP6 GPUCC inventory is opt-in, read-only, and bounded");
+
+    /* The PAS probe only checks SCM call availability and PAS ID 13. */
+    scm_calls = 0; fp6_pas_mode = 0; fp6_qcom_pas_probe();
+    assert(scm_calls == 0);
+    fp6_pas_mode = 2; fp6_qcom_pas_probe();
+    assert(scm_calls == 0 && strstr(output, "unsupported fp6pas=2"));
+    fp6_pas_mode = 1;
+    scm_status[0] = 0; scm_value[0] = 1;
+    scm_status[1] = 0; scm_value[1] = 1;
+    fp6_qcom_pas_probe();
+    assert(scm_calls == 2);
+    assert(scm_fid[0] == 0xC2000601ULL && scm_arginfo[0] == 1);
+    assert(scm_arg0[0] == 0x02000207ULL);
+    assert(scm_fid[1] == 0xC2000207ULL && scm_arginfo[1] == 1 && scm_arg0[1] == 13);
+    assert(strstr(output, "GPU PAS ID 13 supported=1 (query only)"));
+
+    scm_calls = 0; scm_status[0] = 0; scm_value[0] = 0;
+    fp6_qcom_pas_probe();
+    assert(scm_calls == 1 && strstr(output, "PAS_IS_SUPPORTED service not advertised"));
+    scm_calls = 0; scm_status[0] = 0xFFFFFFFFULL; scm_value[0] = 1;
+    fp6_qcom_pas_probe();
+    assert(scm_calls == 1 && strstr(output, "call-availability query failed"));
+    scm_calls = 0; scm_status[0] = 0; scm_value[0] = 1;
+    scm_status[1] = 0xFFFFFFFFULL; scm_value[1] = 0;
+    fp6_qcom_pas_probe();
+    assert(scm_calls == 2 && strstr(output, "PAS ID 13 query failed"));
+    puts("PASS: FP6 Qualcomm SCM PAS query is opt-in and never authenticates firmware");
     return 0;
 }
 '''

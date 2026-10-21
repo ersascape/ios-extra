@@ -1,5 +1,81 @@
 # ios-extra — current state
 
+## Codex Adreno/PAS work merged into main (2026-10-21)
+
+- Merged the uncommitted `fp6-adreno-gen711` working state (Codex): patch
+  0118 (FP6 GPUCC inventory, opt-in), its PAS query patch renumbered from
+  0119 to **0122** (main already had 0119-0121), and its NOTES, docs and
+  host-test changes. The two patches touch only sweet_gpu.c/sweet_ufs.c and
+  apply after 0119-0121.
+- Fixed before any phone use: the PAS patch called SMC FID 0xC2000101 as
+  "is call available", but that is SIP service 0x01 (BOOT) function 0x01,
+  `QCOM_SCM_BOOT_SET_ADDR`; the query is SVC_INFO 0x06 / IS_CALL_AVAIL 0x01
+  = **0xC2000601** (Fairphone `drivers/firmware/qcom_scm.h:111-147`). The
+  host test's expected FID was corrected likewise. PAS_IS_SUPPORTED
+  0xC2000207 (PIL 0x02 / 0x07) was already correct. Disassembly of the local
+  arm64 object shows `smc #0` with x0=0xC2000601, x1=1, x2=0x02000207, then
+  x0=0xC2000207, x2=13. `python3 -m unittest tests.test_gpu_probe` passes on
+  the merged tree.
+
+## FP6 Adreno Gen7.11 inventory baseline (2026-10-21)
+
+- Source inspection confirms the FP6 stock DTB reports `qcom,adreno-gpu-gen7-11-0`
+  and Cliffs GPUCC. It gives GPU `0x03d00000/0x40000`, GPUCC
+  `0x03d90000/0xa000`, GMU windows at `0x03d68000`, `0x0b280000`, and
+  `0x03d40000`, GPU IRQ SPI 300, GMU IRQ SPIs 304/305, and a dedicated
+  `qcom,qsmmu-v500` GPU SMMU at `0x03da0000`. GPU/secure/GMU context-bank
+  indices in the vendor DT are 0/2/5. The broad GPU TBU stream range does not
+  identify a single SID; do not copy the UFS SID or assume the UniXNU Sheng SID.
+- Qualcomm's matching KGSL profile names `gen71100_gmu.bin`,
+  `gen71100_sqe.fw`, and `gen71100_zap.mbn`. The user-provided Murena FP6 vendor
+  tree contains all three (80,680 / 67,348 / 12,088 bytes respectively); their
+  SHA-256 values are `435c7bac9a328b8a100df930b84b65b4d579e42be44785d0e60e3729291bb864`,
+  `eee95622aa1e487e96de55469a65c5642ce9b8c724f9da768c79fe54df760eff`, and
+  `39ffa0c98e64cd3800b3198015bc1eb86189007b1ad5539cda5d2796067d36a0`.
+  Blobs remain outside this repository. The signed Zap image requires Qualcomm
+  PAS/TrustZone authentication; it is not ordinary firmware copying.
+- UniXNU organization inventory via GitHub API found: UniXNU, UniXNU-sheng,
+  uefi-sheng, ArmCpu, ArmDTPlatform, ArmVirtPlatform, DarwinBoot, NativeAES,
+  NativeAdreno, NativeGeniSpi, NativeHidInput, NativeKeyStoreEvents,
+  NativeMetal, NativeMobileDisplay, NativeRamBlock, NativeUfs,
+  NativeVirtioBlock, NativeVirtioConsole, AdrenoFirmware, AdrenoPM4, AirNir,
+  ArmSmmu4K, NativePrelink, VerifiedRoot, NativeNovatekTouch,
+  ShengPreflight, and `.github`. NativeAdreno, PM4, AirNir and the display
+  Adreno/PM4 and AirNir paths target Sheng/A740; their board profiles and
+  instruction encoders are not FP6 drop-ins. NativeMobileDisplay demonstrates
+  a CPU framebuffer-copy service, rather than GPU acceleration. ArmSmmu4K and firmware/HFI parsing are the
+  strongest pieces to study for a later port, subject to FP6 geometry and
+  protocol validation.
+- Local patch `0118` adds an opt-in `fp6gpu=1` read-only inventory of 11 Cliffs
+  GPUCC branch registers. It maps no GPU-core, GMU, or SMMU windows and performs
+  no writes, power/clock requests, DMA, or firmware startup. It is diagnostic
+  groundwork only; no acceleration is enabled yet. Host model tests pass both
+  normally and with ASan/UBSan (`ASAN_OPTIONS=detect_leaks=0` is needed because
+  LeakSanitizer cannot operate under this test runner's ptrace sandbox); RPMh
+  and XNU-compile-log helper tests also pass. An AArch64 Clang syntax check
+  with lightweight XNU header stubs passed. The patch applies to the accumulated
+  GPU source; no full XNU CI build or phone inventory test has run for 0118.
+  Work remains uncommitted on local branch
+  `fp6-adreno-gen711` while the GENI build runs.
+
+## FP6 Qualcomm PAS query draft (2026-10-21)
+
+- Local patch `0119` adds an opt-in `fp6pas=1` QCOM SCM query after FP6 UFS
+  setup. It asks SCM whether `PAS_IS_SUPPORTED` is advertised, then queries
+  PAS peripheral ID 13 (GPU). It does not load Zap, initialize/authenticate a
+  PAS image, reset a peripheral, map GPU memory, or touch GPU/GMU/SMMU MMIO.
+- The SMC IDs, SIP owner, argument encoding, and PAS query order were checked
+  against the cloned Fairphone Qualcomm kernel's `qcom_scm.c` and
+  `qcom_scm-smc.c`; the GPU PAS ID and Zap flow were checked in its KGSL
+  Adreno loader. XNU's PSCI `smc #0` helper is the only existing local SMC
+  precedent; this does not establish that the direct SIP SCM route is accepted
+  on FP6 (the vendor kernel also has a QCPE/HAB transport branch).
+- Host model tests cover disabled/invalid modes, service-unavailable and SMC
+  error paths, and the exact two successful query descriptors. Full test suite,
+  ASan/UBSan GPU harness, and AArch64 Clang syntax check pass. No full XNU
+  build, CI run, boot image, or phone query has been made. The phone remains
+  untouched. Work remains uncommitted on `fp6-adreno-gen711` per instruction.
+
 ## FP6 touch, HID services and ring switch (2026-10-21)
 
 - Patches 0115 (SweetHID button/touch services registered on FP6, touch
@@ -1052,7 +1128,7 @@ error::ResourceWarning -m unittest discover -s tests` (also with
   block/root support for iOS userspace, USB CDC-ECM for debug logs, then the
   board-specific power/regulator path and touch input. The bootloader framebuffer
   is separate from a live panel driver; Adreno 618/740 code is not a drop-in for
-  FP6's Adreno 710. Wi-Fi, Bluetooth, audio, camera and cellular depend on more
+  FP6's Adreno Gen7.11 GPU. Wi-Fi, Bluetooth, audio, camera and cellular depend on more
   firmware/DSP and transport work.
 - No FP6 USB code was changed or tested in this audit, and no new CI run or phone
   boot was started. The next USB code change should first gather a read-only
