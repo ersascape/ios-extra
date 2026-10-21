@@ -1,5 +1,20 @@
 # ios-extra — current state
 
+## FP6 GPU SMMU context bank live; TCR2 TBI bits (2026-10-21)
+
+- Boot of CI `39649157006` (`ebae218`, 0141/0142), 18:09:17 UTC; full boot
+  log received over USB (0142 whole-ring replay works, 104 KB including the
+  early SMMU inventory: IDR0=0x4c017e18 IDR1=0x40000016 IDR2=0x00005511
+  sCR0=0x002c0406, 24 groups, 22 banks). CX vote + GDSC on as before;
+  `clock index=3 running without SW enable (0x00000000)` (0141 works).
+- **CB2 TCR2 now retains its value**: wrote 0x00038011, read 0x00038071.
+  Previously it read 0 (dead bank while CX was collapsed). The difference is
+  TBI0/TBI1 (bits 5-6), forced on by the hardware or hypervisor; the strict
+  readback rejected it before any stream route was written (`route_live=0`),
+  and the rollback's TCR2==0 check reported `contained=0` for the same bits.
+  Patch 0143 compares TCR2 without the TBI bits in setup and rollback and
+  logs the value read. Compiles locally; host suite passes.
+
 ## FP6 GMU boot attempt: stopped at the SMMU AHB clock (2026-10-21)
 
 - Boot of CI `39647440570` (`8e055a8`, all GPU stages on, console muted),

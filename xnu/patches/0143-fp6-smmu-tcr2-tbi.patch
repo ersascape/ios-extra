@@ -1,0 +1,39 @@
+--- a/bsd/dev/sweet_gpu.c
++++ b/bsd/dev/sweet_gpu.c
+@@ -3325,11 +3325,26 @@
+ 		goto rollback; \
+ 	} \
+ } while (0)
++	/*
++	 * FP6 GPU SMMU forces TCR2 TBI0/TBI1 (bits 5-6) on: a 0x00038011 write
++	 * reads back 0x00038071. Top-byte-ignore is irrelevant to 32-bit GMU
++	 * IOVAs, so compare TCR2 without those bits and log what stuck.
++	 */
++#define FP6_SMMU_TCR2_TBI       0x60u
+ 	/* Linux arm-smmu order: CBA2R, CBAR, TCR2/TCR, TTBR, MAIR, SCTLR. */
+ 	FP6_SMMU_WRITE_CHECK(cba2r_off, 1u);
+ 	/* S1, non-shareable walk config, weakest WB memory type (Linux CBAR defaults). */
+ 	FP6_SMMU_WRITE_CHECK(cbar_off, 0x0001f300u);
+-	FP6_SMMU_WRITE_CHECK(cb_off + FP6_SMMU_CB_TCR2, 0x00038011u);
++	fp6_smmu_write32(base, cb_off + FP6_SMMU_CB_TCR2, 0x00038011u);
++	{
++		uint32_t tcr2 = fp6_smmu_read32(base, cb_off + FP6_SMMU_CB_TCR2);
++		printf("QCOM SMMU: TCR2 wrote 0x00038011 read 0x%08x\n", tcr2);
++		if ((tcr2 & ~FP6_SMMU_TCR2_TBI) != 0x00038011u) {
++			failure = "register readback";
++			fail_off = cb_off + FP6_SMMU_CB_TCR2; fail_want = 0x00038011u; fail_got = tcr2;
++			goto rollback;
++		}
++	}
+ 	FP6_SMMU_WRITE_CHECK(cb_off + FP6_SMMU_CB_TCR, 32u | (2u << 12) | (1u << 23));
+ 	FP6_SMMU_WRITE_CHECK(cb_off + FP6_SMMU_CB_TTBR0, (uint32_t)table_pa);
+ 	FP6_SMMU_WRITE_CHECK(cb_off + FP6_SMMU_CB_TTBR0 + 4u, (uint32_t)(table_pa >> 32));
+@@ -3405,7 +3420,7 @@
+ 	if (fp6_smmu_read32(base, cb_off + FP6_SMMU_CB_TTBR0) != 0 ||
+ 	    fp6_smmu_read32(base, cb_off + FP6_SMMU_CB_TTBR0 + 4u) != 0 ||
+ 	    fp6_smmu_read32(base, cb_off + FP6_SMMU_CB_TCR) != 0 ||
+-	    fp6_smmu_read32(base, cb_off + FP6_SMMU_CB_TCR2) != 0 ||
++	    (fp6_smmu_read32(base, cb_off + FP6_SMMU_CB_TCR2) & ~FP6_SMMU_TCR2_TBI) != 0 ||
+ 	    fp6_smmu_read32(base, cb_off + FP6_SMMU_CB_MAIR0) != 0 ||
+ 	    fp6_smmu_read32(base, cb_off + FP6_SMMU_CB_MAIR1) != 0 ||
+ 	    fp6_smmu_read32(base, cb_off + FP6_SMMU_CB_SCTLR) != 0 ||
