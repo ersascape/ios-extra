@@ -1450,3 +1450,16 @@ error::ResourceWarning -m unittest discover -s tests` (also with
   PMK8550 telemetry implementation if the disabled QPT block's wire protocol
   can be established. An interim IOPMPowerSource would be a labeled static
   fallback, not a functioning fuel gauge.
+
+## FP6 Adreno PAS ZAP loader patch correction (2026-10-21)
+
+- CI run 39579222524 for commit 813e0ab failed while applying patch 0127 at
+  `bsd/dev/sweet_ufs.c`: the patch used a zero-context declaration hunk that
+  the strict patch runner could not locate. This was a patch-context failure;
+  no compilation or phone test occurred in that run.
+- Corrected patch 0127 to anchor removal of the old UFS probe calls and
+  declarations to surrounding source context. The Adreno inventory, PAS query
+  and opt-in ZAP loader are registered through `fp6_adreno_startup` at
+  `EARLY_BOOT`; UFS no longer invokes GPU code. Host tests pass normally and
+  with ASan/UBSan. Awaiting a new CI result before any image packaging or phone
+  test.

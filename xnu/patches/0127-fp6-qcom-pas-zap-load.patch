@@ -157,12 +157,16 @@ diff --git a/bsd/dev/sweet_ufs.c b/bsd/dev/sweet_ufs.c
 index dd4e7e1..0000000 100644
 --- a/bsd/dev/sweet_ufs.c
 +++ b/bsd/dev/sweet_ufs.c
-@@ -60,4 +60,0 @@ extern void sweet_gpu_probe(void);
+@@ -56,7 +56,3 @@ extern void sweet_touch_init(void);
+ extern void sweet_usb_probe(void);
+ extern void sweet_gpu_probe(void);
+ #endif
 -#if defined(ARM64_BOARD_CONFIG_FP6)
 -extern void fp6_gpu_inventory(void);
 -extern void fp6_qcom_pas_probe(void);
 -#endif
-@@ -1024,5 +1020,0 @@ sweet_ufs_init(bool allow_write)
+@@ -1020,6 +1016,1 @@ sweet_ufs_init(bool allow_write)
+ #endif
 -#if defined(ARM64_BOARD_CONFIG_FP6)
 -	/* Read-only and opt-in via fp6gpu=1; GPU remains untouched by default. */
 -	fp6_gpu_inventory();
