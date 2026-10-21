@@ -5,6 +5,7 @@ set -euo pipefail
 case "${MACHINE_CONFIG:-}" in FP6) ;; *) exit 0 ;; esac
 [[ -d bsd/dev ]] || exit 1
 script_dir=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)
+cp "$script_dir/fp6_gmu_loader.h" bsd/dev/fp6_gmu_loader.h
 [[ -f "$script_dir/fp6-gmu-fw.py" ]] || {
     echo "missing FP6 GMU firmware parser beside $0" >&2
     exit 1

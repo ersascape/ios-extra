@@ -1,5 +1,18 @@
 # ios-extra — current state
 
+## Gen8 firmware upload layer (2026-10-21)
+
+- Added `xnu/helpers/fp6_gmu_loader.h`, staged alongside the pinned generated
+  firmware by 0129. It follows KGSL Gen8 preallocation/TCM/external-copy
+  semantics with explicit backing, reset-readiness and visibility callbacks.
+  TCM indices use Gen8 GPU dword register indices, not guessed physical addresses.
+  This is an unconnected implementation layer: live XNU allocation/SMMU mapping
+  callbacks and startup integration remain required. No firmware execution or
+  build/test result is claimed for this change.
+- SpringBoard audit found the requested bounding-path name in the root catalog;
+  the earlier runtime failure does not prove the catalog file is absent. Exact
+  rendition lookup/decoding is under investigation; preserve statusbar geometry.
+
 ## FP6 exact SMMU refusal and SpringBoard capture (2026-10-21)
 
 - Phone console photo reports `setup failed: register readback +0x22010
