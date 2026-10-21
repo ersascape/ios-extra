@@ -1,0 +1,36 @@
+--- a/bsd/dev/sweet_gpu.c
++++ b/bsd/dev/sweet_gpu.c
+@@ -3193,17 +3193,27 @@
+ 	/*
+ 	 * KGSL gen8_gmu_enable_clks sets rates, then enables all six GMU clocks
+ 	 * (gmu 0x90d4, cxo 0x90e4, axi GCC 0x7115c, memnoc GCC 0x71010, ahb
+-	 * 0x90bc, hub_cx_int 0x90e8) before any GMU register access. Do not touch
+-	 * a GMU whose core clock is already running: it may be live.
++	 * 0x90bc, hub_cx_int 0x90e8) before any GMU register access. If the core
++	 * clock is inherited as running, verify CM3 reset before changing a source.
+ 	 */
+ 	uint32_t gmu_cbcr = fp6_smmu_read32(cc, 0x90d4u);
+-	if (gmu_cbcr == 0xffffffffu || (gmu_cbcr & 1u) || !(gmu_cbcr & (1u << 31))) {
+-		printf("QCOM GMU: GMU clock already enabled or unreadable (0x%08x); not reconfigured\n", gmu_cbcr);
+-		return 0;
++	if (gmu_cbcr == 0xffffffffu) return 0;
++	vm_offset_t regs = 0;
++	if (!(gmu_cbcr & (1u << 31))) {
++		regs = ml_io_map(0x03d37000u, 0x68000u);
++		if (!regs) return 0;
++		uint32_t reset = fp6_smmu_read32(regs, 0x47000u);
++		if (reset != 1u) {
++			printf("QCOM GMU: inherited core clock=0x%08x with CM3_SYSRESET=0x%08x; refusing clock changes\n",
++			    gmu_cbcr, reset);
++			return 0;
++		}
++		printf("QCOM GMU: inherited core clock=0x%08x; CM3 reset confirmed before clock setup\n",
++		    gmu_cbcr);
+ 	}
+ 	if (!fp6_gmu_branch_on(cc, 0x90e4u, 1) ||
+ 	    !fp6_gmu_branch_on(clocks->gcc, 0x15cu, 0)) return 0;
+-	vm_offset_t regs = ml_io_map(0x03d37000u, 0x68000u);
++	if (!regs) regs = ml_io_map(0x03d37000u, 0x68000u);
+ 	if (!regs) return 0;
+ 	if (!fp6_floor_vote(0) || !fp6_floor_vote(1)) return 0;
+ 	/* HUB200MHz uses fixed GCC GPLL0 output600MHz /3. Validate the inherited

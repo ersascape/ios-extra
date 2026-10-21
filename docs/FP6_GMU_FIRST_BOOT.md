@@ -1,6 +1,7 @@
 # FP6 Gen8.3 GMU first boot: facts for implementation
 
-Source reading only (no phone result). FP6 GPU: Adreno 810, KGSL Gen8.3
+Register sequence from source review; the first phone attempt and its stop
+point are recorded in `NOTES.md`. FP6 GPU: Adreno 810, KGSL Gen8.3
 (`qcom,adreno-gpu-gen8-3-0`), firmware `gen80300_gmu.bin`, hardware-scheduler
 (`adreno_gen8_hwsched`) path. KGSL is GPL-2.0: these are register facts and
 sequences used as reference, not copied code. Paths below are in the Fairphone
@@ -76,9 +77,11 @@ Before permitting the GMU to become an SMMU master, inspect the SMMU global
 fault interrupt independently. The stock FP6 DT assigns global SPI 0x2a1
 (GIC INTID 705); GMU AO/HFI masks do not cover it. Patch 0146's
 `fp6smmuirq=1` only reads GICD enable, pending, and trigger configuration. It
-does not contain or mask the source, so a positive read-only result is not
-authorization to release CM3. The first DMA attempt remains gated on a
-separate, measured global-fault containment step and verified rollback.
+does not contain or mask the source. The 2026-10-22 first-start attempt stopped
+before upload at inherited GMU core clock `0x2001`; CM3 reset had not yet been
+checked. Patch 0147 adds that reset check before changing a clock source. Retest
+proceeds only if CM3 reset is confirmed; buffers remain mapped through the
+bounded start and verified reset.
 
 ## HFI (hwsched)
 

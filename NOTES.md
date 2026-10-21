@@ -1,5 +1,27 @@
 # ios-extra — current state
 
+## FP6 GMU first-boot attempt (2026-10-22)
+
+- Repackaged CI kernel from run `39667763253` (commit `c79f49f`) with the
+  verified product ADT and stock FP6 DTB. Temporary image:
+  `/tmp/ios-extra-run-39667763253/package/gmu-first-boot/fp6-gmu-first-boot.img`,
+  SHA256 `bfd28263fd42356b507e84d135a5581235e04b1183e52ebeafcafa919194d6b6`.
+  Boot arguments enabled the opt-in SMMU, GMU firmware upload and bounded
+  first-start paths (`fp6smmu=2 fp6smmupower=1 fp6gmuload=1 fp6gmuboot=1`).
+- Phone reached launchd and logged the software walk passing for IOVA
+  `0x60000000` -> PA `0x903627000`. It stopped before firmware upload:
+  inherited GMU clock register `0x90d4` read `0x2001`, and the clock guard
+  refused to proceed without checking whether CM3 was held in reset. No TCM
+  upload, CM3 release, GMU DMA or GPU execution occurred. Full decoded log and
+  pcap are `/tmp/ios-extra-run-39667763253/logs/phone-0140-gmu-first-boot.txt`
+  and `.pcap` (SHA256 of decoded log `5b45571dd8ed645487722c56417e8d98b3b1e5d2ccf97637853834993e612097`).
+- Patch `0147-fp6-gmu-inherited-clock-reset-gate.patch` moves the safety check
+  ahead of clock reconfiguration: if the GMU core clock is already running, it
+  reads `CM3_SYSRESET` first and refuses any clock change unless reset is
+  confirmed. If reset is held, the bounded clock/firmware path can continue.
+  Patch applies to the CI source; `tests/test_gpu_probe.py` passes. Full CI and
+  a retest are still required.
+
 ## Patch 0145 phone log: software table walk passes (2026-10-22)
 
 - A later report appended to `/tmp/claude-1000/-home-ersa-Dev-ios-extra/febca858-d68f-4e09-bdd9-8bdf4a7eb119/scratchpad/gmu-boot4.log` has boot args matching the locally packaged SMMU test (`fp6smmu=2 fp6smmupower=1`). This is a new run in the same log file; the earlier ATOS failure remains above it.
@@ -35,7 +57,7 @@ The target is FP6 Adreno 810 Gen8.3. The immediate sequence is:
 
 1. Patch 0145's ATOSNS software walk passed on the phone: IOVA `0x60000000` mapped to expected PA `0x903617000`. The SMMU context was left disabled/reserved, so this is CPU-visible PTE validation only.
 2. Patch 0146 adds an opt-in read-only GIC check for the stock SMMU global-fault SPI (0x2a1 / INTID 705), reporting enable, pending, and trigger configuration without writes. Host normal and ASan/UBSan tests pass; full XNU CI and phone result are pending. This check does not contain global faults.
-3. Keep CM3 held in reset until the global-fault interrupt has a measured containment path. Then make one bounded first GMU start, prove its init/HFI status, and retain its mapped buffers until reset is verified. GMU DMA and GPU execution have not been measured.
+3. The first-start image reached `fp6_gmu_clocks_prepare` but stopped at the inherited GMU clock guard (`0x90d4=0x2001`) before upload. Patch 0147 verifies CM3 reset before allowing clock reconfiguration. After CI, retry the bounded GMU start and retain buffers until reset is verified. GMU DMA and GPU execution remain unmeasured.
 4. After GMU startup/HFI succeeds, validate GMU-driven GX power, SQE/CP initialization, then one bounded command that writes a known value to mapped memory. GPU execution and a Metal bridge are not established.
 
 Phone work uses the repository's temporary-boot helper and fastboot checks described below. Source/host results and phone measurements are recorded separately. See [FP6 GMU first boot](docs/FP6_GMU_FIRST_BOOT.md) and [FP6 SMMU power](docs/FP6_SMMU_POWER.md) for implementation details.
