@@ -1,5 +1,8 @@
 import importlib.util
 import struct
+import os
+import shutil
+import subprocess
 import sys
 import tempfile
 import unittest
@@ -88,6 +91,33 @@ class FP6GMUFirmwareTests(unittest.TestCase):
         blob[-1] ^= 1
         with self.assertRaisesRegex(fw.FirmwareError, "SHA-256 mismatch"):
             fw.verify_pinned_blob(bytes(blob))
+
+    def test_build_stage_script_finds_parser_beside_itself(self):
+        source = Path("/tmp/fp6-firmware/gen80300_gmu.bin")
+        if not source.exists():
+            self.skipTest("local FP6 firmware artifact is unavailable")
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            patch_dir = root / "dxb" / "patches"
+            source_root = root / "dxb" / "xnu"
+            (patch_dir).mkdir(parents=True)
+            (source_root / "bsd" / "dev").mkdir(parents=True)
+            shutil.copy2(ROOT / "tools" / "fp6-gmu-fw.py", patch_dir)
+            stage = ROOT / "xnu" / "patches" / "0129-stage-fp6-gen80300-gmu.sh"
+            staged_script = patch_dir / stage.name
+            shutil.copy2(stage, staged_script)
+            result = subprocess.run(
+                ["bash", str(staged_script)],
+                cwd=source_root,
+                env={**os.environ, "MACHINE_CONFIG": "FP6", "FP6_GMU_SOURCE": str(source)},
+                capture_output=True,
+                text=True,
+                check=True,
+            )
+            self.assertIn("generated 11 preallocations and 4 GMU data blocks", result.stdout)
+            header = (source_root / "bsd" / "dev" / "fp6_gmu_fw.h").read_text()
+            self.assertIn("FP6_GMU_FW_PREALLOCATION_COUNT 11u", header)
+            self.assertIn(fw.SOURCE_SHA256, header)
 
 
 if __name__ == "__main__":

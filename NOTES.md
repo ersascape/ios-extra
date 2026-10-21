@@ -19,9 +19,12 @@
   registers without MMIO writes. This models the diagnostic only; the actual
   FP6 SMMU window has not been read by this build or tested on the phone.
 - Host GPU probe suite passes, including the new SMMU inventory case; the six
-  GMU firmware parser tests pass and the staging shell script parses. No XNU
-  CI build or device test has run for these in-progress changes. No GMU firmware
-  has been loaded and no GPU commands have executed.
+  GMU firmware parser tests pass and the staging shell script is tested against
+  the local pinned blob. CI run `39588975030` for commit `ddfd837` stopped before
+  compilation because the staging script resolved the parser relative to the
+  XNU source directory. The script now resolves it beside itself; a follow-up
+  CI run is pending. No GMU firmware has been loaded and no GPU commands have
+  executed.
 
 ## FP6 PAS/ZAP retest image (2026-10-21)
 
