@@ -170,7 +170,13 @@
   (console visible, `fp6touch=2`): touch+keys
   `/tmp/fp6-mmio-39559458529/touch-keys/fp6-shim-ufs-root-touch-keys-console.img`
   SHA256 `0c592511eebde58a5fba6afed8728415b73eeeeaf37930b53b83981da381c20c`,
-  temporarily booted 07:12:27 UTC (result pending); same plus `fp6pas=1`
+  temporarily booted 07:12:27 UTC. **User reports touch and buttons work**
+  (first FP6 input: SE0 SPI through GPI DMA with SMMU stream entries via the
+  hypervisor-trapped MMIO, PMIC keys through the v7 SPMI observer channel);
+  SpringBoard then crashed (signal/reason not yet reported). Leading
+  suspect from SWEET history: patch 0070 (`pid_hibernate`, syscall 435) was
+  SWEET-only, so SpringBoard gets SIGSYS when an app leaves the
+  foreground; 0070's two guards now include FP6 (source fix, unconfirmed); same plus `fp6pas=1`
   `/tmp/fp6-mmio-39559458529/touch-keys-pas/fp6-shim-ufs-root-touch-keys-pas-console.img`
   SHA256 `9fbaab46e356761bf2519b0d7df4738571bc366b338a442386390fb450770957`
   (not booted). The stock DT confirms the Gunyah hypervisor
