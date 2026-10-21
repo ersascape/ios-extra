@@ -7,7 +7,10 @@
   fault clear +0x22058 want=0x00000000 got=0x00000400`, `contained=1
   route_live=0 bank_reserved=1`. FSR 0x400 is FORMAT (bits 10:9 = 0b10,
   AArch64 context), read-only, not a fault. Patch 0144 checks only Linux's
-  ARM_SMMU_FSR_FAULT bits (0xc00001fe). Compiles locally; host suite passes.
+  ARM_SMMU_FSR_FAULT bits (0xc00001fe), and compares only programmed fields
+  for SCTLR (0x27), S2CR (TYPE + CBNDX) and SMR, logging any extra bits read
+  (pre-emptive: this SMMU has forced read-only bits). Compiles locally; host
+  suite passes.
 
 ## FP6 GPU SMMU context bank live; TCR2 TBI bits (2026-10-21)
 

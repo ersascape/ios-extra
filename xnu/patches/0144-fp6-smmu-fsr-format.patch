@@ -12,3 +12,34 @@
  		failure = "fault clear"; fail_off = cb_off + FP6_SMMU_CB_FSR;
  		fail_got = fsr_after_clear;
  		goto rollback;
+@@ -3369,9 +3372,27 @@
+ 		fail_got = fp6_smmu_read32(base, fail_off);
+ 		goto rollback;
+ 	}
+-	FP6_SMMU_WRITE_CHECK(cb_off + FP6_SMMU_CB_SCTLR, 0x27u);
+-	FP6_SMMU_WRITE_CHECK(s2cr_off, cb);
+-	FP6_SMMU_WRITE_CHECK(smr_off, (1u << 31) | FP6_SMMU_GMU_SID);
++	/*
++	 * This SMMU reports forced/read-only bits (TCR2 TBI, FSR FORMAT), so
++	 * compare only the fields programmed here and log what was read:
++	 * SCTLR M/TRE/AFE/CFRE, S2CR TYPE + CBNDX, SMR VALID + MASK + ID.
++	 */
++#define FP6_SMMU_FIELD_CHECK(off, val, mask, name) do { \
++	uint32_t check_off = (off), check_want = (val); \
++	fp6_smmu_write32(base, check_off, check_want); \
++	uint32_t check_got = fp6_smmu_read32(base, check_off); \
++	if (check_got != check_want) \
++		printf("QCOM SMMU: %s wrote 0x%08x read 0x%08x\n", name, check_want, check_got); \
++	if ((check_got & (mask)) != (check_want & (mask))) { \
++		failure = "register readback"; \
++		fail_off = check_off; fail_want = check_want; fail_got = check_got; \
++		goto rollback; \
++	} \
++} while (0)
++	FP6_SMMU_FIELD_CHECK(cb_off + FP6_SMMU_CB_SCTLR, 0x27u, 0x27u, "SCTLR");
++	FP6_SMMU_FIELD_CHECK(s2cr_off, cb, (3u << 16) | 0xffu, "S2CR");
++	FP6_SMMU_FIELD_CHECK(smr_off, (1u << 31) | FP6_SMMU_GMU_SID, 0xffffffffu, "SMR");
++#undef FP6_SMMU_FIELD_CHECK
+ 	route_live = 1;
+ 
+ 	fp6_smmu_write64(base, cb_off + FP6_SMMU_CB_ATS1PR, FP6_SMMU_GMU_IOVA);
