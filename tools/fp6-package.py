@@ -20,6 +20,17 @@ FP6_UFS_ARGS = (
     'wdt_test=no_user_checkin ufsrw=1 rootrw=1 launchd_unsecure_cache=1 wdt=-1'
 )
 
+def adt_has_product(path):
+    """True when the ADT has /product with the artwork traits iOS needs."""
+    import adt
+    root, _ = adt.parse(Path(path).read_bytes())
+    for c in root.children:
+        props = dict((p[0], p[-1]) for p in c.props)
+        if props.get('name') == b'product\0':
+            return 'artwork-device-subtype' in props
+    return False
+
+
 def main():
     ap = argparse.ArgumentParser(description=__doc__)
     ap.add_argument('--kernel', required=True, type=Path)
@@ -37,6 +48,8 @@ def main():
     ap.add_argument('--header-version', default=None)
     ap.add_argument('--cmdline', default=None)
     ap.add_argument('--image-name', default='fp6-shim-boot.img')
+    ap.add_argument('--allow-no-product', action='store_true',
+                    help='package an ADT without /product artwork traits (iOS UI assets will fail)')
     ap.add_argument('--commit', default='local')
     ap.add_argument('--ci-run', default='local')
     args = ap.parse_args()
@@ -60,6 +73,11 @@ def main():
         cmdline = FP6_DEBUG_ARGS + ' rd=md0 fp6usb=2'
     else:
         cmdline = FP6_DEBUG_ARGS
+    product = adt_has_product(args.adt)
+    if not product and not args.allow_no_product:
+        ap.error(f'{args.adt} has no /product artwork traits (artwork-device-subtype); '
+                 'SpringBoard aborts without them. Build the ADT with research/ipsw-x/d22ap.adt '
+                 'present, or pass --allow-no-product.')
     payload, info = mkpayload.build(str(args.kernel), str(args.adt), cmdline,
                                     str(args.ramdisk) if args.ramdisk else None)
     payload_path = out / 'fp6-payload.bin'
@@ -87,6 +105,7 @@ def main():
                     kernel_sha256=hashlib.sha256(args.kernel.read_bytes()).hexdigest(),
                     adt_sha256=hashlib.sha256(args.adt.read_bytes()).hexdigest(),
                     dtb_sha256=hashlib.sha256(args.dtb.read_bytes()).hexdigest(),
+                    product_node=product,
                     hardware_tested=False)
     (out / 'manifest.json').write_text(json.dumps(manifest, indent=2) + '\n')
     print(image, sha)

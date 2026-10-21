@@ -65,7 +65,8 @@ jobs:
         if: ${{ env.MACHINE_CONFIG == 'FP6' }}
         run: |
           mkdir -p out
-          python3 tools/mkadt.py out/fp6.adt --device fp6
+          # CI has no Apple D22AP tree: build-only ADT without /product artwork traits.
+          python3 tools/mkadt.py out/fp6.adt --device fp6 --allow-no-product
           shasum -a 256 out/fp6.adt > out/fp6.adt.sha256
 
       - uses: actions/upload-artifact@v4
@@ -189,17 +190,17 @@ jobs:
           test -f "$kernel"
           curl --fail --location --retry 3 "$FP6_STOCK_DTB_URL" -o fp6-boot/fp6-stock.dtb
           test -s fp6-boot/fp6-stock.dtb
-          python3 tools/fp6-package.py --kernel "$kernel" --adt ci-adt/fp6.adt \
+          python3 tools/fp6-package.py --kernel "$kernel" --adt ci-adt/fp6.adt --allow-no-product \
             --dtb fp6-boot/fp6-stock.dtb --ramdisk fp6-boot/init \
             --out fp6-boot --commit "$SOURCE_COMMIT" --ci-run "$CI_RUN"
-          python3 tools/fp6-package.py --kernel "$kernel" --adt ci-adt/fp6.adt \
+          python3 tools/fp6-package.py --kernel "$kernel" --adt ci-adt/fp6.adt --allow-no-product \
             --dtb fp6-boot/fp6-stock.dtb --ramdisk fp6-boot/init \
             --ufs-probe --out fp6-boot/ufs-probe \
             --image-name fp6-shim-ufs-probe.img --commit "$SOURCE_COMMIT" --ci-run "$CI_RUN"
-          python3 tools/fp6-package.py --kernel "$kernel" --adt ci-adt/fp6.adt \
+          python3 tools/fp6-package.py --kernel "$kernel" --adt ci-adt/fp6.adt --allow-no-product \
             --dtb fp6-boot/fp6-stock.dtb --ufs-root --out fp6-boot/ufs-root \
             --image-name fp6-shim-ufs-root.img --commit "$SOURCE_COMMIT" --ci-run "$CI_RUN"
-          python3 tools/fp6-package.py --kernel "$kernel" --adt ci-adt/fp6.adt \
+          python3 tools/fp6-package.py --kernel "$kernel" --adt ci-adt/fp6.adt --allow-no-product \
             --dtb fp6-boot/fp6-stock.dtb --ramdisk fp6-boot/init \
             --cmdline 'debug=0xc serial=3 cpus=8 keepsyms=1 -noprogress rd=md0 fp6usb=2' \
             --out fp6-boot/usb-debug --image-name fp6-shim-usb-debug.img \

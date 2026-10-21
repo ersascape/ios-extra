@@ -1,6 +1,30 @@
 # ios-extra — current state
 
-## FP6 SpringBoard bounding-path crash: stale traits, not geometry (2026-10-21)
+## FP6 SpringBoard bounding-path crash: missing /product artwork traits (2026-10-21)
+
+- Correction to the entry below: the user reports the stale MobileGestalt
+  cache was already cleared, so the cache theory does not explain the
+  `69f9878` crash. That image used CI's `fp6.adt` (10,496 bytes), which has
+  **no `/product` node**: CI lacks the Apple D22AP tree, so mkadt silently
+  omitted it. Local ADTs (13,180 bytes) carry `/product` with
+  `artwork-device-subtype` 0x984 (2436), `artwork-scale-factor` 3,
+  `artwork-device-idiom` "phone", `artwork-display-gamut` "P3" and
+  `artwork-dynamic-displaymode` "0" - the traits the asset manager uses to
+  pick renditions. Without them `BoundingPathBitmap-1125x2436-375x812-3.00x`
+  cannot be matched even though it exists. Earlier home-screen boots used
+  local ADTs with `/product`.
+- `tools/mkadt.py` now refuses a non-QEMU ADT without `/product` unless
+  `--allow-no-product`; `tools/fp6-package.py` refuses an ADT lacking
+  `artwork-device-subtype` unless `--allow-no-product` and records
+  `product_node` in the manifest. CI passes the override for its build-only
+  ADT and its (currently skipped) packaging. Local checks: missing D22AP
+  tree -> both tools refuse; override -> `product_node: false`; full ADT ->
+  `product_node: true`.
+- The `img-0b41ea2` image below has `/product`. If SpringBoard still aborts
+  with it, the no-`/product` boot may have re-cached wrong traits and the
+  MobileGestalt cache needs clearing once more.
+
+## FP6 SpringBoard bounding-path crash: earlier stale-cache hypothesis (2026-10-21)
 
 - `/tmp/fp6-blackboot-packets.txt` (kernel `69f9878`, which already includes
   0130's 1125x2436 canvas) shows 423 SpringBoard aborts:

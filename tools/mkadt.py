@@ -411,6 +411,9 @@ if __name__ == '__main__':
     parser.add_argument('--dram-size', type=lambda v: int(v, 0),
                         help='optional FP6 usable RAM size; otherwise the shim fills it from the bootloader FDT')
     parser.add_argument('--dump', action='store_true')
+    parser.add_argument('--allow-no-product', action='store_true',
+                        help='write a phone ADT without /product (needs research/ipsw-x/d22ap.adt); '
+                             'iOS then lacks its artwork traits and SpringBoard aborts on missing assets')
     args = parser.parse_args()
     have_dram_base = args.dram_base is not None
     have_dram_size = args.dram_size is not None
@@ -418,6 +421,13 @@ if __name__ == '__main__':
         parser.error('--dram-base and --dram-size must be supplied together')
     fp6_ram = (args.dram_base, args.dram_size) if args.device == 'fp6' and have_dram_base else None
     root = build(qemu=args.qemu, highmem=args.highmem, device=args.device, fp6_ram=fp6_ram)
+    # /product carries MobileGestalt's artwork traits (device subtype 2436,
+    # scale, idiom, gamut); without them CoreUI cannot match the iPhone X
+    # renditions and SpringBoard aborts on BoundingPathBitmap-1125x2436-*.
+    if not args.qemu and not args.allow_no_product and \
+            not any(dict((k, v) for k, f, v in c.props).get('name') == b'product\0' for c in root.children):
+        parser.error(f'no /product node ({D22AP_ADT} missing); pass --allow-no-product only for '
+                     'build-only artifacts that will not boot iOS')
     blob = adt.serialize(root)
     open(args.output, 'wb').write(blob)
     if args.dump:
