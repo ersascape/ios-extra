@@ -1537,3 +1537,32 @@ error::ResourceWarning -m unittest discover -s tests` (also with
   virtual addresses/flag. Normal and ASan/UBSan suites pass. This correction
   needs a new CI build and phone retest; the failed boot's USB NIC disappeared
   before capture started, so no PAS/ZAP SMC result is available.
+
+## NativeUfs and Topaz cross-reference (2026-10-21)
+
+- Read-only review of UniXNU/NativeUfs history: SMMU takeover entered in
+  `31155a6`, with lower-context fallback in `04b748e`; later `33d9f64` and
+  `af785c1` concern storage/FUA behavior. Its UFS driver quiesces requests,
+  rejects stream conflicts, configures a pass-through context, fences writes,
+  and validates readback. It does **not** build translation tables or program
+  TTBR/TCR, TLBI, ATOS, Gunyah, or GPU DMA. Port its refusal/order/readback
+  discipline only; its sheng addresses, SID and bypass mode are not FP6 values.
+  Source: https://github.com/UniXNU/NativeUfs/commit/31155a6db21678df3c89d9d25b5711466d229369
+- Read-only Topaz patch audit: its Wi-Fi patches 0113–0130 use Topaz's
+  SM6225 modem/WLFW and GLINK/QRTR/QMI assumptions; no direct FP6 port is
+  justified. Topaz README still reports no wallpaper provider, so there is no
+  wallpaper implementation to lift. Surface patches 0131–0139 may inform the
+  SweetSurface/CoreAnimation ABI after comparing with local 0109, but do not
+  implement GPU execution. Display/DSI sequences target Topaz's 1080x2400
+  panel; patch 0114's 1125x2436 logical canvas is a reference for the current
+  FP6 status-bar work, not a physical panel configuration. Gold-cluster
+  patches 0080–0082 are SM6225-specific; FP6 has its own 4/3/1 topology and
+  those patches should not be copied.
+  Source: https://github.com/MakrSas/ios-topaz
+- FP6 translated-context patch 0131 host harness passes in normal and
+  ASan/UBSan modes. RPMh ARC, GMU firmware, and XNU compile-helper tests pass.
+  A local XNU object/syntax compile was attempted but could not start because
+  `tools/xnu-cc.py` expects `/home/ersa/swift/usr/bin/clang`, which is absent
+  on this host; only `/usr/bin/clang` is installed. Thus 0131 is not yet
+  validated against the cached XNU compile commands or a CI kernel build, and
+  no SMMU write has been tested on the phone. Do not claim GPU/Metal execution.

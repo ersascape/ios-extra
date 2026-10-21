@@ -1,0 +1,262 @@
+diff --git a/bsd/dev/sweet_gpu.c b/bsd/dev/sweet_gpu.c
+--- a/bsd/dev/sweet_gpu.c
++++ b/bsd/dev/sweet_gpu.c
+@@ -1981,6 +1981,9 @@
+ #include <sys/param.h>
+ #include <sys/systm.h>
+ #include <pexpert/pexpert.h>
++#include <arm/caches_internal.h>
++#include <vm/pmap.h>
++#include <vm/vm_kern.h>
+ 
+ extern vm_offset_t ml_io_map(vm_offset_t, vm_size_t);
+ 
+@@ -2283,10 +2286,30 @@
+ #define FP6_SMMU_ID0_SMS      (1u << 27)
+ #define FP6_SMMU_ID0_NUMSMRG  0xffu
+ #define FP6_SMMU_ID1_PAGESIZE (1u << 31)
++#define FP6_SMMU_ID2_PTFS_4K (1u << 12)
+ #define FP6_SMMU_SMR_VALID    (1u << 31)
+ #define FP6_SMMU_MAX_STREAMS  128u
+ #define FP6_SMMU_MAX_CBS      128u
+ 
++extern ppnum_t pmap_find_phys(pmap_t, addr64_t);
++
++#define FP6_SMMU_S2CR_TYPE_MASK (3u << 16)
++#define FP6_SMMU_S2CR_CB_MASK   0xffu
++#define FP6_SMMU_S2CR_FAULT     (2u << 16 | 0xffu)
++#define FP6_SMMU_CB_MAIR0       0x0038u
++#define FP6_SMMU_CB_MAIR1       0x003cu
++#define FP6_SMMU_CB_FSR         0x0058u
++#define FP6_SMMU_CB_ATS1PR      0x0800u
++#define FP6_SMMU_CB_PAR         0x0050u
++#define FP6_SMMU_CB_ATSR        0x08f0u
++#define FP6_SMMU_CB_TLBIALL     0x0618u
++#define FP6_SMMU_CB_TLBSYNC     0x07f0u
++#define FP6_SMMU_CB_TLBSTATUS   0x07f4u
++#define FP6_SMMU_TABLE_BYTES    0x4000u
++#define FP6_SMMU_PTE_PAGE       (3ULL | (1ULL << 10) | (2ULL << 8) | (1ULL << 6) | (1ULL << 11) | (1ULL << 54))
++#define FP6_SMMU_GMU_IOVA       0x60000000u
++#define FP6_SMMU_GMU_SID        5u
++
+ static uint32_t
+ fp6_smmu_read32(vm_offset_t base, uint32_t off)
+ {
+@@ -2296,13 +2319,36 @@
+ }
+ 
+ static void
++fp6_smmu_write32(vm_offset_t base, uint32_t off, uint32_t value)
++{
++	__asm__ volatile("dmb oshst" ::: "memory");
++	*(volatile uint32_t *)(base + off) = value;
++	__asm__ volatile("dsb osh" ::: "memory");
++}
++
++static uint64_t
++fp6_smmu_read64(vm_offset_t base, uint32_t off)
++{
++	uint32_t lo = fp6_smmu_read32(base, off);
++	uint32_t hi = fp6_smmu_read32(base, off + 4u);
++	return (uint64_t)lo | ((uint64_t)hi << 32);
++}
++
++static void
++fp6_smmu_write64(vm_offset_t base, uint32_t off, uint64_t value)
++{
++	fp6_smmu_write32(base, off, (uint32_t)value);
++	fp6_smmu_write32(base, off + 4u, (uint32_t)(value >> 32));
++}
++
++static void
+ fp6_smmu_inventory(void)
+ {
+ 	int mode = 0;
+ 	if (!PE_parse_boot_argn("fp6smmu", &mode, sizeof(mode)) || mode == 0)
+ 		return;
+-	if (mode != 1) {
+-		printf("QCOM SMMU: unsupported fp6smmu=%d (0=off, 1=read-only inventory)\n", mode);
++	if (mode != 1 && mode != 2) {
++		printf("QCOM SMMU: unsupported fp6smmu=%d (0=off, 1=inventory, 2=GMU SID5 ATOS test)\n", mode);
+ 		return;
+ 	}
+ 
+@@ -2324,7 +2370,7 @@
+ 	uint64_t cb_base = (uint64_t)numpages << pgshift;
+ 	uint32_t gr1 = 1u << pgshift;
+ 
+-	printf("QCOM SMMU: qsmmu-v500 read-only inventory PA=0x%08x size=0x%x\n",
++	printf("QCOM SMMU: qsmmu-v500 inventory PA=0x%08x size=0x%x\n",
+ 	    FP6_GPU_SMMU_PA, FP6_GPU_SMMU_SIZE);
+ 	printf("QCOM SMMU: IDR0=0x%08x IDR1=0x%08x IDR2=0x%08x IDR7=0x%08x sCR0=0x%08x sGFSR=0x%08x\n",
+ 	    id0, id1, id2, id7, scr0, gfsr);
+@@ -2382,6 +2428,168 @@
+ 		}
+ 	}
+ 	printf("QCOM SMMU: context banks with nonzero state=%u/%u\n", active_cbs, numcb);
+-	printf("QCOM SMMU: read-only inventory complete; no writes or ATOS requests\n");
++	if (mode == 1) {
++		printf("QCOM SMMU: read-only inventory complete; no writes or ATOS requests\n");
++		return;
++	}
++
++	/*
++	 * First live SMMU step: validate one 4 KiB stage-1 mapping for the GMU
++	 * stream. The route is not left enabled, and CM3 remains in reset.
++	 */
++	if ((id0 & FP6_SMMU_ID0_SMS) == 0 || pgshift != 12 || numcb == 0 ||
++	    numsmrg == 0 || scr0 == 0xffffffffu || (scr0 & 1u) != 0 || gfsr != 0 ||
++	    (id2 & FP6_SMMU_ID2_PTFS_4K) == 0 || ((id2 >> 4) & 0xfu) != 1u) {
++		printf("QCOM SMMU: live test refused: unsupported geometry or global state\n");
++		return;
++	}
++	if (numsmrg > 128 || numcb > FP6_SMMU_MAX_CBS || cb_base >= FP6_GPU_SMMU_SIZE) {
++		printf("QCOM SMMU: live test refused: register geometry outside supported limits\n");
++		return;
++	}
++	unsigned group = numsmrg;
++	int sid5_in_use = 0;
++	for (unsigned i = 0; i < numsmrg; i++) {
++		uint32_t smr = fp6_smmu_read32(base, FP6_SMMU_SMR(i));
++		uint32_t s2cr = fp6_smmu_read32(base, FP6_SMMU_S2CR(i));
++		unsigned sid = smr & 0xffffu, mask = (smr >> 16) & 0x7fffu;
++		if ((smr & FP6_SMMU_SMR_VALID) && (((sid ^ FP6_SMMU_GMU_SID) & ~mask & 0xffffu) == 0))
++			sid5_in_use = 1;
++		if (!(smr & FP6_SMMU_SMR_VALID) && s2cr == FP6_SMMU_S2CR_FAULT && group == numsmrg)
++			group = i;
++	}
++	if (sid5_in_use) {
++		printf("QCOM SMMU: live test refused: SID5 already has a stream match\n");
++		return;
++	}
++	unsigned cb = numcb;
++	for (unsigned i = 0; i < numcb; i++) {
++		uint32_t cbar = fp6_smmu_read32(base, gr1 + 4u * i);
++		uint32_t cba2r = fp6_smmu_read32(base, gr1 + 0x800u + 4u * i);
++		uint64_t off = cb_base + ((uint64_t)i << pgshift);
++		if (off + 0x1000u > FP6_GPU_SMMU_SIZE) break;
++		uint32_t sctlr = fp6_smmu_read32(base, (uint32_t)off + FP6_SMMU_CB_SCTLR);
++		uint32_t tcr2 = fp6_smmu_read32(base, (uint32_t)off + FP6_SMMU_CB_TCR2);
++		uint32_t ttbr_lo = fp6_smmu_read32(base, (uint32_t)off + FP6_SMMU_CB_TTBR0);
++		uint32_t ttbr_hi = fp6_smmu_read32(base, (uint32_t)off + FP6_SMMU_CB_TTBR0 + 4u);
++		uint32_t tcr = fp6_smmu_read32(base, (uint32_t)off + FP6_SMMU_CB_TCR);
++		uint32_t mair0 = fp6_smmu_read32(base, (uint32_t)off + FP6_SMMU_CB_MAIR0);
++		uint32_t mair1 = fp6_smmu_read32(base, (uint32_t)off + FP6_SMMU_CB_MAIR1);
++		if (cbar == 0 && cba2r == 0 && sctlr == 0 && tcr2 == 0 &&
++		    ttbr_lo == 0 && ttbr_hi == 0 && tcr == 0 && mair0 == 0 && mair1 == 0) { cb = i; break; }
++	}
++	if (group == numsmrg || cb == numcb) {
++		printf("QCOM SMMU: live test refused: no unused fault-routed group or clean context bank\n");
++		return;
++	}
++
++	vm_offset_t table_va = 0;
++	if (kmem_alloc_contig(kernel_map, &table_va, FP6_SMMU_TABLE_BYTES,
++	    PAGE_MASK, 0, 0, KMA_DATA | KMA_ZERO | KMA_PERMANENT,
++	    VM_KERN_MEMORY_IOKIT) != KERN_SUCCESS || table_va == 0) {
++		printf("QCOM SMMU: live test allocation failed\n");
++		return;
++	}
++	ppnum_t ppn = pmap_find_phys(kernel_pmap, (addr64_t)table_va);
++	uint64_t table_pa = ptoa_64(ppn);
++	if (ppn == 0 || (table_pa & 0x3fffu) || table_pa >= (1ULL << 36)) {
++		printf("QCOM SMMU: live test refused invalid table PA=0x%llx\n", (unsigned long long)table_pa);
++		return;
++	}
++	/* Four-level layout for the 32-bit IOVA aperture; L1/L2/L3 at +4K/+8K/+12K. */
++	volatile uint64_t *l1 = (volatile uint64_t *)(uintptr_t)table_va;
++	volatile uint64_t *l2 = (volatile uint64_t *)(uintptr_t)(table_va + 0x1000);
++	volatile uint64_t *l3 = (volatile uint64_t *)(uintptr_t)(table_va + 0x2000);
++	l1[1] = (table_pa + 0x1000u) | 3u;       /* IOVA 0x60000000 is in L1[1] */
++	l2[256] = (table_pa + 0x2000u) | 3u;     /* and L2[256] */
++	l3[0] = (table_pa + 0x3000u) | FP6_SMMU_PTE_PAGE; /* 4 KiB page, AF, RW, normal NC */
++	clean_dcache64((addr64_t)table_pa, 0x3000, TRUE);
++
++	uint32_t smr_off = FP6_SMMU_SMR(group), s2cr_off = FP6_SMMU_S2CR(group);
++	uint32_t cbar_off = gr1 + 4u * cb, cba2r_off = gr1 + 0x800u + 4u * cb;
++	uint32_t cb_off = (uint32_t)(cb_base + ((uint64_t)cb << pgshift));
++	uint32_t old_smr = fp6_smmu_read32(base, smr_off);
++	uint32_t old_s2cr = fp6_smmu_read32(base, s2cr_off);
++	uint32_t old_cbar = fp6_smmu_read32(base, cbar_off);
++	uint32_t old_cba2r = fp6_smmu_read32(base, cba2r_off);
++	int route_live = 0, passed = 0, contained = 1;
++
++	/* Program the context while disabled. Every write is checked immediately. */
++#define FP6_SMMU_WRITE_CHECK(off, val) do { \
++	fp6_smmu_write32(base, (off), (val)); \
++	if (fp6_smmu_read32(base, (off)) != (val)) goto rollback; \
++} while (0)
++	FP6_SMMU_WRITE_CHECK(cb_off + FP6_SMMU_CB_TCR2, 1u);
++	FP6_SMMU_WRITE_CHECK(cb_off + FP6_SMMU_CB_TCR, 32u | (2u << 12) | (1u << 23));
++	FP6_SMMU_WRITE_CHECK(cb_off + FP6_SMMU_CB_TTBR0, (uint32_t)table_pa);
++	FP6_SMMU_WRITE_CHECK(cb_off + FP6_SMMU_CB_TTBR0 + 4u, (uint32_t)(table_pa >> 32));
++	FP6_SMMU_WRITE_CHECK(cb_off + FP6_SMMU_CB_MAIR0, 0x44u);
++	FP6_SMMU_WRITE_CHECK(cb_off + FP6_SMMU_CB_MAIR1, 0u);
++	FP6_SMMU_WRITE_CHECK(cba2r_off, 1u);
++	FP6_SMMU_WRITE_CHECK(cbar_off, 1u << 16);
++	FP6_SMMU_WRITE_CHECK(cb_off + FP6_SMMU_CB_SCTLR, 0x27u);
++	FP6_SMMU_WRITE_CHECK(s2cr_off, cb);
++	FP6_SMMU_WRITE_CHECK(smr_off, (1u << 31) | FP6_SMMU_GMU_SID);
++	route_live = 1;
++
++	fp6_smmu_write32(base, cb_off + FP6_SMMU_CB_TLBIALL, 0);
++	fp6_smmu_write32(base, cb_off + FP6_SMMU_CB_TLBSYNC, 0);
++	unsigned tlb_polls;
++	for (tlb_polls = 0; tlb_polls < 1000; tlb_polls++) {
++		if (!(fp6_smmu_read32(base, cb_off + FP6_SMMU_CB_TLBSTATUS) & 1u)) break;
++		delay(10);
++	}
++	if (tlb_polls == 1000) goto rollback;
++	fp6_smmu_write64(base, cb_off + FP6_SMMU_CB_ATS1PR, FP6_SMMU_GMU_IOVA);
++	unsigned ats_polls;
++	for (ats_polls = 0; ats_polls < 1000; ats_polls++) {
++		if (!(fp6_smmu_read32(base, cb_off + FP6_SMMU_CB_ATSR) & 1u)) break;
++		delay(10);
++	}
++	if (ats_polls < 1000) {
++		uint64_t par = fp6_smmu_read64(base, cb_off + FP6_SMMU_CB_PAR);
++		uint64_t expected = table_pa + 0x3000u;
++		passed = !(par & 1u) && (par & 0x0000fffffffff000ULL) == expected;
++		printf("QCOM SMMU: GMU SID5 ATOS IOVA=0x%08x PAR=0x%llx expected=0x%llx passed=%u\n",
++		    FP6_SMMU_GMU_IOVA, (unsigned long long)par,
++		    (unsigned long long)expected, passed);
++	} else {
++		printf("QCOM SMMU: GMU SID5 ATOS timed out\n");
++	}
++
++rollback:
++	/* Disable the match first; no GMU code has been released. */
++	fp6_smmu_write32(base, smr_off, old_smr);
++	if (fp6_smmu_read32(base, smr_off) != old_smr) {
++		contained = 0;
++		printf("QCOM SMMU: rollback could not disable stream match; context retained\n");
++		goto report;
++	}
++	route_live = 0;
++	fp6_smmu_write32(base, cb_off + FP6_SMMU_CB_SCTLR, 0);
++	if (fp6_smmu_read32(base, cb_off + FP6_SMMU_CB_SCTLR) != 0) contained = 0;
++	fp6_smmu_write32(base, s2cr_off, old_s2cr);
++	if (fp6_smmu_read32(base, s2cr_off) != old_s2cr) contained = 0;
++	fp6_smmu_write32(base, cb_off + FP6_SMMU_CB_TTBR0, 0);
++	fp6_smmu_write32(base, cb_off + FP6_SMMU_CB_TTBR0 + 4u, 0);
++	fp6_smmu_write32(base, cb_off + FP6_SMMU_CB_TCR, 0);
++	fp6_smmu_write32(base, cb_off + FP6_SMMU_CB_TCR2, 0);
++	fp6_smmu_write32(base, cb_off + FP6_SMMU_CB_MAIR0, 0);
++	fp6_smmu_write32(base, cb_off + FP6_SMMU_CB_MAIR1, 0);
++	fp6_smmu_write32(base, cbar_off, old_cbar);
++	fp6_smmu_write32(base, cba2r_off, old_cba2r);
++	if (fp6_smmu_read32(base, cb_off + FP6_SMMU_CB_TTBR0) != 0 ||
++	    fp6_smmu_read32(base, cb_off + FP6_SMMU_CB_TTBR0 + 4u) != 0 ||
++	    fp6_smmu_read32(base, cb_off + FP6_SMMU_CB_TCR) != 0 ||
++	    fp6_smmu_read32(base, cb_off + FP6_SMMU_CB_TCR2) != 0 ||
++	    fp6_smmu_read32(base, cb_off + FP6_SMMU_CB_MAIR0) != 0 ||
++	    fp6_smmu_read32(base, cb_off + FP6_SMMU_CB_MAIR1) != 0 ||
++	    fp6_smmu_read32(base, cbar_off) != old_cbar ||
++	    fp6_smmu_read32(base, cba2r_off) != old_cba2r) contained = 0;
++report:
++	printf("QCOM SMMU: GMU SID5 context group=%u cb=%u mapped=%u rollback_ok=%u route_live=%u result=%s\n",
++	    group, cb, passed, contained, route_live,
++	    passed && contained ? "ATOS pass; no master run" : "test failed; no master run");
++#undef FP6_SMMU_WRITE_CHECK
+ }
+ #endif /* ARM64_BOARD_CONFIG_FP6 */

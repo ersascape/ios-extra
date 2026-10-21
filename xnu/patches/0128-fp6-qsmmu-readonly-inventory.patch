@@ -10,7 +10,7 @@ diff --git a/bsd/dev/sweet_gpu.c b/bsd/dev/sweet_gpu.c
 +	fp6_qcom_pas_zap_load();
 +	fp6_smmu_inventory();
  }
-@@ -2260,0 +2261,133 @@
+@@ -2260,0 +2261,125 @@
 +
 +/* Read-only inspection of the dedicated FP6 qsmmu-v500. It does not claim
 + * SID ownership, allocate a context, issue ATOS, or change SMMU state. */
@@ -88,59 +88,51 @@ diff --git a/bsd/dev/sweet_gpu.c b/bsd/dev/sweet_gpu.c
 +	    !!(id0 & FP6_SMMU_ID0_SMS), numsmrg, numcb, pgshift,
 +	    (unsigned long long)cb_base);
 +
-+	static const unsigned sids[] = { 0, 2, 5 };
-+	for (unsigned s = 0; s < sizeof(sids) / sizeof(sids[0]); s++) {
-+		unsigned sid = sids[s];
-+		unsigned matches = 0;
-+		unsigned matching = !!(id0 & FP6_SMMU_ID0_SMS);
-+		unsigned entries = matching ? numsmrg : 1u;
-+		for (unsigned i = 0; i < entries; i++) {
-+			unsigned index = matching ? i : sid;
-+			uint32_t smr = 0;
-+			if (matching) {
-+				smr = fp6_smmu_read32(base, FP6_SMMU_SMR(index));
-+				if (!(smr & FP6_SMMU_SMR_VALID))
-+					continue;
-+				uint32_t mask = (smr >> 16) & 0x7fffu;
-+				if ((((smr & 0xffffu) ^ sid) & ~mask & 0xffffu) != 0)
-+					continue;
-+			}
-+			uint32_t s2cr = fp6_smmu_read32(base, FP6_SMMU_S2CR(index));
++	if (id0 & FP6_SMMU_ID0_SMS) {
++		for (unsigned i = 0; i < numsmrg; i++) {
++			uint32_t smr = fp6_smmu_read32(base, FP6_SMMU_SMR(i));
++			uint32_t s2cr = fp6_smmu_read32(base, FP6_SMMU_S2CR(i));
++			unsigned valid = !!(smr & FP6_SMMU_SMR_VALID);
++			unsigned sid = smr & 0xffffu;
++			unsigned mask = (smr >> 16) & 0x7fffu;
 +			unsigned type = (s2cr >> 16) & 3u;
 +			unsigned cb = s2cr & 0xffu;
 +			const char *route = type == 0 ? "translate" : type == 1 ? "bypass" :
-+			    type == 2 ? "fault" : "reserved";
-+			printf("QCOM SMMU: SID %u entry=%u SMR=0x%08x S2CR=0x%08x route=%s CB=%u\n",
-+			    sid, index, smr, s2cr, route, cb);
-+			matches++;
-+			if (type != 0)
-+				continue;
-+			if (cb >= numcb) {
-+				printf("QCOM SMMU: SID %u entry=%u CB index outside IDR1 geometry\n", sid, index);
-+				continue;
-+			}
-+			uint32_t cbar_off = gr1 + 4u * cb;
-+			uint32_t cba2r_off = gr1 + 0x0800u + 4u * cb;
-+			uint64_t cb_off = cb_base + ((uint64_t)cb << pgshift);
-+			if (cba2r_off > FP6_GPU_SMMU_SIZE - 4u ||
-+			    cbar_off > FP6_GPU_SMMU_SIZE - 4u ||
-+			    cb_off + FP6_SMMU_CB_TCR + 4u > FP6_GPU_SMMU_SIZE) {
-+				printf("QCOM SMMU: SID %u CB %u context window outside mapping; skipped\n", sid, cb);
-+				continue;
-+			}
-+			uint32_t cbar = fp6_smmu_read32(base, cbar_off);
-+			uint32_t cba2r = fp6_smmu_read32(base, cba2r_off);
-+			uint32_t sctlr = fp6_smmu_read32(base, (uint32_t)cb_off + FP6_SMMU_CB_SCTLR);
-+			uint32_t tcr2 = fp6_smmu_read32(base, (uint32_t)cb_off + FP6_SMMU_CB_TCR2);
-+			uint32_t ttbr0_lo = fp6_smmu_read32(base, (uint32_t)cb_off + FP6_SMMU_CB_TTBR0);
-+			uint32_t ttbr0_hi = fp6_smmu_read32(base, (uint32_t)cb_off + FP6_SMMU_CB_TTBR0 + 4u);
-+			uint32_t tcr = fp6_smmu_read32(base, (uint32_t)cb_off + FP6_SMMU_CB_TCR);
-+			printf("QCOM SMMU: SID %u CB%u CBAR=0x%08x CBA2R=0x%08x SCTLR=0x%08x TCR2=0x%08x TTBR0=0x%08x%08x TCR=0x%08x\n",
-+			    sid, cb, cbar, cba2r, sctlr, tcr2, ttbr0_hi, ttbr0_lo, tcr);
++				    type == 2 ? "fault" : "reserved";
++			unsigned sid0 = valid && (((sid ^ 0u) & ~mask & 0xffffu) == 0);
++			unsigned sid2 = valid && (((sid ^ 2u) & ~mask & 0xffffu) == 0);
++			unsigned sid5 = valid && (((sid ^ 5u) & ~mask & 0xffffu) == 0);
++			printf("QCOM SMMU: group=%u valid=%u SMR=0x%08x ID=0x%x MASK=0x%x S2CR=0x%08x route=%s CB=%u matches[0,2,5]=%u,%u,%u\n",
++				    i, valid, smr, sid, mask, s2cr, route, cb, sid0, sid2, sid5);
 +		}
-+		if (!matches)
-+			printf("QCOM SMMU: SID %u has no visible stream route\n", sid);
++	} else {
++		printf("QCOM SMMU: stream-index mode; no SMR groups to scan\n");
 +	}
++	unsigned active_cbs = 0;
++	for (unsigned cb = 0; cb < numcb; cb++) {
++		uint32_t cbar_off = gr1 + 4u * cb;
++		uint32_t cba2r_off = gr1 + 0x0800u + 4u * cb;
++		uint64_t cb_off = cb_base + ((uint64_t)cb << pgshift);
++		if (cba2r_off > FP6_GPU_SMMU_SIZE - 4u ||
++		    cbar_off > FP6_GPU_SMMU_SIZE - 4u ||
++		    cb_off + FP6_SMMU_CB_TCR + 4u > FP6_GPU_SMMU_SIZE) {
++			printf("QCOM SMMU: CB%u context window outside mapping; skipped\n", cb);
++			continue;
++		}
++		uint32_t cbar = fp6_smmu_read32(base, cbar_off);
++		uint32_t cba2r = fp6_smmu_read32(base, cba2r_off);
++		uint32_t sctlr = fp6_smmu_read32(base, (uint32_t)cb_off + FP6_SMMU_CB_SCTLR);
++		uint32_t tcr2 = fp6_smmu_read32(base, (uint32_t)cb_off + FP6_SMMU_CB_TCR2);
++		uint32_t ttbr0_lo = fp6_smmu_read32(base, (uint32_t)cb_off + FP6_SMMU_CB_TTBR0);
++		uint32_t ttbr0_hi = fp6_smmu_read32(base, (uint32_t)cb_off + FP6_SMMU_CB_TTBR0 + 4u);
++		uint32_t tcr = fp6_smmu_read32(base, (uint32_t)cb_off + FP6_SMMU_CB_TCR);
++		if (cbar || cba2r || sctlr || tcr2 || ttbr0_lo || ttbr0_hi || tcr) {
++			printf("QCOM SMMU: CB%u CBAR=0x%08x CBA2R=0x%08x SCTLR=0x%08x TCR2=0x%08x TTBR0=0x%08x%08x TCR=0x%08x\n",
++				    cb, cbar, cba2r, sctlr, tcr2, ttbr0_hi, ttbr0_lo, tcr);
++			active_cbs++;
++		}
++	}
++	printf("QCOM SMMU: context banks with nonzero state=%u/%u\n", active_cbs, numcb);
 +	printf("QCOM SMMU: read-only inventory complete; no writes or ATOS requests\n");
 +}
 +#endif /* ARM64_BOARD_CONFIG_FP6 */

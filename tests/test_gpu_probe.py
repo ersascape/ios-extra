@@ -28,10 +28,10 @@ class GPUProbeTests(unittest.TestCase):
             self.assertEqual(source.count(barrier), 4)  # SWEET 32/64-bit + FP6 GPUCC/SMMU barriers
             for name in ('dmb oshld', 'dmb oshst', 'dsb osh'):
                 text = '__asm__ volatile("%s" ::: "memory");' % name
-                self.assertEqual(source.count(text), 4 if name == 'dmb oshld' else 2)
+                self.assertEqual(source.count(text), 4 if name == 'dmb oshld' else 3)
                 source = source.replace(text, '__asm__ volatile("" ::: "memory");')
             store32 = '*(volatile uint32_t *)(base + off) = value;'
-            self.assertEqual(source.count(store32), 1)
+            self.assertEqual(source.count(store32), 2)
             source = source.replace(store32, 'test_store32(base, off, value);')
             mask = '__asm__ volatile("and %0, %0, #0xffffffff" : "+r" (got));'
             self.assertEqual(source.count(mask), 1)
@@ -118,6 +118,7 @@ static int probe_printf(const char *, ...);
 static uint32_t gcc[0x90000 / 4], cc[0x9000 / 4];
 static uint32_t fp6_gpucc[0x9800 / 4], fp6_gpucc_before[0x9800 / 4];
 static uint32_t fp6_smmu[0x40000 / 4];
+static uint32_t fp6_refuse_off; static unsigned fp6_refuse_nth, fp6_refuse_count;
 static int present, mode, map_calls, fail_gcc, fail_cc;
 static int fp6_mode, fp6_smmu_mode;
 static unsigned fp6_map_calls, fp6_smmu_maps;
@@ -135,7 +136,7 @@ static int gmu_maps, fail_gmu_map;
 static unsigned char dma_block[0x10000] __attribute__((aligned(16384)));
 static unsigned long long fake_pa_base;
 static int fail_alloc, alloc_calls, clean_calls, ats_stuck, tlb_stuck;
-static uint64_t last_ats;
+static uint64_t last_ats, fp6_last_ats;
 static int alloc_null, alloc_unaligned, phys_discontig, bad_atos, smmu_write_calls, all_mmio_writes;
 static uint32_t refuse_smmu_off;
 static unsigned refused_writes;
@@ -190,6 +191,10 @@ static void test_store32(vm_offset_t base, uint32_t off, uint32_t value)
             smmu_mem[(GPU_SMMU_CB0 + 3 * 0x1000 + GPU_SMMU_CB_TLBSTATUS)/4] = tlb_stuck ? 1 : 0;
         if (off == refuse_smmu_off && value && !refused_writes++) return;
     }
+    if (base == (vm_offset_t)fp6_smmu && off == fp6_refuse_off &&
+        fp6_refuse_nth && ++fp6_refuse_count == fp6_refuse_nth) return;
+    if (base == (vm_offset_t)fp6_smmu && (off == 0x20800 || off == 0x20804))
+        fp6_smmu[0x208f0/4] = 1;
     if (smmu_sticky && base == (vm_offset_t)smmu_mem &&
         ((off == GPU_SMMU_S2CR + 12 && value == GPU_SMMU_S2CR_FAULT) ||
          (off == GPU_SMMU_CBAR + 12 && value == 0))) return;
@@ -247,6 +252,33 @@ static void smmu_sim(void)
     smmu_mem[(cb + GPU_SMMU_CB_PAR) / 4 + 1] = (uint32_t)(par >> 32);
 }
 
+static void fp6_smmu_sim(void)
+{
+    const unsigned cb = 0x20000; /* IDR1.NUMPAGE=32, 4 KiB register pages */
+    uint64_t cur = fp6_smmu[ (cb + 0x800) / 4 ] |
+        (uint64_t)fp6_smmu[(cb + 0x804) / 4] << 32;
+    if (cur == fp6_last_ats) return;
+    fp6_last_ats = cur;
+    uint64_t par = 1;
+    if ((fp6_smmu[cb / 4] & 1u) &&
+        (fp6_smmu[(cb + 0x30) / 4] & 0x3f) == 32) {
+        uint64_t table = fp6_smmu[(cb + 0x20) / 4] |
+            (uint64_t)fp6_smmu[(cb + 0x24) / 4] << 32;
+        uint64_t va = cur & 0xffffffffu;
+        uint64_t e1 = dma_rd64(table + 8 * ((va >> 30) & 3));
+        if ((e1 & 3) == 3) {
+            uint64_t e2 = dma_rd64((e1 & 0xfffffffff000ull) + 8 * ((va >> 21) & 511));
+            if ((e2 & 3) == 3) {
+                uint64_t e3 = dma_rd64((e2 & 0xfffffffff000ull) + 8 * ((va >> 12) & 511));
+                if ((e3 & 3) == 3 && (e3 & (1u << 10))) par = e3 & 0x0000fffffffff000ull;
+            }
+        }
+    }
+    fp6_smmu[(cb + 0x8f0) / 4] = 0;
+    fp6_smmu[(cb + 0x50) / 4] = (uint32_t)par;
+    fp6_smmu[(cb + 0x54) / 4] = (uint32_t)(par >> 32);
+}
+
 void clean_dcache64(addr64_t addr, unsigned count, int phys) {
     if (addr == (addr64_t)(uintptr_t)zap_region ||
         addr == (addr64_t)(uintptr_t)(zap_region + 0x1000)) {
@@ -288,6 +320,7 @@ kern_return_t kmem_alloc_contig(vm_map_t m, vm_offset_t *a, vm_size_t size, vm_o
 void delay(int us)
 {
     smmu_sim();
+    fp6_smmu_sim();
     if (gmu_mem[0x24c1c / 4] == 1 && !rsc_stuck && !(wake_model && wake_seen && wake_stop_stuck)) {
         gmu_mem[(0x23000 + 4 * 4) / 4] |= 1u << 16;
         if (wake_model) {
@@ -1497,10 +1530,79 @@ int main(void)
     int writes_before_smmu_inventory = all_mmio_writes;
     fp6_smmu_inventory();
     assert(fp6_smmu_maps == 1 && all_mmio_writes == writes_before_smmu_inventory);
-    assert(strstr(output, "SID 5 entry=0"));
+    assert(strstr(output, "group=0 valid=1 SMR=0x80000005 ID=0x5 MASK=0x0"));
     assert(strstr(output, "CB2 CBAR=0x00001234 CBA2R=0x00005678"));
     assert(strstr(output, "read-only inventory complete; no writes or ATOS requests"));
     puts("PASS: FP6 GPU SMMU route inventory is opt-in and read-only");
+
+    /* fp6smmu=2: map one 4 KiB GMU SID5 IOVA, verify by ATOS, then roll back. */
+    memset(fp6_smmu, 0, sizeof(fp6_smmu));
+    fp6_smmu[0x20/4] = (1u << 27) | 24u;
+    fp6_smmu[0x24/4] = (4u << 28) | 22u;
+    fp6_smmu[0x28/4] = 0x5511u;
+    fp6_smmu[0x3c/4] = 0x24u;
+    fp6_smmu[0x00/4] = 0x002c0406u;
+    for (unsigned i = 0; i < 24; i++) fp6_smmu[(0xc00 + 4*i)/4] = 0x000200ffu;
+    fp6_smmu_mode = 2; fp6_last_ats = 0; fake_pa_base = 0x90000000ull;
+    fail_alloc = 0; alloc_calls = clean_calls = 0; all_mmio_writes = 0;
+    output[0] = 0;
+    fp6_smmu_inventory();
+    assert(alloc_calls == 1 && clean_calls == 1 && clean_bytes == 0x3000);
+    assert(all_mmio_writes > 0 && strstr(output, "ATOS IOVA=0x60000000"));
+    assert(strstr(output, "passed=1") && strstr(output, "rollback_ok=1 route_live=0"));
+    assert(fp6_smmu[0x800/4] == 0 && fp6_smmu[0xc00/4] == 0x000200ffu);
+    assert(fp6_smmu[0x20000/4] == 0 && fp6_smmu[0x20020/4] == 0 &&
+        fp6_smmu[0x20030/4] == 0 && fp6_smmu[0x1000/4] == 0 && fp6_smmu[0x1800/4] == 0);
+    assert(dma_rd64(fake_pa_base + 8) == ((fake_pa_base + 0x1000) | 3));
+    assert(dma_rd64(fake_pa_base + 0x1000 + 8*256) == ((fake_pa_base + 0x2000) | 3));
+    assert(dma_rd64(fake_pa_base + 0x2000) == ((fake_pa_base + 0x3000) | (3ull | (1ull<<10) | (2ull<<8) | (1ull<<6) | (1ull<<11) | (1ull<<54))));
+    puts("PASS: FP6 GMU SID5 4 KiB context maps by ATOS and disables its route");
+
+    /* Failure on each first-write stage aborts and disables the stream route. */
+    const unsigned fp6_stage_writes[] = {0x20010,0x20030,0x20020,0x20024,
+        0x20038,0x2003c,0x1800,0x1000,0x20000,0xc00,0x800};
+    for (unsigned n = 0; n < sizeof(fp6_stage_writes)/sizeof(fp6_stage_writes[0]); n++) {
+        memset(fp6_smmu, 0, sizeof(fp6_smmu));
+        fp6_smmu[0x20/4] = (1u << 27) | 24u;
+        fp6_smmu[0x24/4] = (4u << 28) | 22u;
+        fp6_smmu[0x28/4] = 0x5511u; fp6_smmu[0x00/4] = 0x002c0406u;
+        for (unsigned i = 0; i < 24; i++) fp6_smmu[(0xc00 + 4*i)/4] = 0x000200ffu;
+        fp6_smmu_mode = 2; fp6_last_ats = 0; fail_alloc = 0;
+        alloc_calls = 0; all_mmio_writes = 0; output[0] = 0;
+        fp6_refuse_off = fp6_stage_writes[n]; fp6_refuse_nth = 1; fp6_refuse_count = 0;
+        fp6_smmu_inventory();
+        assert(strstr(output, "rollback_ok=1 route_live=0"));
+        assert(fp6_smmu[0x800/4] == 0 && fp6_smmu[0xc00/4] == 0x000200ffu);
+        assert(fp6_smmu[0x20000/4] == 0 && fp6_smmu[0x1000/4] == 0 && fp6_smmu[0x1800/4] == 0);
+    }
+    fp6_refuse_off = 0; fp6_refuse_nth = fp6_refuse_count = 0;
+    puts("PASS: FP6 SMMU write-stage failures leave no active stream match");
+
+    /* SID5 conflict and bad granule geometry must refuse before allocation or writes. */
+    for (unsigned refusal = 0; refusal < 2; refusal++) {
+        memset(fp6_smmu, 0, sizeof(fp6_smmu));
+        fp6_smmu[0x20/4] = (1u << 27) | 24u;
+        fp6_smmu[0x24/4] = (4u << 28) | 22u;
+        fp6_smmu[0x28/4] = 0x5511u;
+        fp6_smmu[0x00/4] = 0x002c0406u;
+        for (unsigned i = 0; i < 24; i++) fp6_smmu[(0xc00 + 4*i)/4] = 0x000200ffu;
+        if (refusal == 0) { fp6_smmu[0x800/4] = 0x80000005u; fp6_smmu[0xc00/4] = 0; }
+        else fp6_smmu[0x28/4] &= ~(1u << 12);
+        alloc_calls = 0; all_mmio_writes = 0; output[0] = 0;
+        fp6_smmu_inventory();
+        assert(alloc_calls == 0 && all_mmio_writes == 0);
+        assert(strstr(output, refusal == 0 ? "SID5 already has a stream match" : "unsupported geometry"));
+    }
+    /* Allocation failure also has no SMMU writes. */
+    memset(fp6_smmu, 0, sizeof(fp6_smmu));
+    fp6_smmu[0x20/4] = (1u << 27) | 24u;
+    fp6_smmu[0x24/4] = (4u << 28) | 22u;
+    fp6_smmu[0x28/4] = 0x5511u; fp6_smmu[0x00/4] = 0x002c0406u;
+    for (unsigned i = 0; i < 24; i++) fp6_smmu[(0xc00 + 4*i)/4] = 0x000200ffu;
+    fail_alloc = 1; alloc_calls = 0; all_mmio_writes = 0; output[0] = 0;
+    fp6_smmu_inventory();
+    assert(alloc_calls == 1 && all_mmio_writes == 0 && strstr(output, "allocation failed"));
+    fail_alloc = 0;
 
     /* The PAS probe only checks SCM call availability and PAS ID 13. */
     scm_calls = 0; fp6_pas_mode = 0; fp6_qcom_pas_probe();
