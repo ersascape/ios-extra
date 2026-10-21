@@ -165,7 +165,16 @@
   objects contain no write-back loads/stores to MMIO (remaining write-back
   forms are stack pushes, a const-table load and buffer copies). Because
   sCR0.USFCFG=1, the GPI streams need SMR/S2CR entries; whether the
-  hypervisor accepts those writes is unknown (readback is checked). Rails
+  hypervisor accepts those writes is unknown (readback is checked).
+  CI `39559458529` (`a24dc47`, includes the Codex merge) passed. Images
+  (console visible, `fp6touch=2`): touch+keys
+  `/tmp/fp6-mmio-39559458529/touch-keys/fp6-shim-ufs-root-touch-keys-console.img`
+  SHA256 `0c592511eebde58a5fba6afed8728415b73eeeeaf37930b53b83981da381c20c`,
+  temporarily booted 07:12:27 UTC (result pending); same plus `fp6pas=1`
+  `/tmp/fp6-mmio-39559458529/touch-keys-pas/fp6-shim-ufs-root-touch-keys-pas-console.img`
+  SHA256 `9fbaab46e356761bf2519b0d7df4738571bc366b338a442386390fb450770957`
+  (not booted). The stock DT confirms the Gunyah hypervisor
+  (`gunyah_hyp_region@80000000`, trustedvm/oemvm guests). Rails
   (L22B/L9B) and PMIC are still untouched. Work is committed from a separate
   worktree on main because the shared checkout is on Codex's
   `fp6-adreno-gen711` branch.
