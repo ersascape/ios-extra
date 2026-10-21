@@ -1617,12 +1617,25 @@ int main(void)
     fp6_smmu_clocks_put(&clocks);
     assert(fp6_gpucc[0x7000/4] == 0 && fp6_gpucc[0x90bc/4] == 0);
     assert(fp6_gcc_gpu[0x10/4] == 2 && fp6_gcc_gpu[0x18/4] == 0);
+    /* A refused enable on a branch that reports CLK_OFF is a failure. */
+    static uint32_t * const refuse_reg[4] = { &fp6_gpucc[0x7000/4], &fp6_gcc_gpu[0x10/4],
+                                              &fp6_gcc_gpu[0x18/4], &fp6_gpucc[0x90bc/4] };
     for (unsigned n = 0; n < 4; n++) {
+        uint32_t saved = *refuse_reg[n];
+        *refuse_reg[n] = saved | 0x80000000u;
         fp6_clock_refuse = (int)n;
         assert(!fp6_smmu_clocks_get(&clocks));
+        *refuse_reg[n] = saved;
         assert(!clocks.acquired && fp6_gpucc[0x7000/4] == 0 && fp6_gpucc[0x90bc/4] == 0);
         assert(fp6_gcc_gpu[0x10/4] == 2 && fp6_gcc_gpu[0x18/4] == 0);
     }
+    /* FP6 gpu_cc_ahb: enable ignored but CLK_OFF clear (running): accepted. */
+    fp6_clock_refuse = 3;
+    fp6_gpucc[0x90bc/4] = 0;
+    assert(fp6_smmu_clocks_get(&clocks));
+    fp6_smmu_clocks_put(&clocks);
+    fp6_gpucc[0x7000/4] = 0;
+    fp6_gcc_gpu[0x18/4] = 0;
     fp6_clock_refuse = -1;
     fp6_gpucc[0x7000/4] = fp6_gpucc[0x90bc/4] = 1;
     fp6_gcc_gpu[0x10/4] = 3; fp6_gcc_gpu[0x18/4] = 1;
