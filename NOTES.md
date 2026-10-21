@@ -1,5 +1,24 @@
 # ios-extra — current state
 
+## FP6 CB2 test phone observation and failure diagnostics (2026-10-21)
+
+- User's new console photo shows `context banks with nonzero state=0/22`,
+  followed by `context test group=0 cb=2 mapped=0 contained=1 route_live=0
+  bank_reserved=1 result=test failed; no master run`. Boot proceeds through
+  platform registration and CPU startup at the shown point. This demonstrates
+  that this attempt passed the earlier rollback panic site, but does not prove
+  home-screen arrival or successful translation. The photo followed delivery of
+  the atomic ATS image; its exact flashed/booted artifact is not independently
+  established by the photo.
+- No ATOS result or timeout appears between inventory and the failure summary.
+  The likely exit is an earlier register-readback, fault-clear, or TLB-sync
+  check. Previously these all silently entered rollback. Patch 0131 now caches
+  the first failed offset, requested value and readback and reports them after
+  cleanup, distinguishing readback mismatch, FSR clear failure and TLB timeout.
+  It changes no register programming or acceptance criteria. Host tests verify
+  each nonzero refused setup write reports its exact offset and never reaches
+  ATOS; normal and ASan/UBSan suites pass. Firmware has not executed.
+
 ## FP6 atomic ATS image, existing ECM transport (2026-10-21)
 
 - CI `39627541732` passed for `2a068b7c182bce5b11bf6bffe3b47d702683e3c4`.
