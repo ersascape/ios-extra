@@ -1,0 +1,16 @@
+--- a/iokit/Kernel/arm/SweetFramebuffer.cpp
++++ b/iokit/Kernel/arm/SweetFramebuffer.cpp
+@@ -292,7 +292,12 @@ AppleCLCD::swap(const uint8_t *rec)
+ 	if (!fConsolePaused) {
+ 		int quiet = 0;
++		int sweet_quiet = 0;
+ 		fConsolePaused = true;
+-		if (PE_parse_boot_argn("sweetfb_noconsole", &quiet, sizeof(quiet)) && quiet != 0) {
++		boolean_t have_quiet = PE_parse_boot_argn("sweet_noconsole", &sweet_quiet,
++		    sizeof(sweet_quiet));
++		boolean_t have_fb_quiet = PE_parse_boot_argn("sweetfb_noconsole", &quiet,
++		    sizeof(quiet));
++		if ((have_quiet && sweet_quiet != 0) || (have_fb_quiet && quiet != 0)) {
+ 			/* Not PE_initialize_console(kPEDisableScreen): its console switch
+ 			 * writes the read-only-late cons_ops_index and panics. */
+ 			sweet_console_muted = 1;

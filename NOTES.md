@@ -1,5 +1,51 @@
 # ios-extra — current state
 
+## USB log delivery and SWEET console mute alias (2026-10-21)
+
+- Patch 0111 replaces the kernel logger's routed UDP socket sends with complete
+  Ethernet/IPv4/UDP frames addressed to the fixed USB-ECM host. This bypasses
+  XNU route and ARP resolution, which were in the previous send path. It waits
+  for the ECM data alternate setting, reports a full transmit queue as
+  `ENOBUFS`, and keeps the ring cursor unchanged on failure so the chunk is
+  retried. A clean replay of patches 0099–0112 applied successfully; the
+  resulting `sweet_usb.c` passed syntax compilation against the CI build tree.
+  Phone delivery and a full XNU CI build remain unverified.
+- Patch 0112 adds `sweet_noconsole=1` as an alias for
+  `sweetfb_noconsole=1`. Both mute framebuffer console drawing after the first
+  GUI swap; persistent logging and panic drawing are preserved.
+- Corrected `tools/patch-launchd-plist.py` to set selected jobs' stdout and
+  stderr paths to `/dev/null`. The earlier `/dev/console` setting matches the
+  confirmed `backboardd` spawn failure for the mobile user. The current Tegu
+  rootfs build notes say this helper was not run, so this does not establish
+  that the current phone image had that setting. The selected diagnostics are
+  only visible on SWEET when its `sweetnull` tee is enabled; other kernels
+  discard redirected output.
+- ADT audit: the local D22AP IPSW tree supplies the 61 usable `/product`
+  properties copied by `tools/mkadt.py`; no Apple-format SWEET ADT was found.
+  The generated SWEET ADT currently describes all eight CPUs as homogeneous,
+  while the SWEET Linux DT describes six efficiency and two performance cores.
+  This is a topology metadata gap, not an identified cause of the present
+  `backboardd` exception. Qualcomm peripheral nodes require matching XNU
+  drivers and should not be copied wholesale from the iPhone tree.
+
+## FP6 watchdog/framebuffer boot-argument package (2026-10-21)
+
+- The earlier USB-log UFS boot image omitted `wdt=-1`,
+  `wdt_test=no_user_checkin`, `sweetfb_noconsole=1`, and `sweetfb_hz=30`.
+  Repacked the same CI kernel (run `39472658322`, commit
+  `698cc43ed79a9f8e3c53af4b436872bd764dfa60`), D22AP-product ADT, and stock
+  FP6 DTB. The new arguments also disable the SWEET touch/button drivers and
+  retain USB debug. `cpus=8` is retained for FP6's eight-core topology.
+- `wdt=-1` is an XNU boot argument; `wdt_test=no_user_checkin` is read by
+  watchdogd from the boot arguments. They were already used by the SWEET
+  profile; their effect on this FP6 boot is not yet device-verified. This does
+  not establish that a physical SoC watchdog has been disabled.
+- Image `shim/out/fp6-wdt-fb-39472658322/fp6-shim-ufs-root-wdt-fb.img`, SHA256
+  `f2ca0c938d9dc86a9a4dcc01d28e48700e2fcaf71481cf55186d37902be04b5a`.
+  Header-v2 package validation passed, including embedded kernel shim and
+  stock DTB checks. It has not been booted; the current phone boot was left
+  untouched. USB log delivery remains unverified; the host capture was empty.
+
 ## FP6 Tegu-style iOS 16 root image (2026-10-21)
 
 - Rebuilt the iOS 20H392 root from the locally extracted OS, SystemOS, and

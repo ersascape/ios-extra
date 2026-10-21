@@ -1,0 +1,141 @@
+--- a/bsd/dev/sweet_usb.c
++++ b/bsd/dev/sweet_usb.c
+@@ -33,6 +33,8 @@
+ #include <net/kpi_interface.h>
+ #include <net/kpi_protocol.h>
+ #include <netinet/in.h>
++#include <netinet/ip.h>
++#include <netinet/udp.h>
+ 
+ extern vm_offset_t ml_io_map(vm_offset_t, vm_size_t);
+ void sweet_usb_probe(void);
+@@ -592,7 +594,7 @@
+ 		lck_mtx_unlock(ud.lock);
+ 		mbuf_freem(m);
+ 		ifnet_stat_increment_out(ifp, 0, 0, 1);
+-		return 0;
++		return ENOBUFS;
+ 	}
+ 	ifnet_stat_increment_out(ifp, 1, mbuf_pkthdr_len(m), 0);
+ 	ud.txq[(ud.txq_head + ud.txq_count) % UD_TXQ] = m;
+@@ -812,24 +814,19 @@
+ ud_log_thread(void *arg __unused, wait_result_t wr __unused)
+ {
+ 	static char chunk[1400];
+-	socket_t so = NULL;
+-	struct sockaddr_in to;
+-	uint32_t socket_errors = 0, send_errors = 0;
++	static uint8_t frame[ETHER_HDR_LEN + sizeof(struct ip) + sizeof(struct udphdr) + sizeof(chunk)];
++	static uint16_t ip_id;
++	uint32_t send_errors = 0;
+ 	uint64_t pos = sweet_log_position();
+ #if defined(ARM64_BOARD_CONFIG_SWEET)
+ 	uint32_t gpu_report_ticks = 0;
+ #endif
+ 
+ 	pos = pos > 65536 ? pos - 65536 : 0;
+-	bzero(&to, sizeof(to));
+-	to.sin_len = sizeof(to);
+-	to.sin_family = AF_INET;
+-	to.sin_port = htons(5140);
+-	to.sin_addr.s_addr = htonl(0xc0a80701);         /* 192.168.7.1 */
+ 	printf("SWEET USB LOG: sender thread started at ring offset %llu\n", pos);
+ 	for (;;) {
+ 		ud_sleep_ms(100);
+-		if (!ud.configured) {
++		if (!ud.configured || ud.data_alt != 1) {
+ 			continue;
+ 		}
+ #if defined(ARM64_BOARD_CONFIG_SWEET)
+@@ -842,17 +839,6 @@
+ 			}
+ 		}
+ #endif
+-		if (so == NULL) {
+-			errno_t err = sock_socket(PF_INET, SOCK_DGRAM, IPPROTO_UDP, NULL, NULL, &so);
+-			if (err != 0) {
+-				so = NULL;
+-				if ((++socket_errors % 50) == 1) {
+-					printf("SWEET USB LOG: UDP socket creation failed, err %d\n", err);
+-				}
+-				continue;
+-			}
+-			printf("SWEET USB LOG: UDP socket ready for 192.168.7.1:5140\n");
+-		}
+ 		uint32_t n;
+ 		while (1) {
+ 			uint64_t next_pos = pos;
+@@ -860,19 +846,62 @@
+ 			if (n == 0) {
+ 				break;
+ 			}
+-			struct iovec iov = { .iov_base = chunk, .iov_len = n };
+-			struct msghdr msg = {
+-				.msg_name = &to, .msg_namelen = sizeof(to),
+-				.msg_iov = &iov, .msg_iovlen = 1,
+-			};
+-			size_t sent = 0;
+-			errno_t err = sock_send(so, &msg, 0, &sent);
+-			if (err != 0 || sent != n) {
++			const uint32_t frame_len = ETHER_HDR_LEN + sizeof(struct ip) + sizeof(struct udphdr) + n;
++			struct ether_header *eh = (struct ether_header *)frame;
++			static const uint8_t host_mac[ETHER_ADDR_LEN] = { 0x02, 0x00, 0x5e, 0x77, 0xee, 0x01 };
++			memcpy(eh->ether_dhost, host_mac, ETHER_ADDR_LEN);
++			memcpy(eh->ether_shost, ud_phone_mac, ETHER_ADDR_LEN);
++			eh->ether_type = htons(ETHERTYPE_IP);
++
++			struct ip ip_header;
++			bzero(&ip_header, sizeof(ip_header));
++			ip_header.ip_v = IPVERSION;
++			ip_header.ip_hl = sizeof(ip_header) / 4;
++			ip_header.ip_len = htons(sizeof(ip_header) + sizeof(struct udphdr) + n);
++			ip_header.ip_id = htons(++ip_id);
++			ip_header.ip_ttl = 64;
++			ip_header.ip_p = IPPROTO_UDP;
++			ip_header.ip_src.s_addr = htonl(0xc0a80702);
++			ip_header.ip_dst.s_addr = htonl(0xc0a80701);
++			struct udphdr udp_header = {};
++			udp_header.uh_sport = htons(5140);
++			udp_header.uh_dport = htons(5140);
++			udp_header.uh_ulen = htons(sizeof(udp_header) + n);
++			udp_header.uh_sum = 0; /* valid for IPv4; avoid a pseudo-header checksum */
++			memcpy(frame + ETHER_HDR_LEN, &ip_header, sizeof(ip_header));
++			memcpy(frame + ETHER_HDR_LEN + sizeof(ip_header), &udp_header, sizeof(udp_header));
++			memcpy(frame + ETHER_HDR_LEN + sizeof(ip_header) + sizeof(udp_header), chunk, n);
++			uint32_t sum = 0;
++			const uint8_t *ip_bytes = (const uint8_t *)&ip_header;
++			for (uint32_t i = 0; i < sizeof(ip_header); i += 2) {
++				sum += ((uint32_t)ip_bytes[i] << 8) | ip_bytes[i + 1];
++			}
++			while (sum >> 16) {
++				sum = (sum & 0xffff) + (sum >> 16);
++			}
++			ip_header.ip_sum = htons((uint16_t)~sum);
++			memcpy(frame + ETHER_HDR_LEN, &ip_header, sizeof(ip_header));
++			mbuf_t packet = NULL;
++			errno_t err = mbuf_allocpacket(MBUF_DONTWAIT, frame_len, NULL, &packet);
++			if (err == 0) {
++				err = mbuf_copyback(packet, 0, frame_len, frame, MBUF_DONTWAIT);
++			}
++			if (err == 0) {
++				/* Raw output skips routing, ARP and Ethernet framing. The packet
++				 * already contains Ethernet, IPv4 and UDP headers for the fixed
++				 * point-to-point ECM peer. It always consumes packet. */
++				err = ifnet_output_raw(ud.ifp, 0, packet);
++				packet = NULL;
++			}
++			if (packet != NULL) {
++				mbuf_freem(packet);
++			}
++			if (err != 0) {
+ 				if ((++send_errors % 50) == 1) {
+-					printf("SWEET USB LOG: UDP send failed, err %d sent %lu/%u bytes\n",
+-					    err, (unsigned long)sent, n);
++					printf("SWEET USB LOG: raw UDP frame output failed, err %d (%u bytes)\n",
++					    err, frame_len);
+ 				}
+-				break;          /* retain pos and retry after route/ARP recovers */
++				break;          /* retain pos and retry after the interface recovers */
+ 			}
+ 			pos = next_pos;
+ 			send_errors = 0;
