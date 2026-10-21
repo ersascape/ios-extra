@@ -31,6 +31,19 @@
   Header-v2 validation passed; not yet booted. It tests the ADT identity
   without the 0059 `hw.machine`/`hw.model` change or the other kernel fixes.
   A MobileGestalt cache written under the old FP6 identity may need clearing.
+- CI run `39550549760` (ersascape/ios-extra, head `b8ad3fe`) passed: build and
+  fp6-boot jobs green. Kernel SHA256SUMS verified; the build tree carries the
+  FP6 guards in kpi_vfs.c, kern_mib.c, exception.c, kern_exec.c and
+  vfs_subr.c, and the kernel contains the exec/CRASH/dirty-root strings.
+  Packaged with the D22AP ADT (`dee5539e...`) and stock DTB:
+  `/tmp/fp6-fixes-39550549760/img/fp6-shim-ufs-root-fixes.img`, SHA256
+  `0129b2855762bf0b0f12c051fdc17ab7c735566880f85a11ec221578033e493f`,
+  kernel `b894d3fc...`. Header-v2 validation passed; not yet booted.
+- The never-booted Tegu root (`fp6-ios-root-tegu.simg` `a1c6f7da...`, raw
+  `574cbad6...`) re-verified against the hashes above; it has no MobileGestalt
+  cache and has the migration marker. Tegu's history shows a cache written
+  under a wrong identity breaks SpringBoard until a clean root is used, so
+  the clean root should first boot with the D22AP ADT. Not flashed.
 - Not changed, from review: 0108 with the macOS Edge scheduler leaves P cores
   4–7 mostly idle (E→P migration/steal disallowed; throughput only); 0100
   probe images ignore `ufsrw=1`; 0105 SMMU geometry decode and power-query
