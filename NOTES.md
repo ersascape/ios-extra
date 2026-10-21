@@ -1,5 +1,21 @@
 # ios-extra — current state
 
+## FP6 SpringBoard/PosterBoard crash after Bold Text: CoreImage GL (2026-10-21)
+
+- User enabled Settings > Accessibility > Bold Text; SpringBoard and
+  PosterBoard then crash: `CRASH SpringBoard sig 11 code 0x100000001 sub 0x0
+  slide 0x35730000`, `pc 0x0 lr 0x1ca26858c` (unslid 0x194b3858c).
+- Symbolicated with ipsw 3.1.739 against the 20H392 shared cache extracted
+  from the Tegu root (local, git-ignored: `research/dsc-20H392/`,
+  `research/tools-ipsw/ipsw`): CoreImage `CI::GLContext::init()` +204. Its
+  `GetMacroContext` -> `[EAGLContext getMacroContextPrivate]` returns NULL
+  (no GLES renderer: no GPU driver), the 0x2c8-byte GL dispatch struct stays
+  zero, CoreImage logs "Unable to get macro state for the GLContext" and
+  then calls slot +0xe8 with 0xb71 (GL_DEPTH_TEST) -> blr to NULL. No Bold
+  Text code in that function; the respring path presumably creates a GL
+  CIContext (inference). Fix depends on a GPU renderer, or forcing CoreImage
+  to its CPU renderer / making GL context creation fail cleanly (not tried).
+
 ## FP6 GMU first boot patch (2026-10-21)
 
 - Patch 0140 (opt-in `fp6gmuboot=1`, after a successful `fp6gmuload=1`
