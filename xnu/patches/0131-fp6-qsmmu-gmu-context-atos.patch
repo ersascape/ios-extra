@@ -1,10 +1,11 @@
 diff --git a/bsd/dev/sweet_gpu.c b/bsd/dev/sweet_gpu.c
 --- a/bsd/dev/sweet_gpu.c
 +++ b/bsd/dev/sweet_gpu.c
-@@ -1981,6 +1981,9 @@
+@@ -1981,6 +1981,10 @@
  #include <sys/param.h>
  #include <sys/systm.h>
  #include <pexpert/pexpert.h>
++#include <kern/clock.h>
 +#include <arm/caches_internal.h>
 +#include <vm/pmap.h>
 +#include <vm/vm_kern.h>

@@ -1594,7 +1594,7 @@ error::ResourceWarning -m unittest discover -s tests` (also with
 - Extended the FP6 MMIO harness to model FSR W1C behavior and require the
   expected `TCR2`, `CBAR`, and FSR-clear writes. The complete 11-test host suite
   passes; the GPU harness also passes ASan/UBSan, and `git diff --check` is
-  clean. This is source/model validation only: the corrected source has not
-  yet passed XNU CI or an arm64 XNU compile, and no SMMU write has been tested
-  on the phone. Do not use the earlier 0131 build for a translated-context
-  phone test.
+  clean. CI run 39611115127 failed on undeclared `delay()` calls. Added the
+  missing XNU clock header; the next CI build is required to validate it. No
+  SMMU write has been tested on the phone. Do not use the earlier 0131 build
+  for a translated-context phone test.
