@@ -1,5 +1,17 @@
 # ios-extra — current state
 
+## Stock-clock kernel packaged (2026-10-21)
+
+- CI39636402248 passed on0b41ea23c1d910865a2412c88fcccedb3dfb388e.
+  Downloaded kernel matched artifact SHA256SUMS. Packaged visible-console
+  UFS-root image `/tmp/fp6-smmu-0b41ea2/image/fp6-shim-smmu-clocks.img`,
+  SHA256 `d4c7a60686b9e71c796900d94ca43531ba4d5e0657b937928b3ddd702341d0ff`.
+  Header/payload/DTB packaging checks passed. Includes0132 stock clock votes,
+  not the subsequent0133 domain helper or draft0134/0135. No phone result yet.
+- Loader callback failure cases now check readiness, allocation, external copy,
+  TCM write and publication failures stop the upload at the proper boundary.
+  Eight firmware unittest cases passed after this extension.
+
 ## Persistent Gen8 GMU mapping layer (2026-10-21)
 
 - Patch0133 adds boot-lifetime sparse 4KiB tables and external backing
