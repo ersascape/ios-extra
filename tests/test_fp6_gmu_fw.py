@@ -23,6 +23,20 @@ def record(address, size, kind, value, payload=b""):
 
 
 class FP6GMUFirmwareTests(unittest.TestCase):
+    def test_runtime_loader_on_pinned_firmware(self):
+        source = Path('/tmp/fp6-firmware/gen80300_gmu.bin')
+        compiler = shutil.which('cc')
+        if not source.exists() or not compiler:
+            self.skipTest('local firmware or C compiler unavailable')
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            fw.emit_header(fw.verify_pinned_blob(source.read_bytes()), root / 'fp6_gmu_fw.h')
+            binary = root / 'loader'
+            subprocess.run([compiler, '-std=c11', '-Wall', '-Wextra', '-Werror',
+                '-I', str(root), '-I', str(ROOT / 'xnu/helpers'),
+                str(ROOT / 'tests/fp6_gmu_loader_harness.c'), '-o', str(binary)], check=True)
+            subprocess.run([str(binary)], check=True)
+
     def test_local_pinned_firmware_and_generated_descriptors(self):
         path = Path("/tmp/fp6-firmware/gen80300_gmu.bin")
         if not path.exists():
@@ -103,6 +117,7 @@ class FP6GMUFirmwareTests(unittest.TestCase):
             (patch_dir).mkdir(parents=True)
             (source_root / "bsd" / "dev").mkdir(parents=True)
             shutil.copy2(ROOT / "tools" / "fp6-gmu-fw.py", patch_dir)
+            shutil.copy2(ROOT / "xnu" / "helpers" / "fp6_gmu_loader.h", patch_dir)
             stage = ROOT / "xnu" / "patches" / "0129-stage-fp6-gen80300-gmu.sh"
             staged_script = patch_dir / stage.name
             shutil.copy2(stage, staged_script)
@@ -118,6 +133,7 @@ class FP6GMUFirmwareTests(unittest.TestCase):
             header = (source_root / "bsd" / "dev" / "fp6_gmu_fw.h").read_text()
             self.assertIn("FP6_GMU_FW_PREALLOCATION_COUNT 11u", header)
             self.assertIn(fw.SOURCE_SHA256, header)
+            self.assertTrue((source_root / "bsd/dev/fp6_gmu_loader.h").is_file())
 
 
 if __name__ == "__main__":

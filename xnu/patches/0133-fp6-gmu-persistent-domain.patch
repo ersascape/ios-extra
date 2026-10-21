@@ -1,0 +1,134 @@
+diff --git a/bsd/dev/fp6_gmu_domain.h b/bsd/dev/fp6_gmu_domain.h
+new file mode 100644
+--- /dev/null
++++ b/bsd/dev/fp6_gmu_domain.h
+@@ -0,0 +1,129 @@
++/* Persistent 4 KiB GMU stage-1 domain, 32-bit IOVA, 48-bit PA.
++ * Tables and backing are boot-lifetime reservations. Caller MUST keep CM3
++ * reset asserted and the context disabled while building. activate only after
++ * publish + TLB invalidation + SID-specific translation checks by the owner.
++ * No allocation, callback or failure here releases reset or frees memory.
++ */
++#ifndef FP6_GMU_DOMAIN_H
++#define FP6_GMU_DOMAIN_H
++#define FP6_GMU_DOMAIN_RANGES 32
++struct fp6_gmu_domain_page { uint8_t *va; uint64_t pa; };
++struct fp6_gmu_domain_ops {
++ int (*alloc)(void *, uint32_t, struct fp6_gmu_domain_page *);
++ int (*publish)(void *, const void *, uint32_t);
++};
++struct fp6_gmu_domain_range {
++ uint32_t address, size, mapped_size;
++ int cached, complete;
++ struct fp6_gmu_domain_page backing;
++};
++struct fp6_gmu_domain {
++ const struct fp6_gmu_domain_ops *ops;
++ void *ctx;
++ struct fp6_gmu_domain_page root;
++ /* A 32-bit IOVA uses four L1 entries; each L2 has 512 L3 tables. */
++ struct fp6_gmu_domain_page l2[4], l3[4][512];
++ struct fp6_gmu_domain_range ranges[FP6_GMU_DOMAIN_RANGES];
++ unsigned count;
++ int failed, frozen;
++};
++static int fp6_gmu_domain_alloc(struct fp6_gmu_domain *d, uint32_t size,
++ struct fp6_gmu_domain_page *p)
++{
++ if (d->ops->alloc(d->ctx, size, p) || !p->va ||
++     ((uint64_t)(uintptr_t)p->va & 4095) || (p->pa & 4095) ||
++     p->pa >= (1ULL << 48) || size > (1ULL << 48) - p->pa) {
++  d->failed = 1; return -1;
++ }
++ for (uint32_t i = 0; i < size; i++) p->va[i] = 0;
++ return 0;
++}
++static int fp6_gmu_domain_init(struct fp6_gmu_domain *d,
++ const struct fp6_gmu_domain_ops *ops, void *ctx)
++{
++ if (!d || !ops || !ops->alloc || !ops->publish) return -1;
++ /* Caller provides fresh zeroed state; refusing reuse prevents losing ownership. */
++ if (d->root.va || d->count || d->failed || d->frozen) return -1;
++ d->ops = ops; d->ctx = ctx;
++ return fp6_gmu_domain_alloc(d, 4096, &d->root);
++}
++static int fp6_gmu_domain_reserve(void *ctx, uint32_t address,
++ uint32_t size, int cached)
++{
++ struct fp6_gmu_domain *d = ctx;
++ uint64_t mapped_size = ((uint64_t)size + 4095) & ~4095ULL;
++ uint64_t end = (uint64_t)address + mapped_size;
++ if (!d || !d->root.va || d->failed || d->frozen || !size ||
++     (address & 4095) || mapped_size > 0xffffffffULL || end > (1ULL << 32) ||
++     (cached != 0 && cached != 1)) return -1;
++ for (unsigned i = 0; i < d->count; i++) {
++  struct fp6_gmu_domain_range *r = &d->ranges[i];
++  if (address == r->address && size == r->size && cached == r->cached)
++   return r->complete ? 0 : -1;
++  if ((uint64_t)address < (uint64_t)r->address + r->mapped_size && r->address < end)
++   return -1;
++ }
++ if (d->count == FP6_GMU_DOMAIN_RANGES) return -1;
++ struct fp6_gmu_domain_range *r = &d->ranges[d->count++];
++ r->address = address; r->size = size; r->mapped_size = (uint32_t)mapped_size; r->cached = cached;
++ if (fp6_gmu_domain_alloc(d, r->mapped_size, &r->backing)) return -1;
++ for (uint64_t a = address; a < end; a += 4096) {
++  unsigned i = (unsigned)(a >> 30), j = (unsigned)((a >> 21) & 511);
++  unsigned k = (unsigned)((a >> 12) & 511);
++  if (!d->l2[i].va) {
++   if (fp6_gmu_domain_alloc(d, 4096, &d->l2[i])) return -1;
++   ((uint64_t *)d->root.va)[i] = d->l2[i].pa | 3;
++  }
++  if (!d->l3[i][j].va) {
++   if (fp6_gmu_domain_alloc(d, 4096, &d->l3[i][j])) return -1;
++   ((uint64_t *)d->l2[i].va)[j] = d->l3[i][j].pa | 3;
++  }
++  uint64_t *pte = &((uint64_t *)d->l3[i][j].va)[k];
++  if (*pte) { d->failed = 1; return -1; }
++  /* AF, outer-shareable, privileged RW. MAIR idx0=Normal NC.
++   * GMU_CACHE describes the GMU VMA, not IOMMU_CACHE: KGSL reserve
++   * uses IOMMU_READ|WRITE|PRIV for both cached and uncached VMAs. */
++  *pte = (r->backing.pa + a - address) | 3 | (1ULL << 10) |
++      (2ULL << 8);
++ }
++ r->complete = 1;
++ return 0;
++}
++static int fp6_gmu_domain_copy(void *ctx, uint32_t address,
++ const uint8_t *data, uint32_t size)
++{
++ struct fp6_gmu_domain *d = ctx;
++ if (!d || d->failed || d->frozen || !data || !size) return -1;
++ for (unsigned i = 0; i < d->count; i++) {
++  struct fp6_gmu_domain_range *r = &d->ranges[i];
++  if (r->complete && address >= r->address &&
++      (uint64_t)address + size <= (uint64_t)r->address + r->size) {
++   for (uint32_t n = 0; n < size; n++)
++    r->backing.va[address - r->address + n] = data[n];
++   return 0;
++  }
++ }
++ return -1;
++}
++static int fp6_gmu_domain_publish(void *ctx)
++{
++ struct fp6_gmu_domain *d = ctx;
++ if (!d || !d->root.va || d->failed || d->frozen) return -1;
++ for (unsigned n = 0; n < d->count; n++) {
++  struct fp6_gmu_domain_range *r = &d->ranges[n];
++  if (!r->complete || d->ops->publish(d->ctx, r->backing.va, r->mapped_size))
++   goto fail;
++ }
++ for (unsigned i = 0; i < 4; i++) {
++  for (unsigned j = 0; j < 512; j++)
++   if (d->l3[i][j].va && d->ops->publish(d->ctx, d->l3[i][j].va, 4096)) goto fail;
++  if (d->l2[i].va && d->ops->publish(d->ctx, d->l2[i].va, 4096)) goto fail;
++ }
++ if (d->ops->publish(d->ctx, d->root.va, 4096)) goto fail;
++ d->frozen = 1;
++ return 0;
++fail:
++ d->failed = 1;
++ return -1;
++}
++#endif

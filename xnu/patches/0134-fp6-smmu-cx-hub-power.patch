@@ -1,0 +1,184 @@
+diff --git a/bsd/dev/sweet_gpu.c b/bsd/dev/sweet_gpu.c
+--- a/bsd/dev/sweet_gpu.c
++++ b/bsd/dev/sweet_gpu.c
+@@ -2354,6 +2354,167 @@
+ 	unsigned acquired;
+ };
+ 
++/* FP6 stock DT: DRV2/ACTIVE channel0; cmd-db is reserved AOP memory.
++ * Independent of the older SWEET DRV2 register layout. */
++static int
++fp6_arc_level(vm_offset_t db, unsigned mx, uint32_t *address, uint32_t *level)
++{
++	if (fp6_smmu_read32(db, 4) != 0x0c0330dbu) return 0;
++	for (unsigned h = 8; h < 136; h += 16) {
++		uint32_t a = fp6_smmu_read32(db, h);
++		if ((a & 0xffffu) != 3u) continue;
++		uint32_t b = fp6_smmu_read32(db, h + 4);
++		unsigned entry = 144u + (a >> 16), aux = 144u + (b & 0xffffu), count = b >> 16;
++		if (entry > 0x20000u || count > (0x20000u - entry) / 24u || aux >= 0x20000u) return 0;
++		for (unsigned n = 0; n < count; n++) {
++			unsigned e = entry + 24u * n;
++			/* "cx.lvl" followed by two NULs, little endian. */
++			if (fp6_smmu_read32(db, e) != (mx ? 0x6c2e786du : 0x6c2e7863u) || fp6_smmu_read32(db, e + 4) != 0x00006c76u) continue;
++			uint32_t addr = fp6_smmu_read32(db, e + 16), tail = fp6_smmu_read32(db, e + 20);
++			unsigned len = tail & 0xffffu, off = aux + (tail >> 16);
++			if ((addr >> 16) != 3u || (addr & 15u) || !len || len > 32 || (len & 1u) ||
++			    off >= 0x20000u || len > 0x20000u - off) return 0;
++			unsigned previous = 0, chosen = 0;
++			for (unsigned i = 0; i < len / 2; i++) {
++				unsigned at = off + 2u * i;
++				uint32_t raw = fp6_smmu_read32(db, at & ~3u);
++				unsigned value = (raw >> ((at & 3u) * 8u)) & 0xffffu;
++				if ((at & 3u) == 3u)
++					value = ((raw >> 24) | (fp6_smmu_read32(db, (at & ~3u) + 4u) << 8)) & 0xffffu;
++				if (!i && value) return 0;
++				if (i && !value) break;
++				if (i && value <= previous) return 0;
++				if (!chosen && value >= 0x180u) chosen = i;
++				previous = value;
++			}
++			if (!chosen) return 0;
++			*address = addr; *level = chosen;
++			return 1;
++		}
++	}
++	return 0;
++}
++
++static int
++fp6_power_poll(vm_offset_t base, uint32_t off, uint32_t mask, uint32_t want, unsigned count)
++{
++	for (unsigned i = 0; i < count; i++) {
++		uint32_t got = fp6_smmu_read32(base, off);
++		if (got != 0xffffffffu && (got & mask) == want) return 1;
++		delay(1);
++	}
++	printf("QCOM SMMU: power wait failed +0x%x mask=0x%08x want=0x%08x got=0x%08x\n",
++	    off, mask, want, fp6_smmu_read32(base, off));
++	return 0;
++}
++
++static int
++fp6_power_write(vm_offset_t base, uint32_t off, uint32_t value)
++{
++	fp6_smmu_write32(base, off, value);
++	return fp6_smmu_read32(base, off) == value;
++}
++
++/* A successful ACTIVE command leaves an acknowledged CX floor for this boot.
++ * No release-to-zero is sent: XNU does not yet own all inherited rail users.
++ * A timeout quarantines this slot; never recycle uncertain commands. */
++static int
++fp6_floor_vote(unsigned mx)
++{
++	static int attempted[2], complete[2];
++	if (mx > 1) return 0;
++	if (attempted[mx]) return complete[mx];
++	vm_offset_t drv = ml_io_map(0x17a20000u, 0x10000u);
++	vm_offset_t db = ml_io_map(0x81c60000u, 0x20000u);
++	if (!drv || !db) return 0;
++	uint32_t id = fp6_smmu_read32(drv, 0), config = fp6_smmu_read32(drv, 0x0cu);
++	uint32_t address, level;
++	unsigned major = (id >> 16) & 0xffu, ncpt = config >> 27;
++	/* Exact DT has eight channel0 TCSes (3 ACTIVE,2 SLEEP,2 WAKE,1 FAST).
++	 * DRV2's NUM_TCS field is bits[17:12]. No hardware-channel property. */
++	if (id == 0xffffffffu || major != 3 || ((config >> 12) & 0x3fu) < 8 ||
++	    !ncpt || ncpt > 16 || !fp6_arc_level(db, mx, &address, &level)) {
++		printf("QCOM SMMU: FP6 RSC/cmd-db validation failed id=0x%08x cfg=0x%08x\n", id, config);
++		return 0;
++	}
++	vm_offset_t tcs = drv + 0xd00u;
++	int chosen = -1;
++	for (unsigned i = 0; i < 3; i++) {
++		uint32_t b = 672u * i;
++		uint32_t control = fp6_smmu_read32(tcs, b + 0x24u);
++		uint32_t status = fp6_smmu_read32(tcs, b + 0x28u);
++		uint32_t enabled = fp6_smmu_read32(tcs, b + 0x2cu);
++		/* Do not replace an inherited transaction or its resource vote. */
++		if (control == 0 && status == 1 && enabled == 0 &&
++		    !(fp6_smmu_read32(tcs, 4) & (1u << i))) { chosen = (int)i; break; }
++	}
++	if (chosen < 0) {
++		printf("QCOM SMMU: no idle FP6 ACTIVE TCS; power request refused\n");
++		return 0;
++	}
++	attempted[mx] = 1;
++	unsigned slot = (unsigned)chosen, b = 672u * slot;
++	uint32_t irq = fp6_smmu_read32(tcs, 0), bit = 1u << slot;
++	/* Poll completion; suppress only this slot's interrupt until cleared. */
++	if (!fp6_power_write(tcs, 0, irq & ~bit) ||
++	    !fp6_power_write(tcs, b + 0x34u, 0x00010108u) ||
++	    !fp6_power_write(tcs, b + 0x38u, address) ||
++	    !fp6_power_write(tcs, b + 0x3cu, level) ||
++	    !fp6_power_write(tcs, b + 0x20u, 1u) ||
++	    !fp6_power_write(tcs, b + 0x2cu, 1u) ||
++	    !fp6_power_write(tcs, b + 0x24u, 1u << 16) ||
++	    !fp6_power_write(tcs, b + 0x24u, (1u << 16) | (1u << 24))) goto quarantine;
++	if (!fp6_power_poll(tcs, 4, bit, bit, 100000u) ||
++	    !fp6_power_poll(tcs, b + 0x40u, 0x10100u, 0x10100u, 1000u) ||
++	    !fp6_power_poll(tcs, b + 0x28u, 1u, 1u, 1000u)) goto quarantine;
++	if (!fp6_power_write(tcs, b + 0x24u, 0) ||
++	    !fp6_power_write(tcs, b + 0x2cu, 0)) goto quarantine;
++	fp6_smmu_write32(tcs, 8u, bit); /* IRQ_CLEAR is write-only/W1C. */
++	if (!fp6_power_poll(tcs, 4, bit, 0, 1000u) || !fp6_power_write(tcs, 0, irq)) goto quarantine;
++	complete[mx] = 1;
++	printf("QCOM SMMU: FP6 %s ARC floor 0x180 acknowledged level=%u TCS=%u; vote retained\n", mx ? "MX" : "CX", level, slot);
++	return 1;
++quarantine:
++	printf("QCOM SMMU: FP6 power TCS=%u quarantined control=0x%08x status=0x%08x irq=0x%08x; slot IRQ remains masked\n",
++	    slot, fp6_smmu_read32(tcs, b + 0x24u), fp6_smmu_read32(tcs, b + 0x28u), fp6_smmu_read32(tcs, 4));
++	return 0;
++}
++
++static int
++fp6_smmu_power_prepare(struct fp6_smmu_clocks *clocks)
++{
++	uint32_t cx = fp6_smmu_read32(clocks->gpucc, 0x9080u);
++	uint32_t hub = fp6_smmu_read32(clocks->gpucc, 0x93ecu);
++	if (cx == 0xffffffffu || hub == 0xffffffffu || (cx & 2u)) return 0;
++	/* The cfg AHB gate is an always-enabled clock in gcc-volcano probe. */
++	uint32_t ahb = fp6_smmu_read32(clocks->gcc, 4u);
++	if (ahb == 0xffffffffu || !fp6_power_write(clocks->gcc, 4u, ahb | 1u)) return 0;
++	if (!(cx & (1u << 31)) || (cx & 1u)) {
++		if (!fp6_floor_vote(0)) return 0;
++		/* gdsc-regulator.c: SW collapse clear, 8 XO cycles, status poll,
++		 * then two 1us delays for clock/memory powerup. Preserve all other bits. */
++		fp6_smmu_write32(clocks->gpucc, 0x9080u, cx & ~1u);
++		delay(1);
++		if (!fp6_power_poll(clocks->gpucc, 0x9080u, (1u << 31) | 1u, 1u << 31, 1500u)) return 0;
++		delay(2);
++	}
++	if (hub & (1u << 31)) {
++		/* SMMU control-plane access can use the same CXO safe config that
++		 * clk_rcg2_enable supports. GMU boot must later select the stock
++		 * 200MHz hub rate; this does not claim that performance clock. */
++		if (!fp6_floor_vote(0)) return 0;
++		uint32_t cfg = fp6_smmu_read32(clocks->gpucc, 0x93f0u);
++		if (cfg == 0xffffffffu) return 0;
++		fp6_smmu_write32(clocks->gpucc, 0x93ecu, hub | 2u);
++		uint32_t mask = 0x1fu | (7u << 8) | (3u << 12) | (1u << 20);
++		if (!fp6_power_write(clocks->gpucc, 0x93f0u, (cfg & ~mask) | 1u | (1u << 20))) return 0;
++		fp6_smmu_write32(clocks->gpucc, 0x93ecu, (fp6_smmu_read32(clocks->gpucc, 0x93ecu) | 3u));
++		if (!fp6_power_poll(clocks->gpucc, 0x93ecu, (1u << 31) | 1u, 0, 1000u)) return 0;
++		printf("QCOM SMMU: hub CXO safe parent enabled; retained for this boot\n");
++	}
++	return 1;
++}
++
+ static vm_offset_t
+ fp6_smmu_clock_base(struct fp6_smmu_clocks *clocks, unsigned i)
+ {
+@@ -2394,6 +2555,12 @@
+ 	clocks->gcc = ml_io_map(0x00171000u, 0x1000u);
+ 	if (!clocks->gpucc || !clocks->gcc) {
+ 		printf("QCOM SMMU: clock windows unavailable; no context writes\n");
++		return 0;
++	}
++	int power = 0;
++	(void)PE_parse_boot_argn("fp6smmupower", &power, sizeof(power));
++	if (power == 1 && !fp6_smmu_power_prepare(clocks)) {
++		printf("QCOM SMMU: FP6 CX/hub preparation failed; no context writes\n");
+ 		return 0;
+ 	}
+ 	uint32_t cx = fp6_smmu_read32(clocks->gpucc, 0x9080u);

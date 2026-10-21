@@ -1,5 +1,90 @@
 # ios-extra — current state
 
+## FP6 GPU power review and fixes (2026-10-21)
+
+- Recovered an interrupted session's unpushed work from `/tmp/fp6-smmu-work`
+  onto branch `codex-gpu-rescue`: commits 3896b67/e63291f/ab3faae/22d527c and
+  uncommitted 0134 (opt-in `fp6smmupower=1` CX ARC floor + CX GDSC + hub CXO),
+  0135 (`fp6gmuload=1` GMU upload with CM3 held in reset), 0136 (GMU clock
+  preparation), `docs/FP6_SMMU_POWER.md` and host tests. CI `39641511245`
+  built it.
+- Phone evidence (console photo, earlier kernel): `CX_GDSCR=0x0022f001`
+  (SW_COLLAPSE set), GPU SMMU groups 10-23 invalid with S2CR fault type,
+  `context banks with nonzero state=0/22`. The SMMU (`kgsl-smmu@3da0000`,
+  `vdd-supply = gpu_cc_cx_gdsc`) sits in the collapsed CX domain, which is
+  the leading explanation for CB2 TCR2 reading back 0.
+- Source review against Fairphone `gdsc-regulator.c`, `rpmh-rsc.c`,
+  `arm-smmu.c` and KGSL gen8 found, and patch 0137 fixes: CX GDSC power
+  status is GPUCC+0x9094 (DT `hw-ctrl-addr`), not GDSCR bit 31; GDSC enable
+  now sets clk-dis-wait 8 and RETAIN_FF like Linux; RSC votes no longer mask
+  the slot IRQ and poll gated IRQ status - they use Linux's two-step
+  trigger/mode clear and poll CMD_STATUS ISSUED|COMPL and TCS idle; the ARC
+  floor is LOW_SVS (0x40) instead of the TURBO boot-proxy 0x180; GMU clock
+  preparation no longer reads GMU registers before all six KGSL GMU clocks
+  run (adds hub_cx_int 0x90e8) and refuses if the GMU core clock is already
+  on; FP6 GPU MMIO is single LDR/STR inline asm with register sources and
+  TLBIALL/TLBSYNC write QCOM_DUMMY_VAL (-1), per arm-smmu.c's hypervisor
+  note. The earlier 0131 rollback abort matches Gunyah refusing a stage-2
+  CBAR (TYPE=0) restore. Host model updated (status register, GDSC bits,
+  LOW_SVS index); 12/12 host tests pass; local arm64 compile passes; FP6 GPU
+  functions contain no WZR/XZR MMIO stores or write-back MMIO accesses.
+- Not yet fixed (latent): PAS/zap SMCs use FAST call IDs, leave x6
+  uninitialized and do not handle INTERRUPTED/WAITQ returns (Linux uses STD,
+  x6=0, retries); the zap carve-out stays mapped after load. FP6's GPU is
+  Adreno 810, Gen8.3 (`qcom,adreno-gpu-gen8-3-0`, gen80300 firmware, KGSL
+  hwsched path); the GMU is at 0x3d37000/0x68000 per the stock DT.
+
+## CX power state observed on phone (2026-10-21)
+
+- User supplied a console photo from the clock-prerequisite build. It shows
+  `CX_GDSCR=0x0022f801`, `HUB_CMD=0x00000000`, followed by the refusal
+  `CX domain is not enabled; needs RPMh/CX power before context access`. The
+  GDSCR SW_COLLAPSE bit is set and PWR_ON is clear, consistent with an off CX
+  domain. This run did not reach TCR2 programming, so it does not isolate why
+  the earlier TCR2 write read as zero. The photo does not independently name
+  the image, though its diagnostic text matches the 0b41ea2 clock build.
+- 0134 draft now adds a dedicated FP6 RSCv3 CX ARC floor vote and CX GDSC/hub
+  safe-XO setup. It needs source review, full harness and kernel build before
+  any phone test. GMU clocks remain a separate stage; avoid changing live GMU
+  rates until reset state has been read.
+
+## Stock-clock kernel packaged (2026-10-21)
+
+- CI39636402248 passed on0b41ea23c1d910865a2412c88fcccedb3dfb388e.
+  Downloaded kernel matched artifact SHA256SUMS. Packaged visible-console
+  UFS-root image `/tmp/fp6-smmu-0b41ea2/image/fp6-shim-smmu-clocks.img`,
+  SHA256 `d4c7a60686b9e71c796900d94ca43531ba4d5e0657b937928b3ddd702341d0ff`.
+  Header/payload/DTB packaging checks passed. Includes0132 stock clock votes,
+  not the subsequent0133 domain helper or draft0134/0135. No phone result yet.
+- Loader callback failure cases now check readiness, allocation, external copy,
+  TCM write and publication failures stop the upload at the proper boundary.
+  Eight firmware unittest cases passed after this extension.
+
+## Persistent Gen8 GMU mapping layer (2026-10-21)
+
+- Patch0133 adds boot-lifetime sparse 4KiB tables and external backing
+  reservation/copy/publication operations. It rounds firmware reservation sizes
+  to page coverage and refuses page overlap; uses Normal NC, privileged RW,
+  outer-shareable PTEs matching KGSL flags without IOMMU_CACHE. GMU cached VMA
+  metadata does not silently choose write-back SMMU attributes.
+- `python3 tests/test_fp6_gmu_domain.py` passes synthetic boundary/failure
+  cases and actual pinned firmware through upload callbacks, with payload byte
+  comparisons and PTE physical-address walks. The map freezes after publishing.
+  This remains a staged helper without a runtime owner; live allocation/cache
+  callbacks, context activation and GMU execution are not established.
+
+## Firmware loader host check (2026-10-21)
+
+- Eight `tests/test_fp6_gmu_fw.py` cases pass, including staging both headers
+  and compiling/running the upload layer against the SHA-pinned actual blob.
+  Callback harness checks six external reservations, one external data copy,
+  all TCM words and final publication. ASan/UBSan execution also passed with
+  leak detection disabled (LeakSanitizer is unsupported under this host tracer).
+  This proves callback sequencing on host, not real DMA or GMU execution.
+- Review caught an integration issue in draft0133: firmware preallocation
+  lengths are not all page aligned; the mapping layer must round safely.
+  Also verify cache attributes against KGSL flags rather than infer them from
+  GMU VMA names. Agent is correcting these before integration.
 ## FP6 SpringBoard bounding-path crash: missing /product artwork traits (2026-10-21)
 
 - Correction to the entry below: the user reports the stale MobileGestalt
