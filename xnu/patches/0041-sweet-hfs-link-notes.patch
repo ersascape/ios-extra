@@ -4,11 +4,11 @@
  }
  
  
-+#if defined(ARM64_BOARD_CONFIG_SWEET)
++#if defined(ARM64_BOARD_CONFIG_SWEET) || defined(ARM64_BOARD_CONFIG_FP6)
 +/*
-+ * SWEET: hard links made by Linux tools lack kHFSHasLinkChainBit and every
-+ * lookup repairs (in memory) and reports it again. Report the first few only
-+ * so repeated lookups do not flood the console during boot.
++ * SWEET/FP6: hard links made by Linux tools can lack kHFSHasLinkChainBit and
++ * every lookup repairs (in memory) and reports it again. Report the first
++ * few only so repeated lookups do not flood the console during boot.
 + */
 +static int
 +sweet_hfs_link_note(void)
