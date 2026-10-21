@@ -188,16 +188,16 @@ diff --git a/bsd/dev/sweet_gpu.c b/bsd/dev/sweet_gpu.c
 +	fp6_smmu_write32(base, (off), (val)); \
 +	if (fp6_smmu_read32(base, (off)) != (val)) goto rollback; \
 +} while (0)
-+	/* Linux arm-smmu: SEP=upstream, AS=AArch64, PASIZE=36 bits. */
++	/* Linux arm-smmu order: CBA2R, CBAR, TCR2/TCR, TTBR, MAIR, SCTLR. */
++	FP6_SMMU_WRITE_CHECK(cba2r_off, 1u);
++	/* S1, non-shareable walk config, weakest WB memory type (Linux CBAR defaults). */
++	FP6_SMMU_WRITE_CHECK(cbar_off, 0x0001f300u);
 +	FP6_SMMU_WRITE_CHECK(cb_off + FP6_SMMU_CB_TCR2, 0x00038011u);
 +	FP6_SMMU_WRITE_CHECK(cb_off + FP6_SMMU_CB_TCR, 32u | (2u << 12) | (1u << 23));
 +	FP6_SMMU_WRITE_CHECK(cb_off + FP6_SMMU_CB_TTBR0, (uint32_t)table_pa);
 +	FP6_SMMU_WRITE_CHECK(cb_off + FP6_SMMU_CB_TTBR0 + 4u, (uint32_t)(table_pa >> 32));
 +	FP6_SMMU_WRITE_CHECK(cb_off + FP6_SMMU_CB_MAIR0, 0x44u);
 +	FP6_SMMU_WRITE_CHECK(cb_off + FP6_SMMU_CB_MAIR1, 0u);
-+	FP6_SMMU_WRITE_CHECK(cba2r_off, 1u);
-+	/* S1, non-shareable walk config, weakest WB memory type (Linux CBAR defaults). */
-+	FP6_SMMU_WRITE_CHECK(cbar_off, 0x0001f300u);
 +	fp6_smmu_write32(base, cb_off + FP6_SMMU_CB_FSR, 0xffffffffu); /* W1C stale faults */
 +	if (fp6_smmu_read32(base, cb_off + FP6_SMMU_CB_FSR) != 0) goto rollback;
 +	fp6_smmu_write32(base, cb_off + FP6_SMMU_CB_TLBIALL, 0);

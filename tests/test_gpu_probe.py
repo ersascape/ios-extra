@@ -1567,8 +1567,8 @@ int main(void)
     puts("PASS: FP6 GMU SID5 4 KiB context maps by ATOS and disables its route");
 
     /* Failure on each first-write stage aborts and disables the stream route. */
-    const unsigned fp6_stage_writes[] = {0x20010,0x20030,0x20020,0x20024,
-        0x20038,0x2003c,0x1800,0x1000,0x20000,0xc00,0x800};
+    const unsigned fp6_stage_writes[] = {0x1800,0x1000,0x20010,0x20030,
+        0x20020,0x20024,0x20038,0x2003c,0x20000,0xc00,0x800};
     for (unsigned n = 0; n < sizeof(fp6_stage_writes)/sizeof(fp6_stage_writes[0]); n++) {
         memset(fp6_smmu, 0, sizeof(fp6_smmu));
         fp6_smmu[0x20/4] = (1u << 27) | 24u;

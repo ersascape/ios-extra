@@ -1,5 +1,24 @@
 # ios-extra — current state
 
+## FP6 SMMU live-test kernel data abort (2026-10-21)
+
+- User reported `kernel data abort` with PC `0xfffffe0007ae71c0`, LR
+  `0xfffffe0007ae6f64`. Against the kernel from CI run `39618365269`, PC resolves
+  inside `fp6_smmu_inventory`; instruction disassembly places it at the MMIO
+  store restoring the candidate context bank's old CBAR during rollback. The
+  image manifest for that run records `hardware_tested: false`; matching this
+  report to that image is not yet confirmed.
+- The rollback had already restored the old SMR, disabled the context bank,
+  and restored S2CR before reaching CBAR. FAR and ESR were requested to
+  distinguish an access fault from a hardware/external abort and establish the
+  exact register address. Do not treat this as a GMU firmware failure: CM3 was
+  never released.
+- Cross-checking Fairphone Linux `arm_smmu_write_context_bank()` found that
+  the probe programmed TCR/TTBR/MAIR before CBA2R/CBAR, unlike Linux's
+  CBA2R -> CBAR -> TCR2/TCR -> TTBR -> MAIR -> SCTLR order. Patch 0131 and the
+  stage-failure harness were reordered to match Linux. This source correction
+  is not yet built or phone-tested and does not, by itself, explain the abort.
+
 ## FP6 SMMU fault-route selection fix (2026-10-21)
 
 - The user's boot photo from `fp6smmu=2` shows all visible stream groups have
