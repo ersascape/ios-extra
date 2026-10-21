@@ -1,0 +1,36 @@
+--- a/iokit/Kernel/arm/hid/SweetHID.cpp
++++ b/iokit/Kernel/arm/hid/SweetHID.cpp
+@@ -489,6 +489,13 @@
+ 	}
+ 	fOffX = (fLogicalW - fPanelW) / 2;
+ 	fOffY = (fLogicalH - fPanelH) / 2;
++	if (fLogicalH < fPanelH) {
++		/* Same vertical placement as AppleCLCD (boot-arg sweetfb_top). */
++		int top = 0;
++		PE_parse_boot_argn("sweetfb_top", &top, sizeof(top));
++		int spare = fPanelH - fLogicalH;
++		fOffY = -(top < 0 ? 0 : (top > spare ? spare : top));
++	}
+ 	/* The digitizer covers the main display (backboardd maps it 1:1). */
+ 	setProperty("DisplayIntegrated", kOSBooleanTrue);
+ #if defined(ARM64_BOARD_CONFIG_FP6)
+--- a/iokit/Kernel/arm/SweetFramebuffer.cpp
++++ b/iokit/Kernel/arm/SweetFramebuffer.cpp
+@@ -176,6 +176,17 @@
+ 	}
+ 	fOffX = (int32_t)(fLogicalW - fWidth) / 2;
+ 	fOffY = (int32_t)(fLogicalH - fHeight) / 2;
++	if (fLogicalH < fHeight) {
++		/*
++		 * Panel taller than the canvas (FP6: 2484 vs 2436): sweetfb_top=N
++		 * black rows above the image, the rest below. Default 0 keeps the
++		 * image at the top edge. SweetHID uses the same offset for touch.
++		 */
++		int top = 0;
++		PE_parse_boot_argn("sweetfb_top", &top, sizeof(top));
++		int spare = (int)(fHeight - fLogicalH);
++		fOffY = -(top < 0 ? 0 : (top > spare ? spare : top));
++	}
+ 	fLock = IOLockAlloc();
+ 	fClients = OSArray::withCapacity(4);
+ 	fSurface = sweet_surface_create_physical(fPhys, fWidth, fHeight, fRowBytes, SWEET_FB_FORMAT_BGRA);

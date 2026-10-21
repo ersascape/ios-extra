@@ -1,5 +1,23 @@
 # ios-extra — current state
 
+## FP6 canvas placement and USB log host setup (2026-10-21)
+
+- User: a black bar is visible at the top. 0130 centred the 1125x2436 canvas
+  on the 1116x2484 panel (24 rows above and below). Patch 0138 adds boot-arg
+  `sweetfb_top=N` (rows above the image, clamped to 0..48) in AppleCLCD and
+  SweetHID alike, default 0: image at the top edge, the 48 spare rows below.
+  Both files compile locally; no phone result yet.
+- The GPU CX test boot (17:37:51 UTC) could not be read: `-enable_kprintf_spam`
+  in the hand-written boot args flooded the console. Repacked without it:
+  scratchpad `img-121a02d/nospam/fp6-shim-gpu-cx-power-console-nospam.img`,
+  SHA256 `2b76017a22ebf733599e2556648dc9d15fde27aa2b029f167289bfa6a457c6ec`.
+- Host USB log: NetworkManager profile `fp6-usb-log` (static 192.168.7.1/24,
+  matched by host-side MAC 02:00:5e:77:ee:01, autoconnect) replaces the DHCP
+  attempt on `enp128s20f0u9`; ping 192.168.7.2 answers. A user-level UDP
+  listener received nothing because ufw is active; allowing UDP 5140 on that
+  interface needs root (`ufw allow in on enp128s20f0u9 to any port 5140 proto
+  udp`).
+
 ## FP6 GPU power review and fixes (2026-10-21)
 
 - Recovered an interrupted session's unpushed work from `/tmp/fp6-smmu-work`
