@@ -12,7 +12,7 @@ diff --git a/bsd/dev/sweet_gpu.c b/bsd/dev/sweet_gpu.c
  
  extern vm_offset_t ml_io_map(vm_offset_t, vm_size_t);
  
-@@ -2283,10 +2286,30 @@
+@@ -2283,10 +2286,29 @@
  #define FP6_SMMU_ID0_SMS      (1u << 27)
  #define FP6_SMMU_ID0_NUMSMRG  0xffu
  #define FP6_SMMU_ID1_PAGESIZE (1u << 31)
@@ -24,8 +24,7 @@ diff --git a/bsd/dev/sweet_gpu.c b/bsd/dev/sweet_gpu.c
 +extern ppnum_t pmap_find_phys(pmap_t, addr64_t);
 +
 +#define FP6_SMMU_S2CR_TYPE_MASK (3u << 16)
-+#define FP6_SMMU_S2CR_CB_MASK   0xffu
-+#define FP6_SMMU_S2CR_FAULT     (2u << 16 | 0xffu)
++#define FP6_SMMU_S2CR_FAULT     (2u << 16)
 +#define FP6_SMMU_CB_MAIR0       0x0038u
 +#define FP6_SMMU_CB_MAIR1       0x003cu
 +#define FP6_SMMU_CB_FSR         0x0058u
@@ -91,7 +90,7 @@ diff --git a/bsd/dev/sweet_gpu.c b/bsd/dev/sweet_gpu.c
  	    FP6_GPU_SMMU_PA, FP6_GPU_SMMU_SIZE);
  	printf("QCOM SMMU: IDR0=0x%08x IDR1=0x%08x IDR2=0x%08x IDR7=0x%08x sCR0=0x%08x sGFSR=0x%08x\n",
  	    id0, id1, id2, id7, scr0, gfsr);
-@@ -2382,6 +2428,173 @@
+@@ -2382,6 +2428,174 @@
  		}
  	}
  	printf("QCOM SMMU: context banks with nonzero state=%u/%u\n", active_cbs, numcb);
@@ -123,7 +122,8 @@ diff --git a/bsd/dev/sweet_gpu.c b/bsd/dev/sweet_gpu.c
 +		unsigned sid = smr & 0xffffu, mask = (smr >> 16) & 0x7fffu;
 +		if ((smr & FP6_SMMU_SMR_VALID) && (((sid ^ FP6_SMMU_GMU_SID) & ~mask & 0xffffu) == 0))
 +			sid5_in_use = 1;
-+		if (!(smr & FP6_SMMU_SMR_VALID) && s2cr == FP6_SMMU_S2CR_FAULT && group == numsmrg)
++		if (!(smr & FP6_SMMU_SMR_VALID) &&
++		    (s2cr & FP6_SMMU_S2CR_TYPE_MASK) == FP6_SMMU_S2CR_FAULT && group == numsmrg)
 +			group = i;
 +	}
 +	if (sid5_in_use) {

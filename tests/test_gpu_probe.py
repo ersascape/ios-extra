@@ -1548,7 +1548,7 @@ int main(void)
     fp6_smmu[0x28/4] = 0x5511u;
     fp6_smmu[0x3c/4] = 0x24u;
     fp6_smmu[0x00/4] = 0x002c0406u;
-    for (unsigned i = 0; i < 24; i++) fp6_smmu[(0xc00 + 4*i)/4] = 0x000200ffu;
+    for (unsigned i = 0; i < 24; i++) fp6_smmu[(0xc00 + 4*i)/4] = 0x00020000u;
     fp6_smmu_mode = 2; fp6_last_ats = 0; fake_pa_base = 0x90000000ull;
     fp6_seen_tcr2 = fp6_seen_cbar = fp6_seen_fsr_clear = 0;
     fail_alloc = 0; alloc_calls = clean_calls = 0; all_mmio_writes = 0;
@@ -1558,7 +1558,7 @@ int main(void)
     assert(all_mmio_writes > 0 && strstr(output, "ATOS IOVA=0x60000000"));
     assert(fp6_seen_tcr2 == 0x00038011u && fp6_seen_cbar == 0x0001f300u && fp6_seen_fsr_clear);
     assert(strstr(output, "passed=1") && strstr(output, "rollback_ok=1 route_live=0"));
-    assert(fp6_smmu[0x800/4] == 0 && fp6_smmu[0xc00/4] == 0x000200ffu);
+    assert(fp6_smmu[0x800/4] == 0 && fp6_smmu[0xc00/4] == 0x00020000u);
     assert(fp6_smmu[0x20000/4] == 0 && fp6_smmu[0x20020/4] == 0 &&
         fp6_smmu[0x20030/4] == 0 && fp6_smmu[0x1000/4] == 0 && fp6_smmu[0x1800/4] == 0);
     assert(dma_rd64(fake_pa_base + 8) == ((fake_pa_base + 0x1000) | 3));
@@ -1574,13 +1574,13 @@ int main(void)
         fp6_smmu[0x20/4] = (1u << 27) | 24u;
         fp6_smmu[0x24/4] = (4u << 28) | 22u;
         fp6_smmu[0x28/4] = 0x5511u; fp6_smmu[0x00/4] = 0x002c0406u;
-        for (unsigned i = 0; i < 24; i++) fp6_smmu[(0xc00 + 4*i)/4] = 0x000200ffu;
+        for (unsigned i = 0; i < 24; i++) fp6_smmu[(0xc00 + 4*i)/4] = 0x00020000u;
         fp6_smmu_mode = 2; fp6_last_ats = 0; fail_alloc = 0;
         alloc_calls = 0; all_mmio_writes = 0; output[0] = 0;
         fp6_refuse_off = fp6_stage_writes[n]; fp6_refuse_nth = 1; fp6_refuse_count = 0;
         fp6_smmu_inventory();
         assert(strstr(output, "rollback_ok=1 route_live=0"));
-        assert(fp6_smmu[0x800/4] == 0 && fp6_smmu[0xc00/4] == 0x000200ffu);
+        assert(fp6_smmu[0x800/4] == 0 && fp6_smmu[0xc00/4] == 0x00020000u);
         assert(fp6_smmu[0x20000/4] == 0 && fp6_smmu[0x1000/4] == 0 && fp6_smmu[0x1800/4] == 0);
     }
     fp6_refuse_off = 0; fp6_refuse_nth = fp6_refuse_count = 0;
@@ -1593,7 +1593,7 @@ int main(void)
         fp6_smmu[0x24/4] = (4u << 28) | 22u;
         fp6_smmu[0x28/4] = 0x5511u;
         fp6_smmu[0x00/4] = 0x002c0406u;
-        for (unsigned i = 0; i < 24; i++) fp6_smmu[(0xc00 + 4*i)/4] = 0x000200ffu;
+        for (unsigned i = 0; i < 24; i++) fp6_smmu[(0xc00 + 4*i)/4] = 0x00020000u;
         if (refusal == 0) { fp6_smmu[0x800/4] = 0x80000005u; fp6_smmu[0xc00/4] = 0; }
         else fp6_smmu[0x28/4] &= ~(1u << 12);
         alloc_calls = 0; all_mmio_writes = 0; output[0] = 0;
@@ -1606,7 +1606,7 @@ int main(void)
     fp6_smmu[0x20/4] = (1u << 27) | 24u;
     fp6_smmu[0x24/4] = (4u << 28) | 22u;
     fp6_smmu[0x28/4] = 0x5511u; fp6_smmu[0x00/4] = 0x002c0406u;
-    for (unsigned i = 0; i < 24; i++) fp6_smmu[(0xc00 + 4*i)/4] = 0x000200ffu;
+    for (unsigned i = 0; i < 24; i++) fp6_smmu[(0xc00 + 4*i)/4] = 0x00020000u;
     fail_alloc = 1; alloc_calls = 0; all_mmio_writes = 0; output[0] = 0;
     fp6_smmu_inventory();
     assert(alloc_calls == 1 && all_mmio_writes == 0 && strstr(output, "allocation failed"));

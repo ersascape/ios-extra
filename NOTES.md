@@ -1,5 +1,25 @@
 # ios-extra — current state
 
+## FP6 SMMU fault-route selection fix (2026-10-21)
+
+- The user's boot photo from `fp6smmu=2` shows all visible stream groups have
+  `SMR=0`, fault routing, and `S2CR=0x00020000`; SID 0/2/5 have no valid visible
+  match, and all 22 context banks read clean. The probe refused before any
+  programming because it required the whole S2CR to equal `0x000200ff`.
+- Corrected free-group selection to test only `S2CR.TYPE == FAULT`; CBNDX is
+  irrelevant for a fault route. Host coverage now models the observed
+  `0x00020000` value through successful ATOS mapping and rollback.
+- `tests/test_gpu_probe.py` passes normally and under ASan/UBSan.
+- CI run `39615067086`, source `67f9abdf09067f7cffa2fe1ef16494dbb937e068`,
+  ultimately completed successfully; XNU build passed. Automated image
+  packaging was skipped because `FP6_STOCK_DTB_URL` is unset. The previous
+  local test image at `/tmp/fp6-run-39615067086-image/fp6-shim-smmu-atos.img`
+  used the still-unfixed probe and was not a valid SMMU programming test.
+- The corrected source is not yet built by CI or tested on the phone. Next:
+  publish the focused patch, confirm its XNU build, package with the matching
+  stock DTB, then rerun the SID 5 ATOS check. The GMU remains held in reset;
+  no firmware has been loaded or executed.
+
 ## FP6 Gen8.3 GMU firmware staging and SMMU inventory draft (2026-10-21)
 
 - The local Fairphone kernel modules tree is the hardware reference. Its
