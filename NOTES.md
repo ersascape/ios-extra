@@ -1,5 +1,11 @@
 # ios-extra — current state
 
+## Patch 0145 phone log: software table walk passes (2026-10-22)
+
+- A later report appended to `/tmp/claude-1000/-home-ersa-Dev-ios-extra/febca858-d68f-4e09-bdd9-8bdf4a7eb119/scratchpad/gmu-boot4.log` has boot args matching the locally packaged SMMU test (`fp6smmu=2 fp6smmupower=1`). This is a new run in the same log file; the earlier ATOS failure remains above it.
+- Phone log: IDR0 `0x4c017e18` advertises ATOSNS; TCR2 readback is `0x00038071`; the CPU table walk reports IOVA `0x60000000` -> PA `0x903617000`, expected `0x903617000`, `passed=1`. This is the first phone confirmation of the software-walk path.
+- The final state is `mapped=1 contained=1 route_live=0 bank_reserved=1`; the context bank is disabled and reserved, so no GPU master ran. This validates CPU-visible page tables only, not SMMU table fetch, stream routing, GMU DMA or GPU execution. The log continues through launchd and userland startup; no visible-screen confirmation was recorded.
+
 ## Patch 0145 build and local FP6 image (2026-10-22)
 
 - CI run `39663527285` passed for `ced5799de0456a1f06a1fb90291eff40e4e17bfd`;
