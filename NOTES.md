@@ -53,9 +53,9 @@
   console text visible (no `sweetfb_noconsole`):
   `/tmp/fp6-fixes-39550549760/img-wifimac/fp6-shim-ufs-root-wifimac-console.img`,
   SHA256 `5ebfd2d58eeeeaaebca1796004190804e2eb9b7398790644e9419b49500851cd`.
-  Not yet booted. For reference, SWEET's logo-to-UI time without migration was
-  under a minute (`exec SpringBoard` at ~47 s on cpus=1); Tegu's first
-  Setup/home screen came a few minutes after the logo once lsd was unblocked.
+  Not yet booted. No logo-to-UI duration is recorded for SWEET or Tegu; SWEET's
+  only logo timing is the ~60 min data-migration bar (progress bar visible),
+  and Tegu's logo stall did not clear by waiting (boots ended at ~4-6 min).
 - Not changed, from review: 0108 with the macOS Edge scheduler leaves P cores
   4–7 mostly idle (E→P migration/steal disallowed; throughput only); 0100
   probe images ignore `ufsrw=1`; 0105 SMMU geometry decode and power-query
