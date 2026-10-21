@@ -33,6 +33,13 @@
   x6=0, retries); the zap carve-out stays mapped after load. FP6's GPU is
   Adreno 810, Gen8.3 (`qcom,adreno-gpu-gen8-3-0`, gen80300 firmware, KGSL
   hwsched path); the GMU is at 0x3d37000/0x68000 per the stock DT.
+- Merged to main as `f103c2d`. Test image from CI `39643343440` (branch
+  head `121a02d`; kernel patches identical to main `f103c2d`), local ADT with
+  `/product`, stock DTB, console visible, `fp6touch=2 fp6smmu=2
+  fp6smmupower=1`: scratchpad `img-121a02d/fp6-shim-gpu-cx-power-console.img`,
+  SHA256 `88b5038ad453a48dd31d2be689afd243c8589aa7cbea7434bfae72ac8e9e1d51`.
+  Kernel contains the 0137 log strings. Temporarily booted 17:37:51 UTC;
+  first FP6 RPMh (CX ARC LOW_SVS) vote attempt; result pending.
 
 ## CX power state observed on phone (2026-10-21)
 
