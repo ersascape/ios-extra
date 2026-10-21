@@ -13,12 +13,21 @@
   change only; it does not alter the kernel.
 - Locally packaged the latest successful FP6 kernel from CI run `39569106154`
   (kernel SHA-256 `601288b0a5ae4ac1af9d870a269673205be1856b75f72f7da48131c809bdf100`),
-  reusing that run's ADT and stock DTB. Image:
+  reusing that run's ADT and stock DTB. The first quiet image omitted
+  `fp6touch=2`; that would skip the live touch-driver start. The package
+  default now includes it. A corrected diagnostic image with the framebuffer
+  console visible (so `QCOM SCM:` output is visible) is:
+  `/tmp/fp6-debug-pas-touch-39569106154/fp6-shim-ufs-root-pas-touch-visible.img`,
+  SHA-256 `667423e85a0139acab9203ce824bbc4fbfc5a2ce2b657cd515691fa324765f59`.
+  Its arguments include `fp6pas=1 fp6touch=2 fp6usb=2`, and omit
+  `-enable_kprintf_spam` and the framebuffer mute args. It uses the same
+  latest successful kernel and matching ADT/DTB. Header-v2 contents validated;
+  no phone test has been run.
+- Earlier quiet image (retained for reference):
   `/tmp/fp6-quiet-local-39569106154/fp6-shim-ufs-root-quiet-pas.img`, SHA-256
   `5798d5592286aebf569f5a45c0a33107bc2a1058dad317adabdc78387755dc7c`.
-  Command line includes `fp6pas=1`, `fp6usb=2`, and the two framebuffer mute
-  args; kprintf spam is off. Header-v2 contents validated locally. No phone
-  test has been run.
+  It had `fp6pas=1 fp6usb=2`, kprintf spam off, and framebuffer mute enabled;
+  the live touch argument was absent.
 
 ## Codex Adreno/PAS work merged into main (2026-10-21)
 

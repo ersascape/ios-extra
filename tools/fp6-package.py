@@ -16,7 +16,7 @@ FP6_DEBUG_ARGS = (
     'sweetfb_noconsole=1 sweet_noconsole=1 fp6pas=1'
 )
 FP6_UFS_ARGS = (
-    'rd=ufsroot0 fp6usb=2 unentitled_ios_sim_launch=1 ignition_level=1 '
+    'rd=ufsroot0 fp6touch=2 fp6usb=2 unentitled_ios_sim_launch=1 ignition_level=1 '
     'wdt_test=no_user_checkin ufsrw=1 rootrw=1 launchd_unsecure_cache=1 wdt=-1'
 )
 
