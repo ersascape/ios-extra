@@ -1,18 +1,32 @@
 diff --git a/bsd/dev/sweet_usb.c b/bsd/dev/sweet_usb.c
 --- a/bsd/dev/sweet_usb.c
 +++ b/bsd/dev/sweet_usb.c
-@@ -819,3 +819 @@
+@@ -816,20 +816,13 @@
+ 	static char chunk[1400];
+ 	static uint8_t frame[ETHER_HDR_LEN + sizeof(struct ip) + sizeof(struct udphdr) + sizeof(chunk)];
+ 	static uint16_t ip_id;
 -	socket_t so = NULL;
 -	struct sockaddr_in to;
 -	uint32_t socket_errors = 0, send_errors = 0;
 +	uint32_t send_errors = 0;
-@@ -828,5 +825,0 @@
+ 	uint64_t pos = sweet_log_position();
+ #if defined(ARM64_BOARD_CONFIG_SWEET)
+ 	uint32_t gpu_report_ticks = 0;
+ #endif
+ 
+ 	pos = pos > 65536 ? pos - 65536 : 0;
 -	bzero(&to, sizeof(to));
 -	to.sin_len = sizeof(to);
 -	to.sin_family = AF_INET;
 -	to.sin_port = htons(5140);
 -	to.sin_addr.s_addr = htonl(0xc0a80701);         /* 192.168.7.1 */
-@@ -849,12 +842 @@
+ 	printf("SWEET USB LOG: sender thread started at ring offset %llu\n", pos);
+ 	for (;;) {
+ 		ud_sleep_ms(100);
+@@ -846,18 +839,7 @@
+ 			}
+ 		}
+ #endif
 -		if (so == NULL) {
 -			errno_t create_error = sock_socket(PF_INET, SOCK_DGRAM, IPPROTO_UDP, NULL, NULL, &so);
 -			if (create_error != 0) {
@@ -26,7 +40,13 @@ diff --git a/bsd/dev/sweet_usb.c b/bsd/dev/sweet_usb.c
 -			}
 -		}
 +
-@@ -869,31 +851,6 @@
+ 		uint32_t n;
+ 		while (1) {
+ 			uint64_t next_pos = pos;
+@@ -866,97 +848,72 @@
+ 				break;
+ 			}
+ 
 -			bool delivered = false;
 -			errno_t socket_error = ENOTCONN;
 -			if (so != NULL) {
@@ -64,7 +84,7 @@ diff --git a/bsd/dev/sweet_usb.c b/bsd/dev/sweet_usb.c
 +			memcpy(eh->ether_dhost, host_mac, ETHER_ADDR_LEN);
 +			memcpy(eh->ether_shost, ud_phone_mac, ETHER_ADDR_LEN);
 +			eh->ether_type = htons(ETHERTYPE_IP);
-@@ -901,48 +858,45 @@
+ 
 -				struct ip ip_header;
 -				bzero(&ip_header, sizeof(ip_header));
 -				ip_header.ip_v = IPVERSION;
@@ -158,7 +178,7 @@ diff --git a/bsd/dev/sweet_usb.c b/bsd/dev/sweet_usb.c
 +				if ((++send_errors % 50) == 1) {
 +					printf("SWEET USB LOG: transmit queue full (ENOBUFS); retrying ring offset %llu\n",
 +					    pos);
-@@ -950,6 +904,7 @@
+ 				}
 -				if (raw_error != 0) {
 -					if ((++send_errors % 50) == 1) {
 -						printf("SWEET USB LOG: both UDP and raw send failed, UDP %d raw %d (%u bytes)\n",
@@ -172,7 +192,12 @@ diff --git a/bsd/dev/sweet_usb.c b/bsd/dev/sweet_usb.c
 +				if ((++send_errors % 50) == 1) {
 +					printf("SWEET USB LOG: raw UDP frame output failed, err %d (%u bytes)\n",
 +					    raw_error, frame_len);
-@@ -956,0 +912 @@
+ 				}
 +				break;
-@@ -959,0 +916 @@
+ 			}
+ 			pos = next_pos;
+ 			send_errors = 0;
 +			ud_sleep_ms(5); /* Pace raw frames so the gadget queue can drain. */
+ 		}
+ 	}
+ }

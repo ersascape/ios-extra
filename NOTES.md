@@ -1351,7 +1351,9 @@ error::ResourceWarning -m unittest discover -s tests` (also with
 - Source is based on CI build tree for run 39565043535 (success, head
   0755f4d2f6343b06cc0f5d31d31460b096330d3d). The modified `sweet_usb.c` passes
   `tools/xnu-cc.py` against that build tree (`0 of 1 files failed`) using local
-  Clang 23. This is a syntax/compile check only; patch 0125 has no new CI build,
-  packaged image, or phone result yet. The user's live tcpdump capture is the
-  next evidence for the current image; the new sender needs a separate build and
-  temporary boot before it can be called fixed.
+  Clang 23. CI run 39568643454 failed before compilation because its patch runner
+  rejects zero-context diffs. Patch 0125 now uses standard context and passes
+  `git apply` against the same source; the corrected CI run is pending. No
+  packaged image or phone result exists yet. The user's live tcpdump capture is
+  the next evidence for the current image; the new sender needs a separate build
+  and temporary boot before it can be called fixed.
