@@ -1,0 +1,28 @@
+--- a/bsd/dev/sweet_usb.c
++++ b/bsd/dev/sweet_usb.c
+@@ -822,13 +822,23 @@
+ 	uint32_t gpu_report_ticks = 0;
+ #endif
+ 
+-	pos = pos > 65536 ? pos - 65536 : 0;
+-	printf("SWEET USB LOG: sender thread started at ring offset %llu\n", pos);
++	/* Replay the whole ring (sweet_log_copy clamps to what it still holds). */
++	(void)pos;
++	pos = 0;
++	printf("SWEET USB LOG: sender thread started; replaying from the start of the ring\n");
++	bool settled = false;
+ 	for (;;) {
+ 		ud_sleep_ms(100);
+ 		if (!ud.configured || ud.data_alt != 1) {
++			settled = false;
+ 			continue;
+ 		}
++		if (!settled) {
++			/* Give the host time to configure its address after link-up;
++			 * packets sent before that are dropped. */
++			ud_sleep_ms(3000);
++			settled = true;
++		}
+ #if defined(ARM64_BOARD_CONFIG_SWEET)
+ 		/* Repeat the cached boot inventory after ~5/15/30 s configured.
+ 		 * This prints only saved values: no new MMIO reads or mappings. */

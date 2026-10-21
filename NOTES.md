@@ -1,5 +1,25 @@
 # ios-extra — current state
 
+## FP6 GMU boot attempt: stopped at the SMMU AHB clock (2026-10-21)
+
+- Boot of CI `39647440570` (`8e055a8`, all GPU stages on, console muted),
+  18:00:16 UTC. Phone stayed up (launchd running). Console photo: RPMh CX
+  vote and CX GDSC succeed again; `before/after AON gates ahb=0x00000000
+  hub_cmd=0x00000000 hub_cfg=0x00100000 hub_div=0x00000001`; gates
+  cb 0x1, cxo_aon 0x0, demet 0x0, gx_ahb_ff 0x80000001, rscc_hub_aon 0x1,
+  rscc_xo_aon 0x1, sleep 0x1; then `clock index=3 before=0x00000000` and
+  `prerequisite clock failed index=3; no context writes`, so the context
+  test, upload and CM3 release did not run.
+- gpu_cc_ahb reads 0 with CLK_OFF clear: running under hardware/other-voter
+  control while its SW enable ignores writes (cxo_aon and demet likewise).
+  Linux does not read back HALT_DELAY branch enables. Patch 0141 accepts a
+  branch that is SW-enabled or not CLK_OFF, and logs it.
+- USB log: the host received 37 KB starting mid-boot; the early lines were
+  lost because the logger replays only 64 KB and starts sending at link-up,
+  before NetworkManager has assigned 192.168.7.1. Patch 0142 replays the
+  whole 4 MB ring and waits 3 s after link-up. Host side: NM profile
+  `fp6-usb-log` and a ufw rule for UDP 5140 (added by the user).
+
 ## FP6 SpringBoard/PosterBoard crash after Bold Text: CoreImage GL (2026-10-21)
 
 - User enabled Settings > Accessibility > Bold Text; SpringBoard and

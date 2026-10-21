@@ -1,0 +1,20 @@
+--- a/bsd/dev/sweet_gpu.c
++++ b/bsd/dev/sweet_gpu.c
+@@ -2658,7 +2658,16 @@
+ 		clocks->acquired = i + 1;
+ 		if (!(before & 1u)) fp6_smmu_write32(base, off, before | 1u);
+ 		uint32_t after = fp6_smmu_read32(base, off);
+-		if (!(after & 1u)) goto fail;
++		/*
++		 * A branch whose enable bit ignores writes but whose CLK_OFF (bit 31)
++		 * is clear is already running under hardware/other-voter control:
++		 * gpu_cc_ahb reads 0x00000000 on FP6. Linux does not read the enable
++		 * bit back for HALT_DELAY branches either.
++		 */
++		if (!(after & 1u)) {
++			if (after == 0xffffffffu || (after & (1u << 31))) goto fail;
++			printf("QCOM SMMU: clock index=%u running without SW enable (0x%08x)\n", i, after);
++		}
+ 		/* gcc_memnoc HWCG skips HALT; SNOC/AHB use 10us delay.
+ 		 * Only the SMMU vote and non-HWCG memnoc poll branch-off. */
+ 		if (i >= 2) delay(10);
