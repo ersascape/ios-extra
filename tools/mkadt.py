@@ -249,10 +249,16 @@ def build_fp6(seed=None, phys_base=None, mem_size=None):
         ('system-firmware-version', cstr('fp6-shim')),
         ('boot-manifest-hash', BOOT_MANIFEST_HASH),
         ('crypto-hash-method', cstr('sha2-384')),
-        # Synthetic identifiers keep this development profile separate from
-        # Sweet/Phoenix. The bundled iOS userland identity remains D22AP.
+        ('display-scale', u32(3)),
+        # Synthetic ECID keeps this development profile separate from
+        # Sweet/Phoenix. chip-id and the security status are those of the
+        # A11 / dev-fused D22AP whose userland runs here (see build()).
         ('unique-chip-id', struct.pack('<Q', 0x4650360000000001)),
-        ('chip-id', u32(0x7635)),
+        ('chip-id', u32(0x8015)),
+        ('certificate-production-status', u32(0)),
+        ('effective-production-status-ap', u32(0)),
+        ('certificate-security-mode', u32(1)),
+        ('effective-security-mode-sep', u32(1)),
     ], [node('memory-map', [ph()]),
         node('asmb', [ph(), ('lp-sip0', u64(0x6f)), ('lp-sip1', u32(1))])])
 
@@ -374,12 +380,15 @@ def build_fp6(seed=None, phys_base=None, mem_size=None):
     ])
     product_props = d22ap_product()
     product = [node('product', [ph()] + product_props)] if product_props else []
+    # Same iPhone X identity as Sweet (hw.target D22AP, hw.product
+    # iPhone10,3) for MobileGestalt; 'fairphone,fp6' / 'qcom,volcano' stay
+    # for QcomPlatformExpert matching.
     return node('device-tree', [
-        ph(), ('compatible', cstr('FP6') + cstr('fairphone,fp6') +
+        ph(), ('compatible', cstr('D22AP') + cstr('iPhone10,3') + cstr('fairphone,fp6') +
                cstr('qcom,volcano') + cstr('qcom,sm7635') + cstr('AppleARM')),
-        ('model', cstr('FP6')), ('target-type', cstr('FP6')),
-        ('target-sub-type', cstr('SM7635')),
-        ('manufacturer', cstr('Fairphone')), ('#address-cells', u32(2)),
+        ('model', cstr('iPhone10,3')), ('target-type', cstr('D22')),
+        ('target-sub-type', cstr('D22AP')),
+        ('manufacturer', cstr('Apple Inc.')), ('#address-cells', u32(2)),
         ('#size-cells', u32(2)),
     ], [chosen, defaults, cpus, arm_io, soc, fbcon, buttons] + product + [ufs])
 
