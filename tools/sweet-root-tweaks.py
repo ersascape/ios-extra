@@ -11,7 +11,8 @@ screen (image versions v8-v14 in NOTES.md):
 
   launchd.plist   _PanicOnCrash -> _PanicOnCrasX (a crashing daemon must not
                   panic the system); CommCenter jobs removed (no baseband: it
-                  crash-loops and Setup blocks on its CoreTelephony XPC)
+                  crash-loops and Setup blocks on its CoreTelephony XPC);
+                  /dev/console stdout/stderr overrides changed to /dev/null
   containers      /private/var/containers/{Bundle,Data/System,Shared/SystemGroup,Temp}
                   (on iOS they live on the data volume)
   migration       LastSystemVersion so DataMigration does not run for an hour
@@ -59,16 +60,21 @@ def launchd(root):
     st = os.stat(path)
     plist = load(path)
     jobs = plist['LaunchDaemons']
-    renamed = 0
+    renamed = stdio_fixed = 0
     for job in jobs.values():
         if '_PanicOnCrash' in job:
             job['_PanicOnCrasX'] = job.pop('_PanicOnCrash')
             renamed += 1
+        for key in ('StandardOutPath', 'StandardErrorPath'):
+            if job.get(key) == '/dev/console':
+                job[key] = '/dev/null'
+                stdio_fixed += 1
     removed = [k for k, j in jobs.items() if j.get('Label') == 'com.apple.CommCenter']
     for k in removed:
         del jobs[k]
     save(path, plist, st.st_uid, st.st_gid, st.st_mode & 0o7777)
-    print(f'launchd.plist: {renamed} _PanicOnCrash renamed, {len(removed)} CommCenter jobs removed')
+    print(f'launchd.plist: {renamed} _PanicOnCrash renamed, '
+          f'{stdio_fixed} /dev/console stdio paths fixed, {len(removed)} CommCenter jobs removed')
 
 
 def containers(root):

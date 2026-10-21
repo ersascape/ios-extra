@@ -1,6 +1,6 @@
 # ios-extra — current state
 
-## USB log delivery and SWEET console mute alias (2026-10-21)
+## FP6/SWEET launch diagnostics and USB logger (2026-10-21)
 
 - Patch 0111 replaces the kernel logger's routed UDP socket sends with complete
   Ethernet/IPv4/UDP frames addressed to the fixed USB-ECM host. This bypasses
@@ -9,17 +9,30 @@
   `ENOBUFS`, and keeps the ring cursor unchanged on failure so the chunk is
   retried. A clean replay of patches 0099–0112 applied successfully; the
   resulting `sweet_usb.c` passed syntax compilation against the CI build tree.
-  Phone delivery and a full XNU CI build remain unverified.
+  CI run `39537652816` passed for patches 0111–0112. Its full artifact is a
+  pre-Sandbox-registration build; phone delivery remains unverified.
 - Patch 0112 adds `sweet_noconsole=1` as an alias for
   `sweetfb_noconsole=1`. Both mute framebuffer console drawing after the first
   GUI swap; persistent logging and panic drawing are preserved.
-- Corrected `tools/patch-launchd-plist.py` to set selected jobs' stdout and
-  stderr paths to `/dev/null`. The earlier `/dev/console` setting matches the
-  confirmed `backboardd` spawn failure for the mobile user. The current Tegu
-  rootfs build notes say this helper was not run, so this does not establish
-  that the current phone image had that setting. The selected diagnostics are
-  only visible on SWEET when its `sweetnull` tee is enabled; other kernels
-  discard redirected output.
+- Patch 0113 fixes a real FP6 gap: `sweet_amfi.c` includes the permissive
+  `Sandbox` MAC policy for FP6, but the prior `bsd_init.c` call-site guard was
+  SWEET-only, so FP6 never registered that policy. Patch 0113 widens the call
+  guard to FP6 before root mount/process startup. A clean replay of 0099–0113
+  passed. This registers the policy but does not synthesize individual
+  sandbox profiles or container metadata; the next CI build is pending.
+- Updated `tools/sweet-root-tweaks.py` to change any launchd stdout/stderr
+  override from `/dev/console` to `/dev/null`; the diagnostic-only
+  `tools/patch-launchd-plist.py` uses `/dev/null` as well. The current local
+  Tegu HFS image was inspected directly: `backboardd` has neither explicit
+  path, and no launchd job points either stream to `/dev/console` (two WebKit
+  jobs use `/dev/null`). Therefore the old confirmed spawn failure is not
+  present in this root image; no rootfs rebuild is needed for that fix.
+- Existing SWEET patches already capture a `backboardd` abort: 0043–0044 log
+  crash registers/backtrace, 0051/0053 scan writable heap text for exception
+  reasons, 0048 tees selected `/dev/null` output, and 0049/0054 trace IOKit
+  lookups and opens. These hooks are SWEET-only; the README SWEET profile uses
+  their defaults. For the FP6 image, patch 0111 supplies the USB kernel logger
+  but the current SWEET-only crash/IOKit hooks are not enabled.
 - ADT audit: the local D22AP IPSW tree supplies the 61 usable `/product`
   properties copied by `tools/mkadt.py`; no Apple-format SWEET ADT was found.
   The generated SWEET ADT currently describes all eight CPUs as homogeneous,
@@ -134,12 +147,20 @@
 
 ## FP6 SWEET userspace-enablement patch audit (2026-10-20)
 
-- Corrected the initial source audit: the permissive `Sandbox` MAC policy from
-  patch 0050 is compiled for FP6 because patch 0099 widens the enclosing
-  `sweet_amfi.c` board guard; patch 0035 also calls `sweet_amfi_policy_register`
-  for FP6. The FP6 `MASTER.arm64.fp6` config introduced by patch 0099 already
-  omits `config_ext_resolver`, matching the effective SWEET configuration from
-  patch 0057. Neither behavior needs another source change.
+- Correction from the 2026-10-21 clean replay: patch 0099 makes
+  `sweet_amfi.c` (including the permissive `Sandbox` MAC policy) compile for
+  FP6, but the replayed `bsd_init.c` registration call remains guarded by
+  `ARM64_BOARD_CONFIG_SWEET` only. Patch 0035's current copy contains the FP6
+  guard, but that change is absent from the source state after replaying the
+  existing patch baseline. Patch 0113 widens the call-site guard to FP6, so
+  `sweet_amfi_policy_register()` actually runs on that board. This registers
+  the permissive stand-in; it does not supply the individual sandbox profile
+  files or container metadata that some services may request.
+- The FP6 `MASTER.arm64.fp6` config introduced by patch 0099 already omits
+  `config_ext_resolver`, matching the effective SWEET configuration from
+  patch 0057. Patch 0108 enables the AMP scheduler. Its CI build passed; phone
+  testing is pending. The FP6 HFS diagnostic limiter was deferred for that
+  scheduler build, then re-enabled in the follow-up HFS patch comparison below.
 - Patch 0108 enables the AMP scheduler. Its CI build passed; phone testing is
   pending. The FP6 HFS diagnostic limiter was deferred for that scheduler
   build, then re-enabled in the follow-up HFS patch comparison below.
