@@ -38,6 +38,20 @@
   QUP wrapper SID 0x563), so FIFO-disabled GSI firmware is the leading
   explanation, now confirmed. Chosen direction: a polled GPI DMA path in
   qcom_geni (research in progress).
+- Patch 0119 adds a polled GPI DMA (GSI) path to qcom_geni, used when SE
+  firmware disables FIFO (as on FP6 SE0): read-only GPII 0 state check
+  (refuses unless both channel and event contexts are zero), SMMU stream
+  pass-through for SIDs 0x576/0x563 (accepts existing bypass or
+  unmatched-stream bypass, else adds a Linux-style S1_TRANS_S2_BYPASS bank),
+  16 KiB contiguous DMA (event ring 2 KiB, TX/RX rings 1 KiB, bounce
+  buffers), Linux msm_gpi sequence (IRQ-status config, EV ALLOCATE, CH
+  ALLOCATE x2, program, START x2) and per transfer CONFIG0+GO+TX DMA / RX DMA
+  TREs with EOT polling. The touch driver now also sets GPIO 107 and 19 to
+  pull-up inputs and releases reset on GPIO 20 (low 10 ms, high, 300 ms).
+  Local arm64 compile passed; not built in CI or booted yet. Rails
+  (L22B/L9B) and PMIC are still untouched. Work is committed from a separate
+  worktree on main because the shared checkout is on Codex's
+  `fp6-adreno-gen711` branch.
   The driver does not touch reset, L22B/L9B or PMIC; slider polarity
   (mainline: GPIO 107 high = muted) is unverified.
 

@@ -1,0 +1,699 @@
+--- a/bsd/dev/fp6_touch.c
++++ b/bsd/dev/fp6_touch.c
+@@ -70,14 +70,31 @@
+ 	.halts = { 0x23018u, 0x23008u, 0x23000u, 0x23004u, 0x18004u, 0 },
+ };
+ 
++/*
++ * SE0's firmware runs it in GSI mode (FIFO disabled); stock DT: dmas =
++ * <&gpi_dma0 {0,1} 0 1 64 2> -> static GPII 0, SE id 0. gpi_dma0 is
++ * 0xa00000 with gpi-ee-offset 0x10000; its SID is 0x576, the QUP wrapper's
++ * 0x563 (apps SMMU 0x15000000).
++ */
+ static struct qgeni_se se0 = {
+ 	.name = "SE0",
+ 	.se_pa = 0x00a80000u,
+ 	.gcc_pa = 0x00100000u,
+ 	.gcc_size = 0x60000u,
+ 	.clk = &se0_clk,
++	.gpi_pa = 0x00a10000u,
++	.gpii = 0,
++	.seid = 0,
++	.smmu_pa = 0x15000000u,
++	.sids = { 0x576u, 0x563u },
+ };
+ 
++static int
++xfer(const uint8_t *tx, uint8_t *rx, unsigned len)
++{
++	return se0.gsi ? qgeni_gsi_spi_xfer(&se0, tx, rx, len) : qgeni_spi_xfer(&se0, tx, rx, len);
++}
++
+ static struct {
+ 	bool started;
+ 	uint32_t mode;
+@@ -148,12 +165,44 @@
+ 	}
+ }
+ 
++/* GPIO input with pull-up, 2 mA (volcano-mtp touch IRQ, fp6 switch key). */
++static void
++gpio_input_pullup(unsigned pin)
++{
++	uint32_t cfg = rd(ft.tlmm, GPIO_CFG(pin));
++	uint32_t want = cfg & ~0x3ffu;          /* func 0, 2 mA, OE off */
++	want |= 3u;                             /* pull-up */
++	if (cfg != want) {
++		wr(ft.tlmm, GPIO_CFG(pin), want);
++	}
++}
++
++/*
++ * ABL leaves the controller's reset (GPIO 20, active low) as a pulled-down
++ * input, i.e. held in reset. Drive it low, then high, then wait as the
++ * vendor driver does after power-on (reset high, 100 ms; probe 200 ms).
++ */
++static void
++reset_release(void)
++{
++	uint32_t cfg = rd(ft.tlmm, GPIO_CFG(PIN_RESET));
++	/* Latch first, then enable the output, so the pin never glitches high. */
++	wr(ft.tlmm, GPIO_IO(PIN_RESET), rd(ft.tlmm, GPIO_IO(PIN_RESET)) & ~2u);
++	wr(ft.tlmm, GPIO_CFG(PIN_RESET), (cfg & ~0x3ffu) | (1u << 9));
++	ft_sleep(10);
++	wr(ft.tlmm, GPIO_IO(PIN_RESET), rd(ft.tlmm, GPIO_IO(PIN_RESET)) | 2u);
++	ft_sleep(300);
++	printf("FP6 TOUCH: reset released: gpio20 cfg=%#x io=%#x, chg io=%#x\n",
++	    rd(ft.tlmm, GPIO_CFG(PIN_RESET)), rd(ft.tlmm, GPIO_IO(PIN_RESET)),
++	    rd(ft.tlmm, GPIO_IO(PIN_CHG)));
++}
++
+ /* One read stage: 0xff out, n bytes in; retried once if not ready. */
+ static int
+ spi_read(uint8_t *buf, unsigned n)
+ {
+ 	for (unsigned attempt = 0; attempt < 2u; ++attempt) {
+-		int err = qgeni_spi_xfer(&se0, ft.ff, buf, n);
++		int err = xfer(ft.ff, buf, n);
+ 		if (err) {
+ 			return err;
+ 		}
+@@ -183,7 +232,7 @@
+ 		return EMSGSIZE;
+ 	}
+ 	delay(50);
+-	err = qgeni_spi_xfer(&se0, ft.ff, ft.buf, len);
++	err = xfer(ft.ff, ft.buf, len);
+ 	if (err) {
+ 		return err;
+ 	}
+@@ -192,7 +241,7 @@
+ 	    ft.buf[2] == ft.buf[5]) {
+ 		unsigned payload = len - TLV_HDR;
+ 		memmove(ft.buf, ft.buf + TLV_HDR, payload);
+-		err = qgeni_spi_xfer(&se0, ft.ff, ft.buf + payload, TLV_HDR);
++		err = xfer(ft.ff, ft.buf + payload, TLV_HDR);
+ 		if (err) {
+ 			return err;
+ 		}
+@@ -261,7 +310,7 @@
+ device_info(void)
+ {
+ 	static const uint8_t query[TLV_HDR] = { TLV_DEVICE_INFO, 0, 0 };
+-	int err = qgeni_spi_xfer(&se0, query, NULL, sizeof(query));
++	int err = xfer(query, NULL, sizeof(query));
+ 	if (err) {
+ 		return err;
+ 	}
+@@ -306,16 +355,25 @@
+ 		goto out;
+ 	}
+ 
++	gpio_input_pullup(PIN_SLIDER);
++	ft_sleep(5);
+ 	ft.slider = -1;
+ 	poll_slider();
+ 	int err = qgeni_clocks_on(&se0);
+ 	if (!err) {
+ 		qgeni_dump(&se0);
+-		err = qgeni_fifo_init(&se0, QGENI_PROTO_SPI);
+-	}
+-	if (!err) {
+ 		/* volcano-mtp: spi-max-frequency 2 MHz, mode 3; vendor CS-clock delay 200. */
+-		err = qgeni_spi_setup(&se0, 3u, 0u, 2000000u, 200u);
++		if (qgeni_fifo_disabled(&se0)) {
++			err = qgeni_gsi_init(&se0, QGENI_PROTO_SPI);
++			if (!err) {
++				err = qgeni_gsi_spi_setup(&se0, 3u, 0u, 2000000u, 200u);
++			}
++		} else {
++			err = qgeni_fifo_init(&se0, QGENI_PROTO_SPI);
++			if (!err) {
++				err = qgeni_spi_setup(&se0, 3u, 0u, 2000000u, 200u);
++			}
++		}
+ 	}
+ 	if (err) {
+ 		printf("FP6 TOUCH: SE0 setup failed %d; touch disabled, slider polling\n", err);
+@@ -325,6 +383,8 @@
+ 		}
+ 	}
+ 	spi_pinmux();
++	gpio_input_pullup(PIN_CHG);
++	reset_release();
+ 	printf("FP6 TOUCH: chg=%u reset io=%#x\n", chg_low() ? 0u : 1u,
+ 	    rd(ft.tlmm, GPIO_IO(PIN_RESET)));
+ 	err = device_info();
+--- a/bsd/dev/qcom_geni.c
++++ b/bsd/dev/qcom_geni.c
+@@ -12,11 +12,17 @@
+ #include <sys/param.h>
+ #include <sys/systm.h>
+ #include <sys/errno.h>
++#include <string.h>
+ #include <kern/clock.h>
+ #include <machine/machine_routines.h>
++#include <arm/caches_internal.h>
++#include <vm/pmap.h>
++#include <vm/vm_kern.h>
+ 
+ #include "qcom_geni.h"
+ 
++extern ppnum_t pmap_find_phys(pmap_t pmap, addr64_t va);
++
+ extern vm_offset_t ml_io_map(vm_offset_t, vm_size_t);
+ 
+ #define SE_FORCE_DEFAULT        0x020u
+@@ -358,4 +364,488 @@
+ 	qgeni_abort(se);
+ 	return EIO;
+ }
++
++/*
++ * ---- GSI (GPI DMA) mode ----
++ * Linux drivers/dma/qcom/msm_gpi.c + msm_gpi_mmio.h, include/linux/msm_gpi.h
++ * and drivers/spi/spi-msm-geni.c, polled. Offsets below are inside one GPII
++ * region (gpi-top + gpi-ee-offset + 0x4000 * gpii): channel k context at
++ * 0x80k, event context 0x1000, doorbells 0x2000, commands/IRQs 0x3000.
++ */
++#define GPI_CH(k, r)            (0x0000u + 0x80u * (k) + (r))
++#define GPI_EV(r)               (0x1000u + (r))
++#define GPI_CH_DB(k)            (0x2000u + 8u * (k))
++#define GPI_EV_DB               0x2100u
++#define GPI_CH_CMD              0x3008u
++#define GPI_EV_CMD              0x3010u
++#define GPI_TYPE_IRQ            0x3080u
++#define GPI_TYPE_IRQ_MSK        0x3088u
++#define GPI_CH_IRQ              0x3090u
++#define GPI_EV_IRQ              0x3094u
++#define GPI_CH_IRQ_MSK          0x3098u
++#define GPI_EV_IRQ_MSK          0x309cu
++#define GPI_CH_IRQ_CLR          0x30a0u
++#define GPI_EV_IRQ_CLR          0x30a4u
++#define GPI_IEOB_MSK            0x30b8u
++#define GPI_IEOB_CLR            0x30c0u
++#define GPI_GLOB_IRQ            0x3100u
++#define GPI_GLOB_IRQ_EN         0x3108u
++#define GPI_GLOB_IRQ_CLR        0x3110u
++#define GPI_GPII_IRQ_EN         0x3120u
++#define GPI_GPII_IRQ_CLR        0x3128u
++#define GPI_INTSET              0x3180u
++#define GPI_MSI_LO              0x3188u
++#define GPI_MSI_HI              0x318cu
++#define GPI_ERROR_LOG           0x3200u
++#define GPI_SCRATCH0            0x3400u
++#define GPI_SCRATCH1            0x3404u
++/* context registers */
++#define CTX_0                   0x00u
++#define CTX_LEN                 0x04u
++#define CTX_BASE_LO             0x08u
++#define CTX_BASE_HI             0x0cu
++#define CTX_RP_LO               0x10u
++#define CTX_WP_LO               0x18u
++#define CH_QOS                  0x5cu
++#define CH_SCRATCH(i)           (0x60u + 4u * (i))
++#define EV_INT_MOD              0x20u
++#define EV_MSI_LO               0x28u
++#define EV_MSI_HI               0x2cu
++#define EV_RP_UPD_LO            0x30u
++#define EV_RP_UPD_HI            0x34u
++#define CTX_STATE(v)            (((v) >> 20) & 0xfu)
++#define CMD_ALLOCATE            0u
++#define CMD_START               1u
++#define CMD_STOP                2u
++#define CMD_RESET               9u
++/* DMA region layout: every ring aligned to its own size. */
++#define DMA_BYTES               0x4000u
++#define EV_OFF                  0x0000u
++#define EV_LEN                  0x0800u         /* 128 events */
++#define TX_OFF                  0x0800u
++#define RX_OFF                  0x0c00u
++#define CH_LEN                  0x0400u         /* 64 TREs */
++#define TXBUF_OFF               0x1000u
++#define RXBUF_OFF               (TXBUF_OFF + QGENI_GSI_MAX)
++#define DMA_GENERAL_IRQ_CLR_TX  0xc44u
++#define DMA_GENERAL_IRQ_CLR_RX  0xd44u
++/* SMMU (arm,mmu-500) global space */
++#define SMMU_SCR0               0x000u
++#define SMMU_IDR0               0x020u
++#define SMMU_IDR1               0x024u
++#define SMMU_SMR(i)             (0x800u + 4u * (i))
++#define SMMU_S2CR(i)            (0xc00u + 4u * (i))
++#define SMMU_CBAR(i)            (0x1000u + 4u * (i))
++#define SMMU_CBA2R(i)           (0x1800u + 4u * (i))
++#define SMMU_MAP_BYTES          0x100000u
++
++bool
++qgeni_fifo_disabled(struct qgeni_se *se)
++{
++	return qgeni_clocks_running(se) && (rd(se->base, SE_IF_DISABLE) & 1u);
++}
++
++static int
++smmu_stream(struct qgeni_se *se, vm_offset_t smmu, uint16_t sid)
++{
++	uint32_t scr0 = rd(smmu, SMMU_SCR0), idr0 = rd(smmu, SMMU_IDR0), idr1 = rd(smmu, SMMU_IDR1);
++	unsigned groups = idr0 & 0xffu, banks = idr1 & 0xffu;
++	unsigned pgsize = (idr1 & (1u << 31)) ? 0x10000u : 0x1000u;
++	unsigned pages = 1u << (((idr1 >> 28) & 7u) + 1u);
++	unsigned matches = 0, slot = 0, free_slot = UINT32_MAX;
++
++	if (!(idr0 & (1u << 30)) || !groups || banks < 2u || banks > 128u ||
++	    (uint64_t)(pages + banks) * pgsize > SMMU_MAP_BYTES) {
++		printf("QGENI %s: unsupported SMMU idr0=%#x idr1=%#x\n", se->name, idr0, idr1);
++		return ENXIO;
++	}
++	for (unsigned i = 0; i < groups; i++) {
++		uint32_t smr = rd(smmu, SMMU_SMR(i));
++		if (!(smr & 0x80000000u)) {
++			if (free_slot == UINT32_MAX) {
++				free_slot = i;
++			}
++			continue;
++		}
++		uint32_t mask = (smr >> 16) & 0x7fffu;
++		if (((smr ^ sid) & 0x7fffu & ~mask) == 0) {
++			matches++;
++			slot = i;
++		}
++	}
++	if (matches > 1u) {
++		printf("QGENI %s: SID %#x has %u stream matches\n", se->name, sid, matches);
++		return EBUSY;
++	}
++	if (matches == 1u) {
++		uint32_t s2cr = rd(smmu, SMMU_S2CR(slot));
++		unsigned type = (s2cr >> 16) & 3u, bank = s2cr & 0xffu;
++		uint32_t cbar = bank < banks ? rd(smmu, SMMU_CBAR(bank)) : 0;
++		uint32_t sctlr = bank < banks ? rd(smmu, (pages + bank) * pgsize) : 0;
++		printf("QGENI %s: SID %#x slot %u SMR=%#x S2CR=%#x CBAR=%#x SCTLR=%#x\n", se->name,
++		    sid, slot, rd(smmu, SMMU_SMR(slot)), s2cr, cbar, sctlr);
++		if (type == 1u || (type == 0u && bank < banks && ((cbar >> 16) & 3u) == 1u &&
++		    !(sctlr & 1u))) {
++			return 0;       /* bypass, or a stage-1 bank with translation off */
++		}
++		printf("QGENI %s: SID %#x is translated; physical DMA not possible\n", se->name, sid);
++		return EPERM;
++	}
++	if (!(scr0 & (1u << 10))) {
++		printf("QGENI %s: SID %#x unmatched, sCR0=%#x bypasses unmatched streams\n",
++		    se->name, sid, scr0);
++		return 0;
++	}
++	if (free_slot == UINT32_MAX) {
++		return ENOSPC;
++	}
++	/* Linux Qualcomm bypass quirk: S1_TRANS_S2_BYPASS bank with SCTLR 0. */
++	unsigned free_bank = UINT32_MAX;
++	for (unsigned back = 0; back < 8u && back + 1u < banks; back++) {
++		unsigned bank = banks - 1u - back;
++		bool used = false;
++		for (unsigned i = 0; i < groups && !used; i++) {
++			uint32_t smr = rd(smmu, SMMU_SMR(i)), s2cr = rd(smmu, SMMU_S2CR(i));
++			used = (smr & 0x80000000u) && ((s2cr >> 16) & 3u) == 0 && (s2cr & 0xffu) == bank;
++		}
++		if (!used && !(rd(smmu, (pages + bank) * pgsize) & 1u)) {
++			free_bank = bank;
++			break;
++		}
++	}
++	if (free_bank == UINT32_MAX) {
++		return ENOSPC;
++	}
++	wr(smmu, (pages + free_bank) * pgsize, 0);
++	wr(smmu, SMMU_CBA2R(free_bank), 1);
++	wr(smmu, SMMU_CBAR(free_bank), 0x10000u);
++	wr(smmu, SMMU_S2CR(free_slot), free_bank);
++	wr(smmu, SMMU_SMR(free_slot), 0x80000000u | sid);
++	if (rd(smmu, SMMU_CBAR(free_bank)) != 0x10000u || rd(smmu, SMMU_S2CR(free_slot)) != free_bank ||
++	    rd(smmu, SMMU_SMR(free_slot)) != (0x80000000u | sid)) {
++		printf("QGENI %s: SMMU bypass readback mismatch for SID %#x\n", se->name, sid);
++		return EIO;
++	}
++	printf("QGENI %s: SMMU bypass SID %#x slot %u bank %u (sCR0=%#x)\n", se->name, sid,
++	    free_slot, free_bank, scr0);
++	return 0;
++}
++
++int
++qgeni_smmu_passthrough(struct qgeni_se *se)
++{
++	vm_offset_t smmu = ml_io_map((vm_offset_t)se->smmu_pa, SMMU_MAP_BYTES);
++	if (!smmu) {
++		return ENOMEM;
++	}
++	for (unsigned i = 0; i < 2u; i++) {
++		int err = smmu_stream(se, smmu, se->sids[i]);
++		if (err) {
++			return err;
++		}
++	}
++	return 0;
++}
++
++static void
++gsi_dump(struct qgeni_se *se, const char *why)
++{
++	printf("QGENI %s: GPII%u %s: ch0 %#x len %#x base %#x rp %#x wp %#x; ch1 %#x base %#x rp %#x wp %#x\n",
++	    se->name, se->gpii, why,
++	    rd(se->gpi, GPI_CH(0, CTX_0)), rd(se->gpi, GPI_CH(0, CTX_LEN)),
++	    rd(se->gpi, GPI_CH(0, CTX_BASE_LO)), rd(se->gpi, GPI_CH(0, CTX_RP_LO)),
++	    rd(se->gpi, GPI_CH(0, CTX_WP_LO)), rd(se->gpi, GPI_CH(1, CTX_0)),
++	    rd(se->gpi, GPI_CH(1, CTX_BASE_LO)), rd(se->gpi, GPI_CH(1, CTX_RP_LO)),
++	    rd(se->gpi, GPI_CH(1, CTX_WP_LO)));
++	printf("QGENI %s: GPII%u ev %#x len %#x base %#x rp %#x wp %#x; type %#x ch %#x ev %#x glob %#x err %#x scratch %#x/%#x\n",
++	    se->name, se->gpii, rd(se->gpi, GPI_EV(CTX_0)), rd(se->gpi, GPI_EV(CTX_LEN)),
++	    rd(se->gpi, GPI_EV(CTX_BASE_LO)), rd(se->gpi, GPI_EV(CTX_RP_LO)),
++	    rd(se->gpi, GPI_EV(CTX_WP_LO)), rd(se->gpi, GPI_TYPE_IRQ), rd(se->gpi, GPI_CH_IRQ),
++	    rd(se->gpi, GPI_EV_IRQ), rd(se->gpi, GPI_GLOB_IRQ), rd(se->gpi, GPI_ERROR_LOG),
++	    rd(se->gpi, GPI_SCRATCH0), rd(se->gpi, GPI_SCRATCH1));
++}
++
++int
++qgeni_gsi_probe(struct qgeni_se *se)
++{
++	if (!qgeni_clocks_running(se)) {
++		return ENXIO;
++	}
++	if (!se->gpi) {
++		se->gpi = ml_io_map((vm_offset_t)se->gpi_pa, 0x4000);
++		if (!se->gpi) {
++			return ENOMEM;
++		}
++	}
++	gsi_dump(se, "at handoff");
++	if (rd(se->gpi, GPI_CH(0, CTX_0)) || rd(se->gpi, GPI_CH(1, CTX_0)) ||
++	    rd(se->gpi, GPI_EV(CTX_0)) || rd(se->gpi, GPI_CH(0, CTX_BASE_LO)) ||
++	    rd(se->gpi, GPI_CH(1, CTX_BASE_LO)) || rd(se->gpi, GPI_EV(CTX_BASE_LO))) {
++		printf("QGENI %s: GPII%u is configured by another owner; not touched\n",
++		    se->name, se->gpii);
++		return EBUSY;
++	}
++	return 0;
++}
++
++/* Poll a context state after a command; clear the command's IRQ sources. */
++static int
++gsi_wait_state(struct qgeni_se *se, uint32_t ctx, unsigned want, const char *what)
++{
++	for (unsigned i = 0; i < 25000u; ++i) {         /* 250 ms, as Linux */
++		uint32_t v = rd(se->gpi, ctx);
++		if (CTX_STATE(v) == want) {
++			wr(se->gpi, GPI_CH_IRQ_CLR, rd(se->gpi, GPI_CH_IRQ));
++			wr(se->gpi, GPI_EV_IRQ_CLR, rd(se->gpi, GPI_EV_IRQ));
++			return 0;
++		}
++		delay(10);
++	}
++	printf("QGENI %s: %s timeout ctx=%#x\n", se->name, what, rd(se->gpi, ctx));
++	gsi_dump(se, "command timeout");
++	return ETIMEDOUT;
++}
++
++static void
++dma_flush(struct qgeni_se *se, uint32_t off, uint32_t len)
++{
++	flush_dcache64((addr64_t)(se->dma_pa + off), len, TRUE);
++}
++
++int
++qgeni_gsi_init(struct qgeni_se *se, unsigned proto)
++{
++	uint32_t fw = rd(se->base, SE_FW_REV);
++	if (((fw >> 8) & 0xffu) != proto) {
++		printf("QGENI %s: firmware protocol %u, need %u\n", se->name, (fw >> 8) & 0xffu, proto);
++		return ENODEV;
++	}
++	if (rd(se->base, SE_STATUS) & 0x1001u) {
++		printf("QGENI %s: engine busy (status=%#x)\n", se->name, rd(se->base, SE_STATUS));
++		return EBUSY;
++	}
++	int err = qgeni_gsi_probe(se);
++	if (err) {
++		return err;
++	}
++	err = qgeni_smmu_passthrough(se);
++	if (err) {
++		printf("QGENI %s: SMMU pass-through failed %d\n", se->name, err);
++		return err;
++	}
++	if (kmem_alloc_contig(kernel_map, &se->dma, DMA_BYTES, PAGE_MASK, 0, 0,
++	    KMA_DATA | KMA_ZERO | KMA_PERMANENT, VM_KERN_MEMORY_IOKIT) != KERN_SUCCESS) {
++		return ENOMEM;
++	}
++	ppnum_t pn = pmap_find_phys(kernel_pmap, (addr64_t)se->dma);
++	if (!pn) {
++		return ENOMEM;
++	}
++	se->dma_pa = ptoa_64(pn);
++	if (se->dma_pa + DMA_BYTES > (1ull << 36)) {
++		printf("QGENI %s: DMA memory %#llx above 36 bits\n", se->name, se->dma_pa);
++		return ERANGE;
++	}
++	dma_flush(se, 0, DMA_BYTES);
++
++	/* SE to GSI mode: geni_se_irq_clear + geni_se_select_gpi_mode. */
++	wr(se->base, SE_GSI_EVENT_EN, 0);
++	wr(se->base, SE_M_IRQ_CLR, 0xffffffffu);
++	wr(se->base, SE_S_IRQ_CLR, 0xffffffffu);
++	wr(se->base, DMA_GENERAL_IRQ_CLR_TX, 0xffffffffu);
++	wr(se->base, DMA_GENERAL_IRQ_CLR_RX, 0xffffffffu);
++	wr(se->base, SE_IRQ_EN, 0);
++	wr(se->base, SE_M_IRQ_EN, rd(se->base, SE_M_IRQ_EN) &
++	    ~(M_CMD_DONE | (1u << 30) | (1u << 26) | (1u << 27)));
++	wr(se->base, SE_DMA_MODE, 1);
++	wr(se->base, SE_GSI_EVENT_EN, rd(se->base, SE_GSI_EVENT_EN) | 0xfu);
++
++	/* GPII interrupt configuration (gpi_config_interrupts): latch status, no GIC use. */
++	wr(se->gpi, GPI_TYPE_IRQ_MSK, 0x4fu);
++	wr(se->gpi, GPI_IEOB_MSK, 1u);
++	wr(se->gpi, GPI_CH_IRQ_MSK, 3u);
++	wr(se->gpi, GPI_EV_IRQ_MSK, 1u);
++	wr(se->gpi, GPI_GLOB_IRQ_EN, 1u);
++	wr(se->gpi, GPI_GPII_IRQ_EN, 0xfu);
++	wr(se->gpi, GPI_MSI_LO, 0);
++	wr(se->gpi, GPI_MSI_HI, 0);
++	wr(se->gpi, GPI_SCRATCH0, 0);
++	wr(se->gpi, GPI_SCRATCH1, 0);
++	wr(se->gpi, GPI_INTSET, 1u);
++	wr(se->gpi, GPI_ERROR_LOG, 0);
++
++	/* Event ring: allocate, then program its context. */
++	uint64_t ev = se->dma_pa + EV_OFF;
++	wr(se->gpi, GPI_EV_CMD, CMD_ALLOCATE << 24);
++	if ((err = gsi_wait_state(se, GPI_EV(CTX_0), 1u, "event ring allocate"))) {
++		return err;
++	}
++	wr(se->gpi, GPI_EV(CTX_0), (16u << 24) | (1u << 16) | 2u);
++	wr(se->gpi, GPI_EV(CTX_LEN), EV_LEN);
++	wr(se->gpi, GPI_EV(CTX_BASE_LO), (uint32_t)ev);
++	wr(se->gpi, GPI_EV(CTX_BASE_HI), (uint32_t)(ev >> 32));
++	wr(se->gpi, GPI_EV_DB + 4u, (uint32_t)(ev >> 32));
++	wr(se->gpi, GPI_EV(EV_INT_MOD), 0);
++	wr(se->gpi, GPI_EV(EV_MSI_LO), 0);
++	wr(se->gpi, GPI_EV(EV_MSI_HI), 0);
++	wr(se->gpi, GPI_EV(EV_RP_UPD_LO), 0);
++	wr(se->gpi, GPI_EV(EV_RP_UPD_HI), 0);
++	se->ev_rp = 0;
++	se->ev_wp = EV_LEN - 16u;       /* all but one element to the engine */
++	wr(se->gpi, GPI_EV_DB, (uint32_t)(ev + se->ev_wp));
++
++	/* Channels 0 (TX, out) and 1 (RX, in): allocate, program, start. */
++	for (unsigned k = 0; k < 2u; ++k) {
++		uint64_t ring = se->dma_pa + (k ? RX_OFF : TX_OFF);
++		wr(se->gpi, GPI_CH_CMD, (CMD_ALLOCATE << 24) | k);
++		if ((err = gsi_wait_state(se, GPI_CH(k, CTX_0), 1u, "channel allocate"))) {
++			return err;
++		}
++		wr(se->gpi, GPI_CH(k, CTX_0), (16u << 24) | ((k ? 0u : 1u) << 3) | 2u);
++		wr(se->gpi, GPI_CH(k, CTX_LEN), CH_LEN);
++		wr(se->gpi, GPI_CH(k, CTX_BASE_LO), (uint32_t)ring);
++		wr(se->gpi, GPI_CH(k, CTX_BASE_HI), (uint32_t)(ring >> 32));
++		wr(se->gpi, GPI_CH_DB(k) + 4u, (uint32_t)(ring >> 32));
++		/* pair channel, protocol, SE id (msm_gpi_mmio.h SCRATCH_0) */
++		wr(se->gpi, GPI_CH(k, CH_SCRATCH(0)), ((k ? 0u : 1u) << 16) | (proto << 4) | se->seid);
++		wr(se->gpi, GPI_CH(k, CH_SCRATCH(1)), 0);
++		wr(se->gpi, GPI_CH(k, CH_SCRATCH(2)), 0);
++		wr(se->gpi, GPI_CH(k, CH_SCRATCH(3)), 0);
++		wr(se->gpi, GPI_CH(k, CH_QOS), 1u);
++	}
++	for (unsigned k = 0; k < 2u; ++k) {
++		wr(se->gpi, GPI_CH_CMD, (CMD_START << 24) | k);
++		if ((err = gsi_wait_state(se, GPI_CH(k, CTX_0), 2u, "channel start"))) {
++			return err;
++		}
++	}
++	se->tx_wp = se->rx_wp = 0;
++	se->proto = proto;
++	se->gsi = true;
++	gsi_dump(se, "started");
++	printf("QGENI %s: GSI mode on GPII%u, DMA %#llx\n", se->name, se->gpii, se->dma_pa);
++	return 0;
++}
++
++int
++qgeni_gsi_spi_setup(struct qgeni_se *se, unsigned mode, unsigned cs, unsigned hz,
++    unsigned cs_clk_delay)
++{
++	if (!se->gsi || se->proto != QGENI_PROTO_SPI || hz == 0 || cs > 3u) {
++		return EINVAL;
++	}
++	unsigned div = (XO_HZ + hz - 1u) / hz;
++	if (div == 0u || div > 0xfffu) {
++		return EINVAL;
++	}
++	/* CONFIG0: pack TX|RX, CPHA bit 4 / CPOL bit 5 of flags, word length - 4. */
++	uint32_t flags = ((mode & 1u) ? 0x10u : 0u) | ((mode & 2u) ? 0x20u : 0u);
++	se->spi_cfg[0] = (3u << 24) | (flags << 8) | (8u - 4u);
++	se->spi_cfg[1] = (cs_clk_delay & 0xffu) << 8;
++	se->spi_cfg[2] = div;                   /* clock source index 0 (XO RCG) */
++	se->spi_cs = cs;
++	printf("QGENI %s: GSI SPI mode %u %u Hz (div %u) cs-clk %u\n", se->name, mode,
++	    XO_HZ / div, div, cs_clk_delay & 0xffu);
++	return 0;
++}
++
++static void
++put_tre(struct qgeni_se *se, uint32_t ring, uint32_t *wp, uint32_t d0, uint32_t d1,
++    uint32_t d2, uint32_t d3)
++{
++	volatile uint32_t *t = (volatile uint32_t *)(se->dma + ring + *wp);
++	t[0] = d0;
++	t[1] = d1;
++	t[2] = d2;
++	t[3] = d3;
++	dma_flush(se, ring + *wp, 16u);
++	*wp = (*wp + 16u) & (CH_LEN - 1u);
++}
++
++int
++qgeni_gsi_spi_xfer(struct qgeni_se *se, const uint8_t *tx, uint8_t *rx, unsigned len)
++{
++	if (se->dead || !se->gsi || len == 0 || len > QGENI_GSI_MAX) {
++		return EIO;
++	}
++	uint8_t *txb = (uint8_t *)(se->dma + TXBUF_OFF), *rxb = (uint8_t *)(se->dma + RXBUF_OFF);
++	for (unsigned i = 0; i < len; ++i) {
++		txb[i] = tx ? tx[i] : 0xffu;
++	}
++	memset(rxb, 0, len);
++	dma_flush(se, TXBUF_OFF, 2u * QGENI_GSI_MAX);
++
++	uint64_t txpa = se->dma_pa + TXBUF_OFF, rxpa = se->dma_pa + RXBUF_OFF;
++	/* RX: DMA element with IEOT so the RX side reports its completion too. */
++	put_tre(se, RX_OFF, &se->rx_wp, (uint32_t)rxpa, (uint32_t)(rxpa >> 32), len, 0x00100200u);
++	/* TX: CONFIG0 (chained), GO full duplex (link+chain), DMA with IEOT. */
++	put_tre(se, TX_OFF, &se->tx_wp, se->spi_cfg[0], se->spi_cfg[1], se->spi_cfg[2], 0x00220001u);
++	put_tre(se, TX_OFF, &se->tx_wp, (se->spi_cs << 8) | 3u, 0, len, 0x00200801u);
++	put_tre(se, TX_OFF, &se->tx_wp, (uint32_t)txpa, (uint32_t)(txpa >> 32), len, 0x00100200u);
++	__asm__ volatile ("dsb sy" ::: "memory");
++	wr(se->gpi, GPI_CH_DB(1), (uint32_t)(se->dma_pa + RX_OFF + se->rx_wp));
++	wr(se->gpi, GPI_CH_DB(0), (uint32_t)(se->dma_pa + TX_OFF + se->tx_wp));
++
++	bool tx_done = false, rx_done = false;
++	unsigned rx_len = 0;
++	int err = 0;
++	for (unsigned i = 0; i < 20000u && !(tx_done && rx_done) && !err; ++i) {   /* ~100 ms */
++		uint32_t hw = rd(se->gpi, GPI_EV(CTX_RP_LO)) - (uint32_t)(se->dma_pa + EV_OFF);
++		if (hw >= EV_LEN) {
++			printf("QGENI %s: event RP %#x outside ring\n", se->name, hw);
++			err = EIO;
++			break;
++		}
++		unsigned consumed = 0;
++		while (se->ev_rp != hw) {
++			dma_flush(se, EV_OFF + se->ev_rp, 16u);
++			volatile uint32_t *e = (volatile uint32_t *)(se->dma + EV_OFF + se->ev_rp);
++			uint32_t d2 = e[2], d3 = e[3];
++			unsigned type = (d3 >> 16) & 0xffu, chid = d3 >> 24, code = d2 >> 24;
++			if (type == 0x22u) {            /* transfer completion */
++				if (code == 16u) {
++					printf("QGENI %s: transfer error event ch%u d2=%#x d3=%#x\n",
++					    se->name, chid, d2, d3);
++					err = EIO;
++				} else if (code == 2u || code == 1u) {   /* EOT / success */
++					if (chid == 0u) {
++						tx_done = true;
++					} else {
++						rx_done = true;
++						rx_len = d2 & 0xffffffu;
++					}
++				}
++			} else if (type != 0x31u) {
++				printf("QGENI %s: event type %#x ch%u d2=%#x\n", se->name, type, chid, d2);
++			}
++			se->ev_rp = (se->ev_rp + 16u) & (EV_LEN - 1u);
++			consumed++;
++		}
++		if (consumed) {
++			se->ev_wp = (se->ev_wp + 16u * consumed) & (EV_LEN - 1u);
++			wr(se->gpi, GPI_EV_DB, (uint32_t)(se->dma_pa + EV_OFF + se->ev_wp));
++			wr(se->gpi, GPI_IEOB_CLR, 1u);
++		}
++		if (!(tx_done && rx_done)) {
++			delay(5);
++		}
++	}
++	if (!err && !(tx_done && rx_done)) {
++		printf("QGENI %s: GSI transfer timeout tx=%d rx=%d\n", se->name, tx_done, rx_done);
++		err = ETIMEDOUT;
++	}
++	if (err) {
++		gsi_dump(se, "transfer failed");
++		se->dead = true;        /* no recovery yet: stop using the engine */
++		return err;
++	}
++	dma_flush(se, RXBUF_OFF, QGENI_GSI_MAX);
++	if (rx) {
++		memcpy(rx, rxb, len);
++	}
++	if (rx_len && rx_len != len) {
++		printf("QGENI %s: RX length %u of %u\n", se->name, rx_len, len);
++	}
++	return 0;
++}
+ #endif /* ARM64_BOARD_CONFIG_FP6 */
+--- a/bsd/dev/qcom_geni.h
++++ b/bsd/dev/qcom_geni.h
+@@ -39,6 +39,18 @@
+ 	unsigned                tx_depth, rx_depth;     /* FIFO words */
+ 	bool                    dead;
+ 	uint32_t                irq_seen;               /* diagnostics */
++
++	/* GSI (GPI DMA) mode, for SEs whose firmware disables FIFO mode. */
++	uint64_t                gpi_pa;                 /* GPI instance (GPII) region */
++	unsigned                gpii, seid;
++	uint64_t                smmu_pa;
++	uint16_t                sids[2];                /* GPI engine, QUP wrapper */
++	vm_offset_t             gpi, dma;
++	uint64_t                dma_pa;
++	uint32_t                tx_wp, rx_wp, ev_rp, ev_wp;     /* ring offsets */
++	uint32_t                spi_cfg[3];             /* CONFIG0 dwords 0-2 */
++	unsigned                spi_cs;
++	bool                    gsi;
+ };
+ 
+ int qgeni_map(struct qgeni_se *se);
+@@ -56,4 +68,22 @@
+ /* One full-duplex transfer with CS held throughout. rx may be NULL. */
+ int qgeni_spi_xfer(struct qgeni_se *se, const uint8_t *tx, uint8_t *rx, unsigned len);
+ 
++/* True when the firmware has disabled FIFO mode (GSI only). Clocks must run. */
++bool qgeni_fifo_disabled(struct qgeni_se *se);
++/*
++ * Make the SE's DMA streams reach physical memory: accept an existing
++ * bypass mapping or unmatched-stream bypass, otherwise add a bypass bank.
++ */
++int qgeni_smmu_passthrough(struct qgeni_se *se);
++/* Read only: GPII state. Returns 0 if its channels and event ring are free. */
++int qgeni_gsi_probe(struct qgeni_se *se);
++/* GSI mode: SE setup, rings, allocate and start the GPII's two channels. */
++int qgeni_gsi_init(struct qgeni_se *se, unsigned proto);
++/* SPI parameters for later GSI transfers (sent as a CONFIG0 element). */
++int qgeni_gsi_spi_setup(struct qgeni_se *se, unsigned mode, unsigned cs,
++    unsigned hz, unsigned cs_clk_delay);
++/* One full-duplex SPI transfer through GPI DMA, len <= QGENI_GSI_MAX. */
++#define QGENI_GSI_MAX           512u
++int qgeni_gsi_spi_xfer(struct qgeni_se *se, const uint8_t *tx, uint8_t *rx, unsigned len);
++
+ #endif /* _BSD_DEV_QCOM_GENI_H_ */
