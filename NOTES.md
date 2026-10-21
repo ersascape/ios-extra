@@ -11,6 +11,16 @@
   resulting `sweet_usb.c` passed syntax compilation against the CI build tree.
   CI run `39537652816` passed for patches 0111–0112; patch 0035 already
   registers the permissive Sandbox policy for FP6.
+- Live test of the 0111 image disproved the assumption that the raw sender was
+  fixed: USB Ethernet came up and ping worked, but the host captured no UDP
+  packets. The phone then reported raw UDP error 55, which is `ENOBUFS` on
+  XNU/Darwin. In this driver that means the ECM transmit queue filled while
+  the logger was sending its backlog in a tight burst. Patch 0114 adds
+  socket-first delivery with the raw frame path as fallback and retries the
+  same ring position after a 10 ms queue-drain delay when raw output returns
+  `ENOBUFS`. Patch application, CI compilation, and a new phone capture are
+  pending; do not treat USB log delivery as fixed until packets arrive in a
+  host capture.
 - Patch 0112 adds `sweet_noconsole=1` as an alias for
   `sweetfb_noconsole=1`. Both mute framebuffer console drawing after the first
   GUI swap; persistent logging and panic drawing are preserved.
