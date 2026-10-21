@@ -4,13 +4,17 @@
 
 - Updated `tools/fp6-package.py` so every generated FP6 image omits
   `-enable_kprintf_spam` and enables `sweetfb_noconsole=1`,
-  `sweet_noconsole=1`, and `sweetfb_hz=30`. This keeps the normal framebuffer
-  free of routine kprintf output after the first GUI swap. The kernel ring and
+  `sweet_noconsole=1`. This keeps the normal framebuffer free of routine
+  kprintf output after the first GUI swap. The kernel ring and
   USB logger remain enabled; panic output is still allowed to draw, and output
   before the GUI swap may still appear on screen. This is a package-default
   change only; it does not alter the kernel.
-- Pending CI build on `main` for latest kernel and FP6 images. No phone test
-  has been run for these arguments.
+- Locally packaged the latest successful FP6 kernel from CI run `39569106154`
+  (kernel SHA-256 `601288b0a5ae4ac1af9d870a269673205be1856b75f72f7da48131c809bdf100`),
+  reusing that run's ADT and stock DTB. Image:
+  `/tmp/fp6-quiet-local-39569106154/fp6-shim-ufs-root-quiet.img`, SHA-256
+  `3626c0706a51ea67ff1af74f0613dc5a370e7e8efb5cfeb481789fe53271869e`.
+  Header-v2 contents validated locally. No phone test has been run.
 
 ## Codex Adreno/PAS work merged into main (2026-10-21)
 

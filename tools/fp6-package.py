@@ -13,12 +13,11 @@ import mkpayload
 ROOT = Path(__file__).resolve().parents[1]
 FP6_DEBUG_ARGS = (
     'debug=0xc serial=3 cpus=8 keepsyms=1 -noprogress '
-    'sweetfb_noconsole=1 sweet_noconsole=1 sweetfb_hz=30'
+    'sweetfb_noconsole=1 sweet_noconsole=1'
 )
 FP6_UFS_ARGS = (
     'rd=ufsroot0 fp6usb=2 unentitled_ios_sim_launch=1 ignition_level=1 '
-    'wdt_test=no_user_checkin ufsrw=1 rootrw=1 launchd_unsecure_cache=1 wdt=-1 '
-    'sweetfb_noconsole=1 sweet_noconsole=1 sweetfb_hz=30'
+    'wdt_test=no_user_checkin ufsrw=1 rootrw=1 launchd_unsecure_cache=1 wdt=-1'
 )
 
 def main():
