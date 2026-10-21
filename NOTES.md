@@ -1,5 +1,17 @@
 # ios-extra — current state
 
+## FP6 quiet-console package defaults (2026-10-21)
+
+- Updated `tools/fp6-package.py` so every generated FP6 image omits
+  `-enable_kprintf_spam` and enables `sweetfb_noconsole=1`,
+  `sweet_noconsole=1`, and `sweetfb_hz=30`. This keeps the normal framebuffer
+  free of routine kprintf output after the first GUI swap. The kernel ring and
+  USB logger remain enabled; panic output is still allowed to draw, and output
+  before the GUI swap may still appear on screen. This is a package-default
+  change only; it does not alter the kernel.
+- Pending CI build on `main` for latest kernel and FP6 images. No phone test
+  has been run for these arguments.
+
 ## Codex Adreno/PAS work merged into main (2026-10-21)
 
 - Merged the uncommitted `fp6-adreno-gen711` working state (Codex): patch
