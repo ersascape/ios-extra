@@ -21,10 +21,11 @@
 - Host GPU probe suite passes, including the new SMMU inventory case; the six
   GMU firmware parser tests pass and the staging shell script is tested against
   the local pinned blob. CI runs `39588975030` and `39589703230` stopped in
-  staging before compilation: first the parser path was wrong, then macOS Bash
-  3.2 rejected an empty array under `set -u`. Both issues are fixed; the next
-  CI run is pending. No GMU firmware has been loaded and no GPU commands have
-  executed.
+  staging: the parser path was wrong, then macOS Bash 3.2 rejected an empty
+  array under `set -u`. Run `39590152515` passed staging but found the inventory
+  calling a SWEET-only MMIO helper; an FP6-local ordered read helper is now in
+  place and host tests pass. A follow-up CI run is pending. No GMU firmware has
+  been loaded and no GPU commands have executed.
 
 ## FP6 PAS/ZAP retest image (2026-10-21)
 

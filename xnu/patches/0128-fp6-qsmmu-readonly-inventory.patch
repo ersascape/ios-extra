@@ -10,7 +10,7 @@ diff --git a/bsd/dev/sweet_gpu.c b/bsd/dev/sweet_gpu.c
 +	fp6_qcom_pas_zap_load();
 +	fp6_smmu_inventory();
  }
-@@ -2260,0 +2261,125 @@
+@@ -2260,0 +2261,133 @@
 +
 +/* Read-only inspection of the dedicated FP6 qsmmu-v500. It does not claim
 + * SID ownership, allocate a context, issue ATOS, or change SMMU state. */
@@ -38,6 +38,14 @@ diff --git a/bsd/dev/sweet_gpu.c b/bsd/dev/sweet_gpu.c
 +#define FP6_SMMU_MAX_STREAMS  128u
 +#define FP6_SMMU_MAX_CBS      128u
 +
++static uint32_t
++fp6_smmu_read32(vm_offset_t base, uint32_t off)
++{
++	uint32_t value = *(volatile uint32_t *)(base + off);
++	__asm__ volatile("dmb oshld" ::: "memory");
++	return value;
++}
++
 +static void
 +fp6_smmu_inventory(void)
 +{
@@ -54,12 +62,12 @@ diff --git a/bsd/dev/sweet_gpu.c b/bsd/dev/sweet_gpu.c
 +		printf("QCOM SMMU: qsmmu-v500 map failed; no writes attempted\n");
 +		return;
 +	}
-+	uint32_t id0 = gpu_read32(base, FP6_SMMU_IDR0);
-+	uint32_t id1 = gpu_read32(base, FP6_SMMU_IDR1);
-+	uint32_t id2 = gpu_read32(base, FP6_SMMU_IDR2);
-+	uint32_t id7 = gpu_read32(base, FP6_SMMU_IDR7);
-+	uint32_t scr0 = gpu_read32(base, FP6_SMMU_SCR0);
-+	uint32_t gfsr = gpu_read32(base, FP6_SMMU_GFSR);
++	uint32_t id0 = fp6_smmu_read32(base, FP6_SMMU_IDR0);
++	uint32_t id1 = fp6_smmu_read32(base, FP6_SMMU_IDR1);
++	uint32_t id2 = fp6_smmu_read32(base, FP6_SMMU_IDR2);
++	uint32_t id7 = fp6_smmu_read32(base, FP6_SMMU_IDR7);
++	uint32_t scr0 = fp6_smmu_read32(base, FP6_SMMU_SCR0);
++	uint32_t gfsr = fp6_smmu_read32(base, FP6_SMMU_GFSR);
 +	unsigned numsmrg = id0 & FP6_SMMU_ID0_NUMSMRG;
 +	unsigned numcb = id1 & 0xffu;
 +	unsigned pgshift = (id1 & FP6_SMMU_ID1_PAGESIZE) ? 16u : 12u;
@@ -90,14 +98,14 @@ diff --git a/bsd/dev/sweet_gpu.c b/bsd/dev/sweet_gpu.c
 +			unsigned index = matching ? i : sid;
 +			uint32_t smr = 0;
 +			if (matching) {
-+				smr = gpu_read32(base, FP6_SMMU_SMR(index));
++				smr = fp6_smmu_read32(base, FP6_SMMU_SMR(index));
 +				if (!(smr & FP6_SMMU_SMR_VALID))
 +					continue;
 +				uint32_t mask = (smr >> 16) & 0x7fffu;
 +				if ((((smr & 0xffffu) ^ sid) & ~mask & 0xffffu) != 0)
 +					continue;
 +			}
-+			uint32_t s2cr = gpu_read32(base, FP6_SMMU_S2CR(index));
++			uint32_t s2cr = fp6_smmu_read32(base, FP6_SMMU_S2CR(index));
 +			unsigned type = (s2cr >> 16) & 3u;
 +			unsigned cb = s2cr & 0xffu;
 +			const char *route = type == 0 ? "translate" : type == 1 ? "bypass" :
@@ -120,13 +128,13 @@ diff --git a/bsd/dev/sweet_gpu.c b/bsd/dev/sweet_gpu.c
 +				printf("QCOM SMMU: SID %u CB %u context window outside mapping; skipped\n", sid, cb);
 +				continue;
 +			}
-+			uint32_t cbar = gpu_read32(base, cbar_off);
-+			uint32_t cba2r = gpu_read32(base, cba2r_off);
-+			uint32_t sctlr = gpu_read32(base, (uint32_t)cb_off + FP6_SMMU_CB_SCTLR);
-+			uint32_t tcr2 = gpu_read32(base, (uint32_t)cb_off + FP6_SMMU_CB_TCR2);
-+			uint32_t ttbr0_lo = gpu_read32(base, (uint32_t)cb_off + FP6_SMMU_CB_TTBR0);
-+			uint32_t ttbr0_hi = gpu_read32(base, (uint32_t)cb_off + FP6_SMMU_CB_TTBR0 + 4u);
-+			uint32_t tcr = gpu_read32(base, (uint32_t)cb_off + FP6_SMMU_CB_TCR);
++			uint32_t cbar = fp6_smmu_read32(base, cbar_off);
++			uint32_t cba2r = fp6_smmu_read32(base, cba2r_off);
++			uint32_t sctlr = fp6_smmu_read32(base, (uint32_t)cb_off + FP6_SMMU_CB_SCTLR);
++			uint32_t tcr2 = fp6_smmu_read32(base, (uint32_t)cb_off + FP6_SMMU_CB_TCR2);
++			uint32_t ttbr0_lo = fp6_smmu_read32(base, (uint32_t)cb_off + FP6_SMMU_CB_TTBR0);
++			uint32_t ttbr0_hi = fp6_smmu_read32(base, (uint32_t)cb_off + FP6_SMMU_CB_TTBR0 + 4u);
++			uint32_t tcr = fp6_smmu_read32(base, (uint32_t)cb_off + FP6_SMMU_CB_TCR);
 +			printf("QCOM SMMU: SID %u CB%u CBAR=0x%08x CBA2R=0x%08x SCTLR=0x%08x TCR2=0x%08x TTBR0=0x%08x%08x TCR=0x%08x\n",
 +			    sid, cb, cbar, cba2r, sctlr, tcr2, ttbr0_hi, ttbr0_lo, tcr);
 +		}

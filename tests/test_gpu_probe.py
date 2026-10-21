@@ -25,10 +25,10 @@ class GPUProbeTests(unittest.TestCase):
                                     str(patch)], cwd=work, check=True)
             source = (work / 'bsd/dev/sweet_gpu.c').read_text()
             barrier = '__asm__ volatile("dmb oshld" ::: "memory");'
-            self.assertEqual(source.count(barrier), 3)  # SWEET 32/64-bit + FP6 read barrier
+            self.assertEqual(source.count(barrier), 4)  # SWEET 32/64-bit + FP6 GPUCC/SMMU barriers
             for name in ('dmb oshld', 'dmb oshst', 'dsb osh'):
                 text = '__asm__ volatile("%s" ::: "memory");' % name
-                self.assertEqual(source.count(text), 3 if name == 'dmb oshld' else 2)
+                self.assertEqual(source.count(text), 4 if name == 'dmb oshld' else 2)
                 source = source.replace(text, '__asm__ volatile("" ::: "memory");')
             store32 = '*(volatile uint32_t *)(base + off) = value;'
             self.assertEqual(source.count(store32), 1)
