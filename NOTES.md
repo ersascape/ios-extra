@@ -9,8 +9,8 @@
   `ENOBUFS`, and keeps the ring cursor unchanged on failure so the chunk is
   retried. A clean replay of patches 0099–0112 applied successfully; the
   resulting `sweet_usb.c` passed syntax compilation against the CI build tree.
-  CI run `39537652816` passed for patches 0111–0112. Its full artifact is a
-  pre-Sandbox-registration build; phone delivery remains unverified.
+  CI run `39537652816` passed for patches 0111–0112; patch 0035 already
+  registers the permissive Sandbox policy for FP6.
 - Patch 0112 adds `sweet_noconsole=1` as an alias for
   `sweetfb_noconsole=1`. Both mute framebuffer console drawing after the first
   GUI swap; persistent logging and panic drawing are preserved.
@@ -25,6 +25,14 @@
   launchd, watchdog, and framebuffer arguments used in the previous test
   packages. SWEET-only `sweetnull`/heap-scan/IOKit-trace selectors are not
   treated as active FP6 diagnostics.
+- Commit `fe6a8dc` builds successfully in CI run `39539461187`. The CI boot
+  packaging job skipped because the stock FP6 DTB is not stored in CI; using
+  the existing local `/tmp/fp6-stock.dtb`, the CI kernel and generated ADT
+  were packaged and header-v2 contents verified at
+  `/tmp/fp6-debug-build-39539461187/ufs-root-debug/fp6-shim-ufs-root-debug.img`.
+  SHA-256: `f420d3d25ddab3e013b2159fc62b05b9be1c8506c52e90322f8a764d39805333`.
+  The package uses `cpus=8`, `fp6usb=2`, verbose diagnostics, UFS-root/write,
+  watchdog, and framebuffer arguments; it has not yet been phone-tested.
 - Updated `tools/sweet-root-tweaks.py` to change any launchd stdout/stderr
   override from `/dev/console` to `/dev/null`; the diagnostic-only
   `tools/patch-launchd-plist.py` uses `/dev/null` as well. The current local
