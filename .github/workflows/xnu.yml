@@ -25,6 +25,7 @@ on:
     branches: [main]
     paths:
       - "xnu/patches/**"
+      - "xnu/helpers/**"
       - "shim/**"
       - "tools/mkadt.py"
       - "tools/mkpayload.py"

@@ -46,9 +46,20 @@ static int fp6_gmu_loader_upload(const struct fp6_gmu_loader_ops *ops, void *ctx
 	}
 	for (i = 0; i < FP6_GMU_FW_BLOCK_COUNT; i++) {
 		const struct fp6_gmu_fw_block *b = &fp6_gmu_fw_blocks[i];
+		int kind = fp6_gmu_loader_vma(b->address, b->size);
 		if (!b->data || (b->address & 3) || (b->size & 3) ||
 		    b->type != 0xefbeaddeu || b->value != 0xefbeaddeu ||
-		    !fp6_gmu_loader_vma(b->address, b->size)) return -2;
+		    !kind) return -2;
+		if (kind == 2 || kind == 4) {
+			unsigned j;
+			for (j = 0; j < FP6_GMU_FW_PREALLOCATION_COUNT; j++) {
+				const struct fp6_gmu_fw_preallocation *p = &fp6_gmu_fw_preallocations[j];
+				if (p->address <= b->address &&
+				    (uint64_t)b->address + b->size <= (uint64_t)p->address + p->size)
+					break;
+			}
+			if (j == FP6_GMU_FW_PREALLOCATION_COUNT) return -2;
+		}
 	}
 	for (i = 0; i < FP6_GMU_FW_PREALLOCATION_COUNT; i++) {
 		const struct fp6_gmu_fw_preallocation *p = &fp6_gmu_fw_preallocations[i];

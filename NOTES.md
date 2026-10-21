@@ -1,5 +1,21 @@
 # ios-extra — current state
 
+## Stock SMMU clock prerequisites and battery protocol (2026-10-21)
+
+- Patch0132 votes the four stock SMMU clocks in DT order, with bounded
+  Linux branch halt/HWCG handling. It borrows only an already-powered CX
+  domain and running hub parent; full regulator/RPMh/hub ownership is still
+  needed if either is off. Context refusal is not successful translation.
+  Agent reports host harness passed; no phone result or kernel build yet.
+- Fuelgauge audit and transport-independent numeric GET protocol are in
+  `docs/FP6_FUELGAUGE_AUDIT.md` and `xnu/protocol/fp6_battery_glink.h`.
+  Stock reporting uses ADSP PMIC GLINK, not the old PM6150 polling path.
+  No live transport or measured gauge readings exist yet.
+- SpringBoard agent compared the local root catalog against original OS.dmg:
+  matching SHA256 `0a53453f1e096f70ccb38618b0b8c32fa950f71dc3b559c4ce556825517aa04d`.
+  This excludes corruption/omission of that local catalog, not a runtime
+  rendition/trait lookup failure or a difference on the running phone.
+
 ## Gen8 firmware upload layer (2026-10-21)
 
 - Added `xnu/helpers/fp6_gmu_loader.h`, staged alongside the pinned generated

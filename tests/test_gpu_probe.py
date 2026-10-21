@@ -118,6 +118,8 @@ static int probe_printf(const char *, ...);
 static uint32_t gcc[0x90000 / 4], cc[0x9000 / 4];
 static uint32_t fp6_gpucc[0x9800 / 4], fp6_gpucc_before[0x9800 / 4];
 static uint32_t fp6_smmu[0x40000 / 4];
+static uint32_t fp6_gcc_gpu[0x1000 / 4];
+static int fp6_clock_refuse = -1;
 #define FP6_TEST_CB 2u
 #define FP6_TEST_CB_BASE 0x22000u
 static unsigned fp6_ats64_writes;
@@ -161,6 +163,10 @@ static int smmu_sticky; /* hardware that refuses to take the ABL default back in
 static void test_store32(vm_offset_t base, uint32_t off, uint32_t value)
 {
     all_mmio_writes++;
+    if ((base == (vm_offset_t)fp6_gpucc &&
+        ((fp6_clock_refuse == 0 && off == 0x7000) || (fp6_clock_refuse == 3 && off == 0x90bc))) ||
+        (base == (vm_offset_t)fp6_gcc_gpu &&
+        ((fp6_clock_refuse == 1 && off == 0x10) || (fp6_clock_refuse == 2 && off == 0x18)))) return;
     if (irq_model && base == (vm_offset_t)gmu_mem && (off == 0x24c18 || off == 0x1464c)) {
         assert(irq_trace_n < 8);
         irq_trace_off[irq_trace_n] = off; irq_trace_value[irq_trace_n++] = value;
@@ -422,6 +428,7 @@ vm_offset_t ml_io_map(vm_offset_t physical, vm_size_t size)
         fp6_smmu_maps++;
         return (vm_offset_t)fp6_smmu;
     }
+    if (physical == 0x00171000 && size == sizeof(fp6_gcc_gpu)) return (vm_offset_t)fp6_gcc_gpu;
     map_calls++;
     if (physical == GPU_GCC_PA && size == GPU_GCC_SIZE)
         return fail_gcc ? 0 : (vm_offset_t)gcc;
@@ -1549,6 +1556,38 @@ int main(void)
     assert(strstr(output, "CB2 CBAR=0x00001234 CBA2R=0x00005678"));
     assert(strstr(output, "read-only inventory complete; no writes or ATOS requests"));
     puts("PASS: FP6 GPU SMMU route inventory is opt-in and read-only");
+
+    /* Clock prerequisites use the exact stock DT consumer order, borrow the
+     * powered CX domain, and release only enable votes acquired here. */
+    memset(fp6_gpucc, 0, sizeof(fp6_gpucc));
+    memset(fp6_gcc_gpu, 0, sizeof(fp6_gcc_gpu));
+    struct fp6_smmu_clocks clocks = {0};
+    all_mmio_writes = 0;
+    assert(!fp6_smmu_clocks_get(&clocks) && all_mmio_writes == 0);
+    fp6_gpucc[0x9080/4] = 0x80000000u;
+    fp6_gpucc[0x93ec/4] = 0x80000000u;
+    assert(!fp6_smmu_clocks_get(&clocks) && all_mmio_writes == 0);
+    fp6_gpucc[0x93ec/4] = 0;
+    fp6_gcc_gpu[0x10/4] = 2; /* HWCG remains untouched. */
+    assert(fp6_smmu_clocks_get(&clocks));
+    assert(fp6_gpucc[0x7000/4] == 1 && fp6_gpucc[0x90bc/4] == 1);
+    assert(fp6_gcc_gpu[0x10/4] == 3 && fp6_gcc_gpu[0x18/4] == 1);
+    fp6_smmu_clocks_put(&clocks);
+    assert(fp6_gpucc[0x7000/4] == 0 && fp6_gpucc[0x90bc/4] == 0);
+    assert(fp6_gcc_gpu[0x10/4] == 2 && fp6_gcc_gpu[0x18/4] == 0);
+    for (unsigned n = 0; n < 4; n++) {
+        fp6_clock_refuse = (int)n;
+        assert(!fp6_smmu_clocks_get(&clocks));
+        assert(!clocks.acquired && fp6_gpucc[0x7000/4] == 0 && fp6_gpucc[0x90bc/4] == 0);
+        assert(fp6_gcc_gpu[0x10/4] == 2 && fp6_gcc_gpu[0x18/4] == 0);
+    }
+    fp6_clock_refuse = -1;
+    fp6_gpucc[0x7000/4] = fp6_gpucc[0x90bc/4] = 1;
+    fp6_gcc_gpu[0x10/4] = 3; fp6_gcc_gpu[0x18/4] = 1;
+    all_mmio_writes = 0;
+    assert(fp6_smmu_clocks_get(&clocks)); fp6_smmu_clocks_put(&clocks);
+    assert(all_mmio_writes == 0); /* Preserve all four borrowed votes. */
+    puts("PASS: FP6 SMMU stock clock prerequisite votes and rollback");
 
     /* fp6smmu=2: map one 4 KiB GMU SID5 IOVA, verify by ATOS, then roll back. */
     memset(fp6_smmu, 0, sizeof(fp6_smmu));

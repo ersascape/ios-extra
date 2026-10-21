@@ -1,0 +1,127 @@
+diff --git a/bsd/dev/sweet_gpu.c b/bsd/dev/sweet_gpu.c
+--- a/bsd/dev/sweet_gpu.c
++++ b/bsd/dev/sweet_gpu.c
+@@ -2343,6 +2343,102 @@
+ 	__asm__ volatile("dsb osh" ::: "memory");
+ }
+ 
++
++/* The FP6 stock kgsl-smmu node lists CX GDSC followed by these four
++ * clock consumers. Linux arm_smmu_power_on enables the regulator before
++ * clocks. Borrow only an already-on CX domain here; RPMh power ownership
++ * and hub parent rate programming require the full GMU power driver. */
++struct fp6_smmu_clocks {
++	vm_offset_t gpucc, gcc;
++	uint32_t old[4];
++	unsigned acquired;
++};
++
++static vm_offset_t
++fp6_smmu_clock_base(struct fp6_smmu_clocks *clocks, unsigned i)
++{
++	return i == 1 || i == 2 ? clocks->gcc : clocks->gpucc;
++}
++
++static uint32_t
++fp6_smmu_clock_offset(unsigned i)
++{
++	static const uint32_t offsets[] = { 0x7000u, 0x10u, 0x18u, 0x90bcu };
++	return offsets[i];
++}
++
++static void
++fp6_smmu_clocks_put(struct fp6_smmu_clocks *clocks)
++{
++	/* Reverse DT order; preserve status/HWCG bits and preexisting votes.
++	 * These are single-owner boot experiments, not a shared clock provider. */
++	while (clocks->acquired) {
++		unsigned i = --clocks->acquired;
++		if (clocks->old[i] & 1u) continue;
++		vm_offset_t base = fp6_smmu_clock_base(clocks, i);
++		uint32_t off = fp6_smmu_clock_offset(i);
++		uint32_t now = fp6_smmu_read32(base, off);
++		fp6_smmu_write32(base, off, now & ~1u);
++		delay(10); /* Linux voted-disable / HALT_DELAY policy. */
++		if (fp6_smmu_read32(base, off) & 1u)
++			printf("QCOM SMMU: clock vote release failed index=%u\n", i);
++	}
++}
++
++static int
++fp6_smmu_clocks_get(struct fp6_smmu_clocks *clocks)
++{
++	clocks->acquired = 0;
++	clocks->gpucc = ml_io_map(FP6_GPUCC_PA, FP6_GPUCC_SIZE);
++	/* GCC base 0x00100000 plus GPU branch window 0x71000. */
++	clocks->gcc = ml_io_map(0x00171000u, 0x1000u);
++	if (!clocks->gpucc || !clocks->gcc) {
++		printf("QCOM SMMU: clock windows unavailable; no context writes\n");
++		return 0;
++	}
++	uint32_t cx = fp6_smmu_read32(clocks->gpucc, 0x9080u);
++	uint32_t hub = fp6_smmu_read32(clocks->gpucc, 0x93ecu);
++	printf("QCOM SMMU: prerequisites CX_GDSCR=0x%08x HUB_CMD=0x%08x\n", cx, hub);
++	if (cx == 0xffffffffu || !(cx & (1u << 31)) || (cx & 1u)) {
++		printf("QCOM SMMU: CX domain is not enabled; needs RPMh/CX power before context access\n");
++		return 0;
++	}
++	/* AHB inherits hub_div/hub_clk_src. Do not select a PLL or change rate.
++	 * ROOT_OFF means this bounded clock-only path cannot supply its parent. */
++	if (hub == 0xffffffffu || (hub & (1u << 31))) {
++		printf("QCOM SMMU: hub parent is off; needs hub clock/power setup\n");
++		return 0;
++	}
++	for (unsigned i = 0; i < 4; i++) {
++		vm_offset_t base = fp6_smmu_clock_base(clocks, i);
++		uint32_t off = fp6_smmu_clock_offset(i);
++		uint32_t before = fp6_smmu_read32(base, off);
++		clocks->old[i] = before;
++		printf("QCOM SMMU: clock index=%u before=0x%08x\n", i, before);
++		if (before == 0xffffffffu) goto fail;
++		clocks->acquired = i + 1;
++		if (!(before & 1u)) fp6_smmu_write32(base, off, before | 1u);
++		uint32_t after = fp6_smmu_read32(base, off);
++		if (!(after & 1u)) goto fail;
++		/* gcc_memnoc HWCG skips HALT; SNOC/AHB use 10us delay.
++		 * Only the SMMU vote and non-HWCG memnoc poll branch-off. */
++		if (i >= 2) delay(10);
++		else if (!(i == 1 && (after & 2u))) {
++			unsigned poll;
++			for (poll = 0; poll < 1000; poll++) {
++				if (!(fp6_smmu_read32(base, off) & (1u << 31))) break;
++				delay(1);
++			}
++			if (poll == 1000) goto fail;
++		}
++	}
++	return 1;
++fail:
++	printf("QCOM SMMU: prerequisite clock failed index=%u; no context writes\n", clocks->acquired ? clocks->acquired - 1 : 0);
++	fp6_smmu_clocks_put(clocks);
++	return 0;
++}
++
+ static void
+ fp6_smmu_inventory(void)
+ {
+@@ -2501,6 +2597,8 @@
+ 		printf("QCOM SMMU: live test refused invalid table PA=0x%llx\n", (unsigned long long)table_pa);
+ 		return;
+ 	}
++	struct fp6_smmu_clocks clocks = { 0 };
++	if (!fp6_smmu_clocks_get(&clocks)) return;
+ 	/* Four-level layout for the 32-bit IOVA aperture; L1/L2/L3 at +4K/+8K/+12K. */
+ 	volatile uint64_t *l1 = (volatile uint64_t *)(uintptr_t)table_va;
+ 	volatile uint64_t *l2 = (volatile uint64_t *)(uintptr_t)(table_va + 0x1000);
+@@ -2612,6 +2710,11 @@
+ 	    fp6_smmu_read32(base, smr_off) != old_smr ||
+ 	    fp6_smmu_read32(base, s2cr_off) != old_s2cr) contained = 0;
+ report:
++	/* Complete SMMU writes before withdrawing any clock vote. If containment
++	 * failed, retain votes because an enabled context may still need them. */
++	(void)fp6_smmu_read32(base, FP6_SMMU_IDR0);
++	if (contained) fp6_smmu_clocks_put(&clocks);
++	else printf("QCOM SMMU: retaining clock votes after containment failure\n");
+ 	if (failure != NULL)
+ 		printf("QCOM SMMU: setup failed: %s +0x%x want=0x%08x got=0x%08x\n",
+ 		    failure, fail_off, fail_want, fail_got);
