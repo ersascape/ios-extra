@@ -21,13 +21,22 @@
 - Image (wifimac ADT, console muted, `fp6touch=2`):
   `/tmp/fp6-touch-39554419254/img/fp6-shim-ufs-root-touch.img`, SHA256
   `39175f461e09eeb9dd2f1af9ecf225841cee49f28646f4a9ff8345820ffbf6b0`.
-  Temporarily booted 06:23:21 UTC (`fastboot boot` OKAY). User report: touch
-  failed with `QGENI SE0: no usable 32-bit FIFO`; exact if_disable/hw values
-  pending from the user's logs. No controller access happened (the check
+  Temporarily booted 06:23:21 UTC (`fastboot boot` OKAY). Phone result (screen
+  photos): SE0 `fw=0x102 proto=1 if_disable=0x1 status=0 hw=0x202029e4/...
+  dma=0x1 mclk=0x11 clksel=0`: SPI firmware is loaded but FIFO mode is
+  disabled (GSI/GPI DMA only), so `qgeni_fifo_init` refused (err 19).
+  Clock bring-up worked: initial vote 0x52008=0x40000900, RCG 0x18010 root
+  off (0x80000000, cfg 0x100000) -> rcg 0, cfg 0x100001 (XO); branch 0x18004
+  0x80004000 -> 0x4000; 0x23018/0x23008=0x4000, 0x23000/0x23004=0. TLMM:
+  gpio0/1 cfg 0x203 (GPIO out high, pull-up), gpio2/3 cfg 0x1 io 0, gpio19
+  (CHG) cfg 0x1 pull-down io 1, gpio20 (reset) cfg 0x1 input pull-down io 0
+  = controller held in reset, gpio107 (slider) cfg 0 no pull io 0 =
+  floating (DT wants pull-up). SweetHID works: `key 0xb/0x2d down (1
+  clients)` after `FP6 SLIDER: gpio107=0 -> ringer`. No controller access happened (the check
   precedes any SPI transfer). Stock Volcano DT wires SE0 SPI to GPI DMA
   (`gpi_dma0` @0xa00000, SID 0x576, gpii-mask 0x3e, static-gpii-mask 0x01;
   QUP wrapper SID 0x563), so FIFO-disabled GSI firmware is the leading
-  explanation, not yet confirmed. Chosen direction: a polled GPI DMA path in
+  explanation, now confirmed. Chosen direction: a polled GPI DMA path in
   qcom_geni (research in progress).
   The driver does not touch reset, L22B/L9B or PMIC; slider polarity
   (mainline: GPIO 107 high = muted) is unverified.
