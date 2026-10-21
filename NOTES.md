@@ -1335,3 +1335,23 @@ error::ResourceWarning -m unittest discover -s tests` (also with
   the build repo additionally pins 21 driver/kit submodules, and the sheng
   device repo adds two submodules. See the checked-out READMEs and source under
   `/home/ersa/Dev/UniXNU*` for exact per-module commits.
+
+## FP6 USB log sender follow-up (2026-10-21)
+
+- User reports the USB log stream is not usable for debugging and the Settings
+  About page raises `RemoteMemoryException`. The crash is not diagnosed yet; a
+  phone crash report or reliable kernel capture is needed before attributing it
+  to the earlier SWEET `volumeTotalCapacity` issue.
+- Patch 0125 removes socket-first delivery from the FP6 USB log sender. In 0114,
+  `sock_send()` returning success advanced the ring cursor even if the packet was
+  still queued behind route/ARP and never reached the host, so the raw Ethernet
+  path was skipped. The sender now always emits the already-framed raw packet,
+  retains its ring position on `ENOBUFS`, and waits 5 ms between successful
+  packets to let the gadget's 32-entry TX queue drain.
+- Source is based on CI build tree for run 39565043535 (success, head
+  0755f4d2f6343b06cc0f5d31d31460b096330d3d). The modified `sweet_usb.c` passes
+  `tools/xnu-cc.py` against that build tree (`0 of 1 files failed`) using local
+  Clang 23. This is a syntax/compile check only; patch 0125 has no new CI build,
+  packaged image, or phone result yet. The user's live tcpdump capture is the
+  next evidence for the current image; the new sender needs a separate build and
+  temporary boot before it can be called fixed.
