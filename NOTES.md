@@ -1,5 +1,18 @@
 # ios-extra — current state
 
+## Firmware loader host check (2026-10-21)
+
+- Eight `tests/test_fp6_gmu_fw.py` cases pass, including staging both headers
+  and compiling/running the upload layer against the SHA-pinned actual blob.
+  Callback harness checks six external reservations, one external data copy,
+  all TCM words and final publication. ASan/UBSan execution also passed with
+  leak detection disabled (LeakSanitizer is unsupported under this host tracer).
+  This proves callback sequencing on host, not real DMA or GMU execution.
+- Review caught an integration issue in draft0133: firmware preallocation
+  lengths are not all page aligned; the mapping layer must round safely.
+  Also verify cache attributes against KGSL flags rather than infer them from
+  GMU VMA names. Agent is correcting these before integration.
+
 ## Stock SMMU clock prerequisites and battery protocol (2026-10-21)
 
 - Patch0132 votes the four stock SMMU clocks in DT order, with bounded
