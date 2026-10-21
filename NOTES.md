@@ -1,5 +1,24 @@
 # ios-extra — current state
 
+## FP6 home screen (2026-10-21)
+
+- **User reports the iOS home screen on FP6** after booting
+  `fp6-shim-ufs-root-wifimac-console.img` (`5ebfd2d5...`): kernel from CI
+  `39550549760` (`b8ad3fe`: 0031/0039/0042/0043/0048/0052/0059 on FP6), ADT
+  with the D22AP identity and `/chosen/mac-address-wifi0` (`96baa92`), stock
+  DTB, console left visible. The root on `userdata` was not recorded here.
+  Touch/buttons have no FP6 HID driver (no SweetHIDButtons/SweetHIDTouch on
+  FP6), so interaction is not established.
+- Same kernel/ADT repacked with the default arguments (console muted after the
+  first swap: `sweetfb_noconsole=1 sweet_noconsole=1`):
+  `/tmp/fp6-fixes-39550549760/img-home/fp6-shim-ufs-root-home.img`, SHA256
+  `1a7f40b4e66d03fcb44ec5442c7d6e74ee2a60eabc33d405887e33433cb6f40b`.
+  Header-v2 validation passed; not yet booted.
+- The Wi-Fi MAC is a fixed stand-in. The stock DTB has no static MAC; ABL's
+  runtime FDT `/chosen` has not been inspected. The DTB names both a PCIe
+  Kiwi path (`wlan/qca_cld/kiwi_v2`) and `qca6750/wpss.mdt`; the actual WLAN
+  part is unconfirmed.
+
 ## FP6 userspace stall after early boot (2026-10-21)
 
 - Phone observation (user report, image from CI run `39545845250`): libignition
