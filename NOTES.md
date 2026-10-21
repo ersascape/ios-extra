@@ -176,7 +176,13 @@
   SpringBoard then crashed (signal/reason not yet reported). Leading
   suspect from SWEET history: patch 0070 (`pid_hibernate`, syscall 435) was
   SWEET-only, so SpringBoard gets SIGSYS when an app leaves the
-  foreground; 0070's two guards now include FP6 (source fix, unconfirmed); same plus `fp6pas=1`
+  foreground; 0070's two guards now include FP6 (source fix, unconfirmed);
+  user also reports Settings -> General -> About crashes (as on SWEET:
+  PodcastsUI force-unwrap of `URL.volumeTotalCapacity`, diagnosed there, not
+  fixed) and apps show black windows (SWEET: e.g. Phone blocked in a sync
+  voicemail XPC that needs the modem). 0099's sweet_sample.c guard and new
+  patch 0124 enable SWEET's process sampler on FP6, opt-in via
+  `sweetsample=Name,...` (output is console/log only); same plus `fp6pas=1`
   `/tmp/fp6-mmio-39559458529/touch-keys-pas/fp6-shim-ufs-root-touch-keys-pas-console.img`
   SHA256 `9fbaab46e356761bf2519b0d7df4738571bc366b338a442386390fb450770957`
   (not booted). The stock DT confirms the Gunyah hypervisor

@@ -19,7 +19,7 @@ index b40eccd..d5978c3 100644
   *
   * First sample 90 s after start, then every 120 s, 40 samples at most.
   */
-+#if defined(ARM64_BOARD_CONFIG_SWEET)
++#if defined(ARM64_BOARD_CONFIG_SWEET) || defined(ARM64_BOARD_CONFIG_FP6)
  #include <sys/param.h>
  #include <sys/systm.h>
  #include <sys/proc.h>
@@ -27,7 +27,7 @@ index b40eccd..d5978c3 100644
  		thread_deallocate(thread);
  	}
  }
-+#endif /* ARM64_BOARD_CONFIG_SWEET */
++#endif /* ARM64_BOARD_CONFIG_SWEET || ARM64_BOARD_CONFIG_FP6 */
 diff --git a/bsd/kern/kern_trustcache.c b/bsd/kern/kern_trustcache.c
 index 9066367..0ec93ff 100644
 --- a/bsd/kern/kern_trustcache.c

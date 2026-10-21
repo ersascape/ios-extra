@@ -1,0 +1,20 @@
+--- a/iokit/bsddev/IOKitBSDInit.cpp
++++ b/iokit/bsddev/IOKitBSDInit.cpp
+@@ -786,6 +786,17 @@
+ 		IOLog("FP6 GPIO: passive probe %s (%d)\n",
+ 		    probe_error ? "failed" : "complete", probe_error);
+ 	}
++	/*
++	 * Process stack sampler (bsd/dev/sweet_sample.c), opt-in on FP6:
++	 * sweetsample=Name,Name samples those processes' user stacks.
++	 */
++	{
++		char sample_names[8];
++		if (PE_parse_boot_argn("sweetsample", sample_names, sizeof(sample_names))) {
++			extern void sweet_sample_start(void);
++			sweet_sample_start();
++		}
++	}
+ 	/* Power and volume keys, read-only PMIC polling (fp6keys=0 disables). */
+ 	{
+ 		extern void fp6_keys_init(void);
