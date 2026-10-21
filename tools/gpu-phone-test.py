@@ -9,7 +9,7 @@ Steps: require exactly one fastboot device, verify the image hash, start our own
 image (serial never printed or stored), wait for the phone to answer ping, let the
 cached GPU reports replay, stop only our own tcpdump, decode the log and print the
 `SWEET GPU:` lines. Never runs `fastboot getvar`, never flashes, never reboots a
-phone that is not already in fastboot. Needs `sudo -n tcpdump`.
+phone that is not already in fastboot. Uses `pkexec` for privileged host setup.
 """
 import argparse
 import hashlib
@@ -65,7 +65,7 @@ def main():
     args.logs.mkdir(parents=True, exist_ok=True)
     pcap = args.logs / (args.name + '.pcap')
     tcpdump = subprocess.Popen(
-        ['sudo', '-n', 'tcpdump', '-U', '-n', '-i', 'any', '-s0', '-w', str(pcap),
+        ['pkexec', 'tcpdump', '-U', '-n', '-i', 'any', '-s0', '-w', str(pcap),
          'udp and src host 192.168.7.2 and dst port 5140'],
         stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
     ecm = None
@@ -91,7 +91,7 @@ def main():
         if ecm:
             ecm.terminate()
         for pid in our_tcpdump_pids(str(pcap)):
-            subprocess.run(['sudo', '-n', 'kill', pid])
+            subprocess.run(['pkexec', 'kill', pid])
         tcpdump.wait(timeout=10)
     subprocess.run([sys.executable, str(ROOT / 'tools/gpu-decode-pcap.py'), str(pcap)])
 

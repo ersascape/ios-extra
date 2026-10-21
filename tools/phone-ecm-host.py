@@ -2,7 +2,7 @@
 """Wait for sweet's USB ECM interface and configure the host logging address.
 
 Linux only. Match the phone's fixed ECM MAC, retrying when udev renames usb0.
-Requires nmcli and passwordless sudo for the existing ip commands.
+Requires nmcli and uses pkexec for the existing ip commands.
 """
 import argparse
 from pathlib import Path
@@ -34,8 +34,8 @@ def main():
             name = names[0]
             commands = [
                 ['nmcli', 'dev', 'set', name, 'managed', 'no'],
-                ['sudo', '-n', 'ip', 'addr', 'replace', '192.168.7.1/24', 'dev', name],
-                ['sudo', '-n', 'ip', 'link', 'set', name, 'up'],
+                ['pkexec', 'ip', 'addr', 'replace', '192.168.7.1/24', 'dev', name],
+                ['pkexec', 'ip', 'link', 'set', name, 'up'],
             ]
             try:
                 for command in commands:
