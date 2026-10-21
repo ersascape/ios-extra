@@ -1,5 +1,28 @@
 # ios-extra — current state
 
+## FP6 SpringBoard bounding-path crash: stale traits, not geometry (2026-10-21)
+
+- `/tmp/fp6-blackboot-packets.txt` (kernel `69f9878`, which already includes
+  0130's 1125x2436 canvas) shows 423 SpringBoard aborts:
+  `Failed to load bounding path bitmap data from the asset manager for asset
+  name: BoundingPathBitmap-1125x2436-375x812-3.00x`. The requested name is
+  the correct iPhone X one and the asset exists in the root catalog (earlier
+  audit), so canvas geometry is no longer the issue.
+- Same failure as Tegu, where it followed boots with the wrong identity and
+  cleared only with a fresh root booted with the correct D22 ADT from its
+  first boot. On FP6 the current root booted several times with the native
+  1116x2484 screen before 0130; MobileGestalt's disk cache (keyed by build and
+  UUID, per SWEET) keeps traits derived from that screen. Source-based
+  diagnosis; not yet confirmed by a clean-root boot.
+- Proposed test: reflash the never-booted Tegu-built root
+  (`research/fp6-rootfs-tegu-20261021/fp6-ios-root-tegu.simg`, `a1c6f7da...`),
+  then first-boot a kernel with 0130. Image from CI `39636402248` (`0b41ea2`;
+  0070, 0130, touch, keys; GPU tests off by default), regenerated ADT with
+  canvas 1125x2436 and `/product`, stock DTB `16a9e60e...`, console muted,
+  `fp6touch=2`: scratchpad `img-0b41ea2/fp6-shim-ufs-root-touch-canvas.img`,
+  SHA256 `5e8c0f7b8f47549f41a13af95b9bb1c2ad2db2e30928d6ad216beb535d6d3274`.
+  Not booted yet.
+
 ## Stock SMMU clock prerequisites and battery protocol (2026-10-21)
 
 - Patch0132 votes the four stock SMMU clocks in DT order, with bounded
