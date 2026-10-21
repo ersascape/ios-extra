@@ -8,11 +8,11 @@ index 696a1df..b05ab85 100644
  #endif /* ARM64_BOARD_CONFIG_SWEET */
 +
 +/*
-+ * FP6 / SM7635 / Adreno Gen7.11: opt-in, read-only GPUCC branch inventory.
++ * FP6 / SM7635 / Adreno 810 Gen8.3: opt-in, read-only GPUCC branch inventory.
 + *
-+ * The physical base/size and cliffs compatible are from the exact FP6 stock
++ * The physical base/size and Volcano compatible are from the exact FP6 stock
 + * DTB. Register offsets below are the branch enable/halt registers consumed
-+ * by the matching Fairphone Linux gpucc-cliffs clock driver. This intentionally
++ * by the matching Fairphone Linux gpucc-volcano clock driver. This intentionally
 + * does not map the GPU core, GMU, or GPU SMMU and never writes MMIO, requests a
 + * clock/rail, allocates DMA, or starts firmware. Values are raw because Linux
 + * branch halt semantics differ by clock type. Reading still assumes GPUCC's
@@ -26,26 +26,26 @@ index 696a1df..b05ab85 100644
 +extern vm_offset_t ml_io_map(vm_offset_t, vm_size_t);
 +
 +#define FP6_GPUCC_PA       0x03d90000
-+#define FP6_GPUCC_SIZE     0x0000a000
++#define FP6_GPUCC_SIZE     0x00009800
 +
 +struct fp6_gpucc_reg {
 +	const char *name;
 +	uint32_t off;
 +};
 +
-+/* `drivers/clk/qcom/gpucc-cliffs.c`; each is a branch enable/halt register. */
++/* `drivers/clk/qcom/gpucc-volcano.c`; each is a branch enable/halt register. */
 +static const struct fp6_gpucc_reg fp6_gpucc_branches[] = {
-+	{ "freq-measure", 0x9008 },
-+	{ "ahb",          0x90c8 },
-+	{ "crc-ahb",      0x90cc },
-+	{ "cx-gmu",       0x90e4 },
-+	{ "cxo",          0x90f0 },
-+	{ "hub-cx-int",   0x90f4 },
-+	{ "memnoc-gfx",   0x90fc },
-+	{ "cx-accu-shift",0x9108 },
-+	{ "mnd1x-0-gfx3d",0x9158 },
-+	{ "mnd1x-1-gfx3d",0x915c },
-+	{ "hub-aon",      0x9198 },
++	{ "freq-measure", 0x900c },
++	{ "ahb",          0x90bc },
++	{ "cx-gmu",       0x90d4 },
++	{ "cxo",          0x90e4 },
++	{ "hub-cx-int",   0x90e8 },
++	{ "memnoc-gfx",   0x90f4 },
++	{ "cx-accu-shift",0x910c },
++	{ "hub-aon",      0x93e8 },
++	{ "gx-gmu",       0x9060 },
++	{ "gx-acd-ahb",   0x9068 },
++	{ "gx-rcg-ahb",   0x906c },
 +};
 +
 +void
@@ -59,7 +59,7 @@ index 696a1df..b05ab85 100644
 +		printf("QCOM GPU: unsupported fp6gpu=%d (0=off, 1=GPUCC read-only inventory)\n", mode);
 +		return;
 +	}
-+	printf("QCOM GPU: FP6 Adreno Gen7.11 GPUCC inventory; stock-DTB base=0x%llx size=0x%llx\n",
++	printf("QCOM GPU: FP6 Adreno 810 Gen8.3 GPUCC inventory; stock-DTB base=0x%llx size=0x%llx\n",
 +	    (unsigned long long)FP6_GPUCC_PA, (unsigned long long)FP6_GPUCC_SIZE);
 +	vm_offset_t base = ml_io_map(FP6_GPUCC_PA, FP6_GPUCC_SIZE);
 +	if (base == 0) {

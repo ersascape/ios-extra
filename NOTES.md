@@ -17,22 +17,30 @@
   x0=0xC2000207, x2=13. `python3 -m unittest tests.test_gpu_probe` passes on
   the merged tree.
 
-## FP6 Adreno Gen7.11 inventory baseline (2026-10-21)
+## FP6 Adreno 810 profile correction (2026-10-21)
 
-- Source inspection confirms the FP6 stock DTB reports `qcom,adreno-gpu-gen7-11-0`
-  and Cliffs GPUCC. It gives GPU `0x03d00000/0x40000`, GPUCC
-  `0x03d90000/0xa000`, GMU windows at `0x03d68000`, `0x0b280000`, and
+- Correction from reinspection of the actual `~/Downloads/vendor_boot.img` DTB
+  and the linked LineageOS devicetree: FP6 is `qcom,adreno-gpu-gen8-3-0` with
+  Volcano GPUCC. GPU is `0x03d00000/0x40000`, GPUCC is
+  `0x03d90000/0x9800`, GMU windows are at `0x03d68000`, `0x0b280000`, and
   `0x03d40000`, GPU IRQ SPI 300, GMU IRQ SPIs 304/305, and a dedicated
-  `qcom,qsmmu-v500` GPU SMMU at `0x03da0000`. GPU/secure/GMU context-bank
-  indices in the vendor DT are 0/2/5. The broad GPU TBU stream range does not
-  identify a single SID; do not copy the UFS SID or assume the UniXNU Sheng SID.
-- Qualcomm's matching KGSL profile names `gen71100_gmu.bin`,
-  `gen71100_sqe.fw`, and `gen71100_zap.mbn`. The user-provided Murena FP6 vendor
-  tree contains all three (80,680 / 67,348 / 12,088 bytes respectively); their
-  SHA-256 values are `435c7bac9a328b8a100df930b84b65b4d579e42be44785d0e60e3729291bb864`,
-  `eee95622aa1e487e96de55469a65c5642ce9b8c724f9da768c79fe54df760eff`, and
-  `39ffa0c98e64cd3800b3198015bc1eb86189007b1ad5539cda5d2796067d36a0`.
-  Blobs remain outside this repository. The signed Zap image requires Qualcomm
+  `qcom,qsmmu-v500` GPU SMMU at `0x03da0000`. Volcano's GPU DT `iommus`
+  properties give stream IDs 0 (user GPU), 2 (secure GPU) and 5 (GMU), all with
+  zero masks; these are not context-bank indices. The TBU range is still broad
+  (`0..0x3ff`), while those client tuples provide exact SIDs. Runtime S2CR/CB
+  ownership and Gunyah's access policy remain unverified.
+- Source revisions inspected: LineageOS devicetrees `lineage-23.2` at
+  `f32428ad60a7bf1ad04f9a8a001f27842e65fd79`; Fairphone kernel modules at the
+  current local checkout; FairBlobs FP6 firmware at `e58a5be8fa0fb6bc5a5f2e29cc01c036ccf75710`.
+  The matching Fairphone KGSL profile in the local kernel modules tree is Gen8.3
+  and names `gen80300_gmu.bin`, `gen80300_sqe.fw`, and `gen80300_zap.mbn`. The
+  public FairBlobs FP6 firmware tree contains these blobs (88,708 / 84,564 /
+  12,088 bytes; SHA-256 `6adcbf43b162fb4bdc00154824f44c5f96d82a223cfbe7012d5904098f5bf2fc`,
+  `38fd00147e8b752dd29c53a0badac8f94b1dbd89dc06f5b1c372d3428cd1b906`, and
+  `a91c411027746d4c3389a69b66f25d21eb646e89f2de5eed3f698e370f83f26c`). These
+  downloaded blobs remain in `/tmp` and are not in Git. The earlier Murena
+  Gen7.11 filenames belong to a different/older software profile and are not
+  selected by this DT compatible. The signed Zap image requires Qualcomm
   PAS/TrustZone authentication; it is not ordinary firmware copying.
 - UniXNU organization inventory via GitHub API found: UniXNU, UniXNU-sheng,
   uefi-sheng, ArmCpu, ArmDTPlatform, ArmVirtPlatform, DarwinBoot, NativeAES,
@@ -46,8 +54,10 @@
   a CPU framebuffer-copy service, rather than GPU acceleration. ArmSmmu4K and firmware/HFI parsing are the
   strongest pieces to study for a later port, subject to FP6 geometry and
   protocol validation.
-- Local patch `0118` adds an opt-in `fp6gpu=1` read-only inventory of 11 Cliffs
-  GPUCC branch registers. It maps no GPU-core, GMU, or SMMU windows and performs
+- Local patch `0118` adds an opt-in `fp6gpu=1` read-only inventory of 11 Volcano
+  GPUCC branch registers (base/size and offsets corrected to the exact DT and
+  `gpucc-volcano.c`). The inventory patch itself has not yet been rebuilt or
+  phone-tested after this correction. It maps no GPU-core, GMU, or SMMU windows and performs
   no writes, power/clock requests, DMA, or firmware startup. It is diagnostic
   groundwork only; no acceleration is enabled yet. Host model tests pass both
   normally and with ASan/UBSan (`ASAN_OPTIONS=detect_leaks=0` is needed because
@@ -55,8 +65,7 @@
   and XNU-compile-log helper tests also pass. An AArch64 Clang syntax check
   with lightweight XNU header stubs passed. The patch applies to the accumulated
   GPU source; no full XNU CI build or phone inventory test has run for 0118.
-  Work remains uncommitted on local branch
-  `fp6-adreno-gen711` while the GENI build runs.
+  This work is on `main`; no phone GPU inventory test has run.
 
 ## FP6 Qualcomm PAS query draft (2026-10-21)
 
@@ -1170,7 +1179,7 @@ error::ResourceWarning -m unittest discover -s tests` (also with
   block/root support for iOS userspace, USB CDC-ECM for debug logs, then the
   board-specific power/regulator path and touch input. The bootloader framebuffer
   is separate from a live panel driver; Adreno 618/740 code is not a drop-in for
-  FP6's Adreno Gen7.11 GPU. Wi-Fi, Bluetooth, audio, camera and cellular depend on more
+  FP6's Adreno 810 Gen8.3 GPU. Wi-Fi, Bluetooth, audio, camera and cellular depend on more
   firmware/DSP and transport work.
 - No FP6 USB code was changed or tested in this audit, and no new CI run or phone
   boot was started. The next USB code change should first gather a read-only

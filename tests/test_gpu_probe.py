@@ -107,7 +107,7 @@ static int probe_printf(const char *, ...);
 #undef printf
 
 static uint32_t gcc[0x90000 / 4], cc[0x9000 / 4];
-static uint32_t fp6_gpucc[0xa000 / 4], fp6_gpucc_before[0xa000 / 4];
+static uint32_t fp6_gpucc[0x9800 / 4], fp6_gpucc_before[0x9800 / 4];
 static int present, mode, map_calls, fail_gcc, fail_cc;
 static int fp6_mode;
 static unsigned fp6_map_calls;
@@ -1423,7 +1423,7 @@ int main(void)
     fp6_mode = 1; fp6_gpu_inventory();
     assert(fp6_map_calls == 1);
     assert(strstr(output, "unsupported fp6gpu=2"));
-    assert(strstr(output, "FP6 Adreno Gen7.11 GPUCC inventory"));
+    assert(strstr(output, "FP6 Adreno 810 Gen8.3 GPUCC inventory"));
     assert(strstr(output, "GPU core, GMU and SMMU not mapped"));
     assert(memcmp(fp6_gpucc_before, fp6_gpucc, sizeof(fp6_gpucc)) == 0);
     puts("PASS: FP6 GPUCC inventory is opt-in, read-only, and bounded");
