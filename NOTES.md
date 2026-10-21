@@ -149,7 +149,23 @@
   console visible and `fp6touch=2`:
   `/tmp/fp6-keys-39557553973/img/fp6-shim-ufs-root-touch-keys-console.img`,
   SHA256 `7008124cc16249af752d318806fef60efba97df12360f832aa27eaef8ee2abcc`,
-  temporarily booted 06:59:58 UTC; result pending. Rails
+  temporarily booted 06:59:58 UTC. Result: same data abort, PC
+  0xfffffe00074f5810 (`qgeni_smmu_passthrough`, SMR scan, already capped).
+  Panic registers: FAR = SMMU map base + 0x800 (SMR 0, first entry), ESR
+  0x96000010 (EL1 data abort, DFSC 0x10 synchronous external abort), sCR0
+  0x00230406 (USFCFG set: unmatched streams fault), IDR0 0x4c017e72 (114
+  SMRGs), IDR1 0x60000048 (72 banks, 4 KiB pages). The faulting load was
+  post-indexed (`ldr w15, [x14], #4`); the preceding sCR0/IDR loads used
+  plain base+offset and succeeded. Diagnosis: the apps SMMU is trapped by the
+  hypervisor, which cannot emulate write-back loads (no valid instruction
+  syndrome) and injects an external abort; sweet_ufs.c's SMR loop compiled
+  to plain loads. The 128 cap (0120) was not the cause.
+- Patch 0123 makes the rd/wr MMIO accessors in qcom_geni.c, fp6_touch.c and
+  fp6_keys.c single inline-asm LDR/STR with a plain base register. Local
+  objects contain no write-back loads/stores to MMIO (remaining write-back
+  forms are stack pushes, a const-table load and buffer copies). Because
+  sCR0.USFCFG=1, the GPI streams need SMR/S2CR entries; whether the
+  hypervisor accepts those writes is unknown (readback is checked). Rails
   (L22B/L9B) and PMIC are still untouched. Work is committed from a separate
   worktree on main because the shared checkout is on Codex's
   `fp6-adreno-gen711` branch.

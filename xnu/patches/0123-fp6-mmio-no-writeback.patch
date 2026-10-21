@@ -1,0 +1,90 @@
+--- a/bsd/dev/fp6_keys.c
++++ b/bsd/dev/fp6_keys.c
+@@ -60,10 +60,17 @@
+ } fk;
+ static int fk_sleep_chan;
+ 
++/*
++ * MMIO accessors are single LDR/STR with a plain base register: the
++ * hypervisor traps some of these blocks (the apps SMMU at least) and can
++ * only emulate accesses that report a valid syndrome, which write-back
++ * (pre/post-indexed) forms do not; it injects an external abort instead.
++ */
+ static uint32_t
+ rd(vm_offset_t base, uint32_t off)
+ {
+-	uint32_t v = *(volatile uint32_t *)(base + off);
++	uint32_t v;
++	__asm__ volatile ("ldr %w0, [%1]" : "=r"(v) : "r"(base + off) : "memory");
+ 	__asm__ volatile ("dmb oshld" ::: "memory");
+ 	return v;
+ }
+@@ -72,7 +79,7 @@
+ wr(vm_offset_t base, uint32_t off, uint32_t val)
+ {
+ 	__asm__ volatile ("dmb oshst" ::: "memory");
+-	*(volatile uint32_t *)(base + off) = val;
++	__asm__ volatile ("str %w0, [%1]" : : "r"(val), "r"(base + off) : "memory");
+ 	__asm__ volatile ("dsb osh" ::: "memory");
+ }
+ 
+--- a/bsd/dev/fp6_touch.c
++++ b/bsd/dev/fp6_touch.c
+@@ -109,10 +109,17 @@
+ } ft;
+ static int ft_sleep_chan;
+ 
++/*
++ * MMIO accessors are single LDR/STR with a plain base register: the
++ * hypervisor traps some of these blocks (the apps SMMU at least) and can
++ * only emulate accesses that report a valid syndrome, which write-back
++ * (pre/post-indexed) forms do not; it injects an external abort instead.
++ */
+ static uint32_t
+ rd(vm_offset_t base, uint32_t off)
+ {
+-	uint32_t v = *(volatile uint32_t *)(base + off);
++	uint32_t v;
++	__asm__ volatile ("ldr %w0, [%1]" : "=r"(v) : "r"(base + off) : "memory");
+ 	__asm__ volatile ("dmb oshld" ::: "memory");
+ 	return v;
+ }
+@@ -121,7 +128,7 @@
+ wr(vm_offset_t base, uint32_t off, uint32_t val)
+ {
+ 	__asm__ volatile ("dmb oshst" ::: "memory");
+-	*(volatile uint32_t *)(base + off) = val;
++	__asm__ volatile ("str %w0, [%1]" : : "r"(val), "r"(base + off) : "memory");
+ 	__asm__ volatile ("dsb osh" ::: "memory");
+ }
+ 
+--- a/bsd/dev/qcom_geni.c
++++ b/bsd/dev/qcom_geni.c
+@@ -84,10 +84,17 @@
+ #define XO_HZ                   19200000u
+ #define CLK_OFF                 (1u << 31)
+ 
++/*
++ * MMIO accessors are single LDR/STR with a plain base register: the
++ * hypervisor traps some of these blocks (the apps SMMU at least) and can
++ * only emulate accesses that report a valid syndrome, which write-back
++ * (pre/post-indexed) forms do not; it injects an external abort instead.
++ */
+ static uint32_t
+ rd(vm_offset_t base, uint32_t off)
+ {
+-	uint32_t v = *(volatile uint32_t *)(base + off);
++	uint32_t v;
++	__asm__ volatile ("ldr %w0, [%1]" : "=r"(v) : "r"(base + off) : "memory");
+ 	__asm__ volatile ("dmb oshld" ::: "memory");
+ 	return v;
+ }
+@@ -96,7 +103,7 @@
+ wr(vm_offset_t base, uint32_t off, uint32_t val)
+ {
+ 	__asm__ volatile ("dmb oshst" ::: "memory");
+-	*(volatile uint32_t *)(base + off) = val;
++	__asm__ volatile ("str %w0, [%1]" : : "r"(val), "r"(base + off) : "memory");
+ 	__asm__ volatile ("dsb osh" ::: "memory");
+ }
+ 
