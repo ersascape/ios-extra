@@ -1,5 +1,18 @@
 # ios-extra — current state
 
+## Persistent Gen8 GMU mapping layer (2026-10-21)
+
+- Patch0133 adds boot-lifetime sparse 4KiB tables and external backing
+  reservation/copy/publication operations. It rounds firmware reservation sizes
+  to page coverage and refuses page overlap; uses Normal NC, privileged RW,
+  outer-shareable PTEs matching KGSL flags without IOMMU_CACHE. GMU cached VMA
+  metadata does not silently choose write-back SMMU attributes.
+- `python3 tests/test_fp6_gmu_domain.py` passes synthetic boundary/failure
+  cases and actual pinned firmware through upload callbacks, with payload byte
+  comparisons and PTE physical-address walks. The map freezes after publishing.
+  This remains a staged helper without a runtime owner; live allocation/cache
+  callbacks, context activation and GMU execution are not established.
+
 ## Firmware loader host check (2026-10-21)
 
 - Eight `tests/test_fp6_gmu_fw.py` cases pass, including staging both headers
