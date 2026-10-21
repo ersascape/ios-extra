@@ -1,0 +1,113 @@
+# FP6 Gen8.3 GMU first boot: facts for implementation
+
+Source reading only (no phone result). FP6 GPU: Adreno 810, KGSL Gen8.3
+(`qcom,adreno-gpu-gen8-3-0`), firmware `gen80300_gmu.bin`, hardware-scheduler
+(`adreno_gen8_hwsched`) path. KGSL is GPL-2.0: these are register facts and
+sequences used as reference, not copied code. Paths below are in the Fairphone
+`graphics-kernel` module (`adreno_gen8_gmu.c`, `adreno_gen8_hwsched.c`,
+`adreno_gen8_hwsched_hfi.c`, `adreno_gen8_hfi.c`, `gen8_reg.h`, `adreno_hfi.h`).
+
+## Address conversion
+
+KGSL register indices are dwords from `kgsl_3d0_reg_memory` (0x3d00000).
+GMU window offset = `idx*4 - 0x37000` (window base 0x3d37000). Check:
+`CM3_SYSRESET` idx 0x1f800 -> +0x47000 (matches 0135/0136). `cx_misc`
+(0x3d9e000) and `rscc` (0x3d50000) are separate mappings (`idx*4`); GBIF is in
+the main 0x3d00000 region.
+
+| Register | idx | GMU window |
+|---|---|---|
+| ICACHE_CONFIG / DCACHE_CONFIG | 0x1f400 / 0x1f401 | +0x46000 / +0x46004 |
+| SYS_BUS_CONFIG | 0x1f40f | +0x4603c |
+| RPMH_POWER_STATE | 0x1f7e9 | +0x46fa4 |
+| CX_FAL_INTF / CX_FALNEXT_INTF | 0x1f7ec / 0x1f7ed | +0x46fb0 / +0x46fb4 |
+| CM3_SYSRESET | 0x1f800 | +0x47000 |
+| CM3_BOOT_CONFIG | 0x1f801 | +0x47004 |
+| CM3_FW_INIT_RESULT | 0x1f81c | +0x47070 |
+| CM3_CFG | 0x1f82d | +0x470b4 |
+| HFI_CTRL_STATUS | 0x1f980 | +0x47600 |
+| HFI_QTBL_INFO / HFI_QTBL_ADDR | 0x1f984 / 0x1f985 | +0x47610 / +0x47614 |
+| HFI_CTRL_INIT | 0x1f986 | +0x47618 |
+| GMU2HOST_INTR_CLR / INFO / MASK | 0x1f991 / 0x1f992 / 0x1f993 | +0x47644 / +0x47648 / +0x4764c |
+| HOST2GMU_INTR_SET | 0x1f994 | +0x47650 |
+| GENERAL_8 / 9 / 10 / 11 | 0x1f9c8..0x1f9cb | +0x47720 .. +0x4772c |
+| POWER_COUNTER_SELECT_XOCLK_0 | 0x1fc40 | +0x48100 |
+| AO_HOST_INTERRUPT_CLR / MASK | 0x23b04 / 0x23b06 | +0x57c10 / +0x57c18 |
+| RSCC_CONTROL_REQ / ACK | 0x23b07 / 0x23b08 | +0x57c1c / +0x57c20 |
+| AHB_FENCE_CTRL / RANGE_0 / STATUS_CLR | 0x23b10 / 0x23b11 / 0x23b14 | +0x57c40 / +0x57c44 / +0x57c50 |
+| CM3_ITCM_START / DTCM_START | 0x1b400 / 0x1c400 | +0x36000 / +0x3a000 |
+
+GBIF: `GBIF_CX_CONFIG` 0x3d0f000, `QSB_SIDE0..3` 0x3d0f00c..0x3d0f018,
+`GBIF_HALT` 0x3d0f114, `GBIF_HALT_ACK` 0x3d0f118. cx_misc: AHB timeout
+controls 0x3d9e040..0x3d9e050, AO counter 0x3d9e200/0x3d9e204.
+
+## First boot (hwsched), after CX GDSC and GMU clocks, firmware in TCM
+
+1. Optional: AOP QMP ACD state, AHB timeout detection (cx_misc 0x40..0x50 =
+   0x1b00 | timeout), CX timer sync, SCM `gpu_init_cx_regs`
+   (STD call FID 0x42002801, x2 = 0xb; availability FID 0x42000101 with
+   x2 = 0x02002801; unavailable is ignored by KGSL).
+2. Register config (`gen8_gmu_register_config`):
+   `RPMH_POWER_STATE`=0xf, `CX_FALNEXT_INTF`=1, `CX_FAL_INTF`=1,
+   `CM3_FW_INIT_RESULT`=0, `CM3_BOOT_CONFIG`=2, `HFI_QTBL_ADDR`=HFI GMU VA,
+   `HFI_QTBL_INFO`=1, `AHB_FENCE_RANGE_0`=0x80c808a0, `CM3_CFG`=0x4052,
+   GBIF `QSB_SIDE0..3`=0x00071e20, `GBIF_CX_CONFIG`=0x20023000,
+   `GBIF_HALT`=BIT(3), `GENERAL_11`=VRB GMU VA, `GENERAL_9`=0,
+   `GENERAL_10`=0x08030000 (GMU rev 8.3.0),
+   `GENERAL_8`=(log GMU VA & ~0xfff) | 0xf (64 KiB log),
+   `SYS_BUS_CONFIG`=1, `ICACHE_CONFIG`=1, `DCACHE_CONFIG`=1.
+3. Version: DTCM +0x3fe0..+0x3ff0 (core/pwr/HFI versions; HFI version selects
+   message formats). No minimum check for gen8_3_0.
+4. Polled bring-up: keep `GMU2HOST_INTR_MASK` and `AO_HOST_INTERRUPT_MASK` all
+   ones; clear both CLR registers.
+5. Release: `CM3_SYSRESET`=0, barrier, poll `CM3_FW_INIT_RESULT` until
+   `(v & 0x1ff) == 0x100` (100 us steps, 100 ms). `v & 0xe00` = firmware
+   reset/NMI (assert).
+6. HFI: `HFI_CTRL_INIT`=1, poll `HFI_CTRL_STATUS` bit0 (100 ms).
+
+KGSL hwsched first boot runs the GMU at its top table rate (650 MHz); the
+current FP6 clock path uses the 350 MHz table rate.
+
+No host RSCC/PDC init on Gen8 (firmware/AOP). The RSCC wake handshake
+(`RSCC_CONTROL_REQ`=BIT1, ACK BIT1, rscc `SEQ_BUSY_DRV0` 0x3d50404 == 0) is
+used only after a sleep sequence.
+
+## HFI (hwsched)
+
+- Queue table: header 6 dwords {version 0, size dwords, qhdr0_offset 6,
+  qhdr_size 12, num_q, num_active_q}; 17 queue headers of 12 dwords {status,
+  start_addr, type = id|prio<<8|rtype<<16|stype<<24, queue_size dwords,
+  msg_size, unused x5, read_index, write_index}. Queue 0 H2F command, 1 F2H
+  message, 2 debug, 3..16 dispatch. Each queue 4 KiB (1024 dwords) at
+  `0x350 + i*0x1000`; allocation 70,488 bytes noncached, GMU VA first-fit
+  from 0x60000000, read/write/priv.
+- Other GMU buffers: log 64 KiB noncached, VRB 4 KiB (dword0 = 0x400 size,
+  dword2 = trace buffer VA), trace 16 KiB; firmware preallocation blocks at
+  their fixed VAs.
+- Header: `id | size_dwords<<8 | type<<16 | seqnum<<20` (type 0 command,
+  1 ack, seqnum from 1). Messages padded to 4 dwords with 0xfafafafa; write
+  index published after a barrier, then `HOST2GMU_INTR_SET`=1.
+- Ack: {ack header, echoed request header, result (non-zero = failure),
+  return type}. Polling: `GMU2HOST_INTR_INFO` bit0 (raw, works masked),
+  clear with `GMU2HOST_INTR_CLR` bit0, then read the message queue.
+- IDs: START 10, FEATURE_CTRL 11, GET_VALUE 12, SET_VALUE 13,
+  CORE_FW_START 14, TABLE 15, BW_VOTE_TBL 3, PERF_TBL 4, F2H MEM_ALLOC 20,
+  F2H ERR 100, DEBUG 101, LOG_BLOCK 102, GMU_CNTR_REGISTER 110.
+- Start order: perf table (TABLE id 15 when HFI >= 2.6.1), BW table, optional
+  ACD/BCL/IFPC, FEATURE_CTRL HWSCHED and KPROF, SET_VALUE LOG_GROUP,
+  CORE_FW_START {hdr, 0}, START (id 10) whose loop also answers F2H MEM_ALLOC
+  and GMU_CNTR_REGISTER. Perf/BW tables need cmd-db `gfx.lvl/cx.lvl/mx.lvl`
+  and BCM `SH0/MC0/ACV/CN0` aux data.
+- MEM_ALLOC: F2H {hdr, version, desc{gpu_addr, flags, mem_kind,
+  host_mem_handle, gmu_mem_handle, gmu_addr, size, align}}; reply is an ack
+  with the descriptor filled (gmu_addr, size, host handle = gmu handle).
+
+## Failure and teardown
+
+Signatures: FW_INIT_RESULT never 0x100 (stuck in reset); `& 0xe00` (assert);
+`HFI_CTRL_STATUS` bit0 stays 0; ack timeout; ack result non-zero;
+`GMU2HOST_INTR_INFO` bit15 (CM3 fault); AO bits 0/3/5.
+Safe stop when the GMU never came up: `CM3_SYSRESET`=1, mask and clear
+GMU2HOST/AO interrupts, `AHB_FENCE_STATUS_CLR`=7 then `AHB_FENCE_CTRL`=0,
+undo any GBIF halt, then clocks and CX power in reverse order; keep the GMU
+SMMU mappings.
