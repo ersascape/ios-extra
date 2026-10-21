@@ -1,5 +1,30 @@
 # ios-extra — current state
 
+## FP6 SMMU rollback panic containment (2026-10-21)
+
+- Phone observation: the `fp6smmu=2` GMU SID5 ATOS test panicked in rollback.
+  The photographed state shows PC `0xfffffe0007ae71c0`, LR
+  `0xfffffe0007ae6f64`, FAR `0xfffffe30000e1000`, ESR `0x96000010` (synchronous
+  external abort). Symbolication against the matching CI kernel places PC in
+  `fp6_smmu_inventory` at the write restoring the selected context bank's CBAR.
+  This is strong address-level evidence for the panic site; the earlier reason
+  the test entered rollback remains unknown. GMU firmware was never released.
+- Patch 0131 now avoids writing CBAR/CBA2R during rollback. It leaves the
+  candidate bank configured but disabled (`SCTLR=0`), invalidates the temporary
+  stream match, restores the fault route, and intentionally reserves the bank
+  and permanent page-table allocation for the rest of that boot. The host
+  harness verifies that success and each injected setup failure leave no active
+  stream match. Normal and ASan/UBSan GPU probe tests pass. This is a source
+  change and containment hypothesis only; no rebuilt image or phone result yet.
+- Tegu USB source review: `shim/tegu/usb.c` is a pre-XNU polled DWC3 EP0 gadget;
+  Tegu also carries the transport into XNU via patch 0088 so its console can
+  collect later XNU output. Its shim and XNU versions rely on Tegu-specific
+  DWC3/eUSB PHY addresses, firmware handoff, DMA RAM and `cpus=1`; they cannot be
+  copied to FP6 as-is. The host reader uses USB control requests to retrieve a
+  buffered log. An FP6 adaptation may provide a panic-safe path independent of
+  the current ECM logger, but must first establish FP6 controller/PHY ownership
+  and DMA constraints.
+
 ## FP6 SMMU live-test kernel data abort (2026-10-21)
 
 - User reported `kernel data abort` with PC `0xfffffe0007ae71c0`, LR

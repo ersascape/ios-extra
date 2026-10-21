@@ -1557,10 +1557,10 @@ int main(void)
     assert(alloc_calls == 1 && clean_calls == 1 && clean_bytes == 0x3000);
     assert(all_mmio_writes > 0 && strstr(output, "ATOS IOVA=0x60000000"));
     assert(fp6_seen_tcr2 == 0x00038011u && fp6_seen_cbar == 0x0001f300u && fp6_seen_fsr_clear);
-    assert(strstr(output, "passed=1") && strstr(output, "rollback_ok=1 route_live=0"));
+    assert(strstr(output, "passed=1") && strstr(output, "contained=1 route_live=0 bank_reserved=1"));
     assert(fp6_smmu[0x800/4] == 0 && fp6_smmu[0xc00/4] == 0x00020000u);
     assert(fp6_smmu[0x20000/4] == 0 && fp6_smmu[0x20020/4] == 0 &&
-        fp6_smmu[0x20030/4] == 0 && fp6_smmu[0x1000/4] == 0 && fp6_smmu[0x1800/4] == 0);
+        fp6_smmu[0x20030/4] == 0 && fp6_smmu[0x1000/4] == 0x0001f300u && fp6_smmu[0x1800/4] == 1);
     assert(dma_rd64(fake_pa_base + 8) == ((fake_pa_base + 0x1000) | 3));
     assert(dma_rd64(fake_pa_base + 0x1000 + 8*256) == ((fake_pa_base + 0x2000) | 3));
     assert(dma_rd64(fake_pa_base + 0x2000) == ((fake_pa_base + 0x3000) | (3ull | (1ull<<10) | (2ull<<8) | (1ull<<6) | (1ull<<11) | (1ull<<54))));
@@ -1579,9 +1579,10 @@ int main(void)
         alloc_calls = 0; all_mmio_writes = 0; output[0] = 0;
         fp6_refuse_off = fp6_stage_writes[n]; fp6_refuse_nth = 1; fp6_refuse_count = 0;
         fp6_smmu_inventory();
-        assert(strstr(output, "rollback_ok=1 route_live=0"));
+        assert(strstr(output, "contained=1 route_live=0 bank_reserved=1"));
         assert(fp6_smmu[0x800/4] == 0 && fp6_smmu[0xc00/4] == 0x00020000u);
-        assert(fp6_smmu[0x20000/4] == 0 && fp6_smmu[0x1000/4] == 0 && fp6_smmu[0x1800/4] == 0);
+        assert(fp6_smmu[0x20000/4] == 0 && fp6_smmu[0x800/4] == 0 &&
+            fp6_smmu[0xc00/4] == 0x00020000u);
     }
     fp6_refuse_off = 0; fp6_refuse_nth = fp6_refuse_count = 0;
     puts("PASS: FP6 SMMU write-stage failures leave no active stream match");

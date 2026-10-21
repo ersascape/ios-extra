@@ -90,7 +90,7 @@ diff --git a/bsd/dev/sweet_gpu.c b/bsd/dev/sweet_gpu.c
  	    FP6_GPU_SMMU_PA, FP6_GPU_SMMU_SIZE);
  	printf("QCOM SMMU: IDR0=0x%08x IDR1=0x%08x IDR2=0x%08x IDR7=0x%08x sCR0=0x%08x sGFSR=0x%08x\n",
  	    id0, id1, id2, id7, scr0, gfsr);
-@@ -2382,6 +2428,174 @@
+@@ -2382,6 +2428,173 @@
  		}
  	}
  	printf("QCOM SMMU: context banks with nonzero state=%u/%u\n", active_cbs, numcb);
@@ -179,8 +179,6 @@ diff --git a/bsd/dev/sweet_gpu.c b/bsd/dev/sweet_gpu.c
 +	uint32_t cb_off = (uint32_t)(cb_base + ((uint64_t)cb << pgshift));
 +	uint32_t old_smr = fp6_smmu_read32(base, smr_off);
 +	uint32_t old_s2cr = fp6_smmu_read32(base, s2cr_off);
-+	uint32_t old_cbar = fp6_smmu_read32(base, cbar_off);
-+	uint32_t old_cba2r = fp6_smmu_read32(base, cba2r_off);
 +	int route_live = 0, passed = 0, contained = 1;
 +
 +	/* Program the context while disabled. Every write is checked immediately. */
@@ -249,20 +247,21 @@ diff --git a/bsd/dev/sweet_gpu.c b/bsd/dev/sweet_gpu.c
 +	fp6_smmu_write32(base, cb_off + FP6_SMMU_CB_TCR2, 0);
 +	fp6_smmu_write32(base, cb_off + FP6_SMMU_CB_MAIR0, 0);
 +	fp6_smmu_write32(base, cb_off + FP6_SMMU_CB_MAIR1, 0);
-+	fp6_smmu_write32(base, cbar_off, old_cbar);
-+	fp6_smmu_write32(base, cba2r_off, old_cba2r);
++	/* Previous FP6 boot external-aborted while restoring CBAR (FAR matched this
++	 * register). Keep the bank configured but disabled; never reuse it. */
 +	if (fp6_smmu_read32(base, cb_off + FP6_SMMU_CB_TTBR0) != 0 ||
 +	    fp6_smmu_read32(base, cb_off + FP6_SMMU_CB_TTBR0 + 4u) != 0 ||
 +	    fp6_smmu_read32(base, cb_off + FP6_SMMU_CB_TCR) != 0 ||
 +	    fp6_smmu_read32(base, cb_off + FP6_SMMU_CB_TCR2) != 0 ||
 +	    fp6_smmu_read32(base, cb_off + FP6_SMMU_CB_MAIR0) != 0 ||
 +	    fp6_smmu_read32(base, cb_off + FP6_SMMU_CB_MAIR1) != 0 ||
-+	    fp6_smmu_read32(base, cbar_off) != old_cbar ||
-+	    fp6_smmu_read32(base, cba2r_off) != old_cba2r) contained = 0;
++	    fp6_smmu_read32(base, cb_off + FP6_SMMU_CB_SCTLR) != 0 ||
++	    fp6_smmu_read32(base, smr_off) != old_smr ||
++	    fp6_smmu_read32(base, s2cr_off) != old_s2cr) contained = 0;
 +report:
-+	printf("QCOM SMMU: GMU SID5 context group=%u cb=%u mapped=%u rollback_ok=%u route_live=%u result=%s\n",
-+	    group, cb, passed, contained, route_live,
-+	    passed && contained ? "ATOS pass; no master run" : "test failed; no master run");
++	printf("QCOM SMMU: GMU SID5 context group=%u cb=%u mapped=%u contained=%u route_live=%u bank_reserved=%u result=%s\n",
++	    group, cb, passed, contained, route_live, contained,
++	    passed && contained ? "ATOS pass; bank disabled and reserved" : "test failed; no master run");
 +#undef FP6_SMMU_WRITE_CHECK
  }
  #endif /* ARM64_BOARD_CONFIG_FP6 */
