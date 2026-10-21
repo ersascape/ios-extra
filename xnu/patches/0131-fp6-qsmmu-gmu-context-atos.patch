@@ -42,7 +42,7 @@ diff --git a/bsd/dev/sweet_gpu.c b/bsd/dev/sweet_gpu.c
  static uint32_t
  fp6_smmu_read32(vm_offset_t base, uint32_t off)
  {
-@@ -2296,13 +2319,36 @@
+@@ -2296,13 +2319,38 @@
  }
  
  static void
@@ -64,8 +64,10 @@ diff --git a/bsd/dev/sweet_gpu.c b/bsd/dev/sweet_gpu.c
 +static void
 +fp6_smmu_write64(vm_offset_t base, uint32_t off, uint64_t value)
 +{
-+	fp6_smmu_write32(base, off, (uint32_t)value);
-+	fp6_smmu_write32(base, off + 4u, (uint32_t)(value >> 32));
++	/* ATS1PR must be one atomic 64-bit MMIO access in AArch64 format. */
++	__asm__ volatile("dmb oshst" ::: "memory");
++	*(volatile uint64_t *)(base + off) = value;
++	__asm__ volatile("dsb osh" ::: "memory");
 +}
 +
 +static void

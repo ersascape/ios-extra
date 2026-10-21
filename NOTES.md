@@ -1,5 +1,33 @@
 # ios-extra — current state
 
+## FP6 atomic ATS correction and reference correction (2026-10-21)
+
+- Source inspection found a protocol error in patch 0131: AArch64 ATS1PR was
+  issued as two 32-bit stores. Fairphone `arm-smmu-qcom.c` explicitly requires
+  an atomic ATS1 access and uses `arm_smmu_cb_writeq`. The FP6 helper now uses
+  one aligned volatile 64-bit store with the existing ordering barriers. The
+  harness rejects split ATS writes and verifies one 64-bit request. This does
+  not establish the cause of the photographed CBAR external abort.
+- Corrected the preceding audit's mistaken Gen7.11 identification. The selected
+  FP6 stock tree (`8198534128258bfe7b05bbb5b227affc181aa49b376884c08eae8564fce124e3`)
+  explicitly selects `qcom,adreno-gpu-gen8-3-0`. Fairphone's matching
+  `adreno_gpu_core_gen8_3_0` uses `gen80300_{gmu.bin,sqe.fw,zap.mbn}` and
+  `adreno_gen8_hwsched_gpudev`. Gen7.11 is another supported module profile,
+  not the FP6 hardware profile. Use `adreno_gen8_gmu.c` for runtime loading.
+- The same stock tree supplies the GPU QTB500 TBU at `0x03de8000/0x1000`,
+  covering SIDs `[0,0x400)`. This identifies the SID5 ECATS target; its power,
+  halt/resume, ownership and register access remain untested.
+- PAS state correction: patch 0127 implements an opted-in ZAP load; the earlier
+  phone observation recorded successful INIT_IMAGE, MEM_SETUP and AUTH_AND_RESET.
+  `fp6pas=1` alone remains a query; `fp6zap=1` requests the authenticated load.
+- CI `39625922013` passed on `2582fe6`. Its locally packaged image
+  `/tmp/fp6-smmu-2582fe6/image/fp6-shim-ufsroot-smmu-cbarfix.img` has SHA-256
+  `9918c0219c91414234942b761d7c9555cbad76a2df8d477ddab28ec7c20f96f8` and was
+  not phone-tested. It predates the atomic ATS fix and is superseded for live
+  SMMU testing. It embeds the complete vendor_boot DTB collection (SHA-256
+  `16a9e60e...`); subsequent packages should use the verified selected tree
+  above, matching prior tested packages. No GMU execution is claimed.
+
 ## FP6 SMMU rollback panic containment (2026-10-21)
 
 - Phone observation: the `fp6smmu=2` GMU SID5 ATOS test panicked in rollback.
@@ -18,11 +46,9 @@
   harness verifies that success and each injected setup failure leave no active
   stream match. Normal and ASan/UBSan GPU probe tests pass. This is a source
   change and containment hypothesis only; no rebuilt image or phone result yet.
-- Fairphone KGSL/SMMU cross-check: the cloned module tree identifies the exact
-  `qcom,adreno-gpu-gen7-11-0` profile and the firmware names
-  `gen71100_gmu.bin`, `gen71100_sqe.fw`, `gen71100_zap.mbn`. The current XNU
-  `fp6gpu=1`/`fp6pas=1` code only inventories GPUCC and queries PAS availability;
-  it does not implement those firmware flows or GPU register programming.
+- Fairphone KGSL/SMMU cross-check (hardware profile corrected above): the current
+  `fp6gpu=1`/`fp6pas=1` modes inventory GPUCC and query PAS availability. A
+  separate `fp6zap=1` mode implements ZAP authentication, phone-confirmed earlier.
   Linux's QSMMUv500 path allocates CB0/CB1 to GPU SID0/1 and other clients from
   CB2 onward; patch 0131 now respects that rule. Its CBAR/TCR/TTBR/MAIR ordering
   follows `arm_smmu_write_context_bank`, but the probe's fixed SCTLR `0x27` is

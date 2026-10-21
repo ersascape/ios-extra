@@ -28,7 +28,7 @@ class GPUProbeTests(unittest.TestCase):
             self.assertEqual(source.count(barrier), 4)  # SWEET 32/64-bit + FP6 GPUCC/SMMU barriers
             for name in ('dmb oshld', 'dmb oshst', 'dsb osh'):
                 text = '__asm__ volatile("%s" ::: "memory");' % name
-                self.assertEqual(source.count(text), 4 if name == 'dmb oshld' else 3)
+                self.assertEqual(source.count(text), 4)
                 source = source.replace(text, '__asm__ volatile("" ::: "memory");')
             store32 = '*(volatile uint32_t *)(base + off) = value;'
             self.assertEqual(source.count(store32), 2)
@@ -40,7 +40,7 @@ class GPUProbeTests(unittest.TestCase):
             self.assertEqual(source.count(narrow_input), 1)
             source = source.replace(narrow_input, 'value &= 0xffffffffULL;')
             store64 = '*(volatile uint64_t *)(base + off) = value;'
-            self.assertEqual(source.count(store64), 1)
+            self.assertEqual(source.count(store64), 2)
             source = source.replace(store64, 'test_store64(base, off, value);')
             (work / 'sweet_gpu.c').write_text(source)
             headers = {
@@ -120,6 +120,7 @@ static uint32_t fp6_gpucc[0x9800 / 4], fp6_gpucc_before[0x9800 / 4];
 static uint32_t fp6_smmu[0x40000 / 4];
 #define FP6_TEST_CB 2u
 #define FP6_TEST_CB_BASE 0x22000u
+static unsigned fp6_ats64_writes;
 static uint32_t fp6_refuse_off; static unsigned fp6_refuse_nth, fp6_refuse_count;
 static uint32_t fp6_seen_tcr2, fp6_seen_cbar, fp6_seen_fsr_clear;
 static int present, mode, map_calls, fail_gcc, fail_cc;
@@ -201,9 +202,9 @@ static void test_store32(vm_offset_t base, uint32_t off, uint32_t value)
     if (base == (vm_offset_t)fp6_smmu && (off & 0xfffu) == 0x58 && value == 0xffffffffu) {
         fp6_seen_fsr_clear = 1; value = 0; /* Context FSR is write-one-to-clear. */
     }
-    if (base == (vm_offset_t)fp6_smmu &&
-        (off == FP6_TEST_CB_BASE + 0x800 || off == FP6_TEST_CB_BASE + 0x804))
-        fp6_smmu[(FP6_TEST_CB_BASE + 0x8f0)/4] = 1;
+    /* A split ATS write is invalid even if the final bytes look correct. */
+    if (base == (vm_offset_t)fp6_smmu)
+        assert(off != FP6_TEST_CB_BASE + 0x800 && off != FP6_TEST_CB_BASE + 0x804);
     if (smmu_sticky && base == (vm_offset_t)smmu_mem &&
         ((off == GPU_SMMU_S2CR + 12 && value == GPU_SMMU_S2CR_FAULT) ||
          (off == GPU_SMMU_CBAR + 12 && value == 0))) return;
@@ -214,6 +215,11 @@ static void test_store32(vm_offset_t base, uint32_t off, uint32_t value)
 static void test_store64(vm_offset_t base, uint32_t off, uint64_t value)
 {
     all_mmio_writes++;
+    if (base == (vm_offset_t)fp6_smmu) {
+        assert(off == FP6_TEST_CB_BASE + 0x800 && value == 0x60000000ull);
+        fp6_ats64_writes++;
+        fp6_smmu[(FP6_TEST_CB_BASE + 0x8f0)/4] = 1;
+    }
     if (base == (vm_offset_t)smmu_mem) {
         smmu_write_calls++;
         if (off == refuse_smmu_off && value && !refused_writes++) return;
@@ -1558,6 +1564,7 @@ int main(void)
     output[0] = 0;
     fp6_smmu_inventory();
     assert(alloc_calls == 1 && clean_calls == 1 && clean_bytes == 0x3000);
+    assert(fp6_ats64_writes == 1);
     assert(all_mmio_writes > 0 && strstr(output, "context-bank ATOS IOVA=0x60000000"));
     assert(fp6_seen_tcr2 == 0x00038011u && fp6_seen_cbar == 0x0001f300u && fp6_seen_fsr_clear);
     assert(strstr(output, "passed=1") && strstr(output, "contained=1 route_live=0 bank_reserved=1"));
