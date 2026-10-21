@@ -1,5 +1,19 @@
 # ios-extra — current state
 
+## CX power state observed on phone (2026-10-21)
+
+- User supplied a console photo from the clock-prerequisite build. It shows
+  `CX_GDSCR=0x0022f801`, `HUB_CMD=0x00000000`, followed by the refusal
+  `CX domain is not enabled; needs RPMh/CX power before context access`. The
+  GDSCR SW_COLLAPSE bit is set and PWR_ON is clear, consistent with an off CX
+  domain. This run did not reach TCR2 programming, so it does not isolate why
+  the earlier TCR2 write read as zero. The photo does not independently name
+  the image, though its diagnostic text matches the 0b41ea2 clock build.
+- 0134 draft now adds a dedicated FP6 RSCv3 CX ARC floor vote and CX GDSC/hub
+  safe-XO setup. It needs source review, full harness and kernel build before
+  any phone test. GMU clocks remain a separate stage; avoid changing live GMU
+  rates until reset state has been read.
+
 ## Stock-clock kernel packaged (2026-10-21)
 
 - CI39636402248 passed on0b41ea23c1d910865a2412c88fcccedb3dfb388e.
