@@ -14,13 +14,19 @@
 - Live test of the 0111 image disproved the assumption that the raw sender was
   fixed: USB Ethernet came up and ping worked, but the host captured no UDP
   packets. The phone then reported raw UDP error 55, which is `ENOBUFS` on
-  XNU/Darwin. In this driver that means the ECM transmit queue filled while
-  the logger was sending its backlog in a tight burst. Patch 0114 adds
+  XNU/Darwin. This is consistent with transmit-queue or mbuf-buffer pressure
+  while the logger sends its backlog. Patch 0114 adds
   socket-first delivery with the raw frame path as fallback and retries the
   same ring position after a 10 ms queue-drain delay when raw output returns
-  `ENOBUFS`. Patch application, CI compilation, and a new phone capture are
-  pending; do not treat USB log delivery as fixed until packets arrive in a
-  host capture.
+  `ENOBUFS`. Commit `1788b20` passed CI run `39545845250` (XNU build green).
+  Extracted the matching stock DTB from `/home/ersa/Downloads/vendor_boot.img`
+  with `unpack_bootimg`; its SHA256 matches the previously verified FP6 DTB.
+  Packaged header-v2 UFS-root image
+  `/tmp/fp6-usb-log-39545845250/fp6-shim-usb-log-retry.img`, SHA256
+  `2e753c95582967f57dcd23090002ec83c333e76729b5fc0f856c6a3eefac490c`.
+  `fastboot devices` showed no attached device. The new image has not been
+  booted; confirm delivery with a host UDP capture before calling the logger
+  fixed.
 - Patch 0112 adds `sweet_noconsole=1` as an alias for
   `sweetfb_noconsole=1`. Both mute framebuffer console drawing after the first
   GUI swap; persistent logging and panic drawing are preserved.
