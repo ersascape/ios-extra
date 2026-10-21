@@ -6,7 +6,9 @@
   `fp6-shim-ufs-root-wifimac-console.img` (`5ebfd2d5...`): kernel from CI
   `39550549760` (`b8ad3fe`: 0031/0039/0042/0043/0048/0052/0059 on FP6), ADT
   with the D22AP identity and `/chosen/mac-address-wifi0` (`96baa92`), stock
-  DTB, console left visible. The root on `userdata` was not recorded here.
+  DTB, console left visible. Root: the freshly flashed Tegu-built image
+  (`fp6-ios-root-tegu.simg` `a1c6f7da...`, raw `574cbad6...`) on `userdata`, per
+  the user; its first boots therefore used the D22AP identity.
   Touch/buttons have no FP6 HID driver (no SweetHIDButtons/SweetHIDTouch on
   FP6), so interaction is not established.
 - Same kernel/ADT repacked with the default arguments (console muted after the
