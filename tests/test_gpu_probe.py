@@ -1711,6 +1711,41 @@ int main(void)
     assert(dma_rd64(fake_pa_base + 0x2000) == ((fake_pa_base + 0x3000) | (3ull | (1ull<<10) | (2ull<<8) | (1ull<<6) | (1ull<<11) | (1ull<<54))));
     puts("PASS: FP6 CB2 4 KiB context maps by ATOS and disables its stream match");
 
+    /* ATOSNS means ATS1PR/PAR are unavailable; use the CPU table walker. */
+    memset(fp6_smmu, 0, sizeof(fp6_smmu));
+    fp6_smmu[0x20/4] = (1u << 27) | (1u << 26) | 24u;
+    fp6_smmu[0x24/4] = (4u << 28) | 22u;
+    fp6_smmu[0x28/4] = 0x5511u;
+    fp6_smmu[0x3c/4] = 0x24u;
+    fp6_smmu[0x00/4] = 0x002c0406u;
+    for (unsigned i = 0; i < 24; i++) fp6_smmu[(0xc00 + 4*i)/4] = 0x00020000u;
+    fp6_smmu_mode = 2; fp6_ats64_writes = 0; fake_pa_base = 0x90000000ull;
+    fp6_seen_tcr2 = fp6_seen_cbar = fp6_seen_fsr_clear = 0;
+    fail_alloc = 0; alloc_calls = clean_calls = 0; all_mmio_writes = 0;
+    output[0] = 0;
+    fp6_smmu_inventory();
+    assert(alloc_calls == 1 && clean_calls == 1 && clean_bytes == 0x3000);
+    assert(fp6_ats64_writes == 0);
+    assert(strstr(output, "IDR0.ATOSNS (no ATOS); table walk IOVA=0x60000000"));
+    assert(strstr(output, "PA=0x90003000 expected=0x90003000 passed=1"));
+    assert(fp6_seen_tcr2 == 0x00038011u && fp6_seen_cbar == 0x0001f300u && fp6_seen_fsr_clear);
+    assert(strstr(output, "contained=1 route_live=0 bank_reserved=1"));
+    assert(fp6_smmu[0x800/4] == 0 && fp6_smmu[0xc00/4] == 0x00020000u);
+    puts("PASS: FP6 ATOSNS path walks 4 KiB tables and issues no ATS request");
+
+    /* Persistent table lookup derives L2/L3 slots directly from the IOVA. */
+    struct fp6_gmu_domain lookup_domain = {0};
+    uint64_t root_page[512] = {0}, l2_page[512] = {0}, l3_page[512] = {0};
+    const uint32_t lookup_iova = 0x60000000u;
+    lookup_domain.root.va = (uint8_t *)root_page; lookup_domain.root.pa = 0x1000;
+    lookup_domain.l2[1].va = (uint8_t *)l2_page; lookup_domain.l2[1].pa = 0x2000;
+    lookup_domain.l3[1][256].va = (uint8_t *)l3_page; lookup_domain.l3[1][256].pa = 0x3000;
+    assert(fp6_domain_table_map(&lookup_domain, 0x1000, lookup_iova, 1) == root_page);
+    assert(fp6_domain_table_map(&lookup_domain, 0x2000, lookup_iova, 2) == l2_page);
+    assert(fp6_domain_table_map(&lookup_domain, 0x3000, lookup_iova, 3) == l3_page);
+    assert(fp6_domain_table_map(&lookup_domain, 0x4000, lookup_iova, 3) == NULL);
+    puts("PASS: persistent table lookup uses direct L1/L2/L3 indices");
+
     /* Failure on each first-write stage aborts and disables the stream route. */
     const unsigned fp6_stage_writes[] = {0x1808,0x1008,0x22010,0x22030,
         0x22020,0x22024,0x22038,0x2203c,0x22000,0xc00,0x800};

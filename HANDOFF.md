@@ -1,4 +1,9 @@
-# Handoff — continue the Adreno 618 bring-up
+# Handoff — continue the FP6 GPU bring-up
+
+Current target: Fairphone 6 Adreno 810 Gen8.3. For the active GPU sequence and
+current status, see the “Current FP6 GPU path” section at the top of `NOTES.md`.
+The A618 notes and patch history below are historical reference material; use the
+FP6 docs and `NOTES.md` for current source, build and phone state.
 
 You are taking over an in-progress, hardware-in-the-loop driver bring-up. Read `AGENTS.md`, this
 file top to bottom, `NOTES.md` (state), then `docs/GPU_GMU_BOOT.md`

@@ -1,0 +1,113 @@
+--- a/bsd/dev/sweet_gpu.c
++++ b/bsd/dev/sweet_gpu.c
+@@ -2693,6 +2693,64 @@
+ 
+ static int fp6_gmu_clocks_prepare(struct fp6_smmu_clocks *);
+ 
++
++/*
++ * This GPU SMMU reports IDR0.ATOSNS (bit 26): no address translation
++ * operations, so ATS1PR/PAR never change (PAR reads 0). Linux arm-smmu
++ * likewise only uses ATOS without ATOSNS. Verify mappings by walking our
++ * own tables on the CPU with the context's format: 4 KiB granule, T0SZ=32
++ * (start at level 1), table/page descriptors with AF on the page.
++ */
++#define FP6_SMMU_ID0_ATOSNS     (1u << 26)
++typedef volatile uint64_t *(*fp6_table_map_t)(void *ctx, uint64_t pa, uint32_t iova, unsigned level);
++
++static uint64_t
++fp6_smmu_soft_walk(fp6_table_map_t map, void *ctx, uint64_t root_pa, uint32_t iova)
++{
++	uint64_t table = root_pa;
++	for (unsigned level = 1; level <= 3; level++) {
++		volatile uint64_t *t = map(ctx, table, iova, level);
++		if (!t) return ~0ULL;
++		unsigned shift = 39u - 9u * level;              /* 30, 21, 12 */
++		uint64_t desc = t[(iova >> shift) & 511u];
++		if ((desc & 3u) != 3u) return ~0ULL;            /* invalid (no blocks used) */
++		uint64_t next = desc & 0x0000fffffffff000ULL;
++		if (level == 3) {
++			if (!(desc & (1ULL << 10))) return ~0ULL;       /* AF */
++			return next | (iova & 0xfffu);
++		}
++		table = next;
++	}
++	return ~0ULL;
++}
++
++struct fp6_flat_tables { vm_offset_t va; uint64_t pa; uint32_t size; };
++
++static volatile uint64_t *
++fp6_flat_table_map(void *ctx, uint64_t pa, uint32_t iova, unsigned level)
++{
++	(void)iova; (void)level;
++	struct fp6_flat_tables *f = ctx;
++	if (pa < f->pa || pa - f->pa >= f->size || (pa & 0xfffu)) return NULL;
++	return (volatile uint64_t *)(uintptr_t)(f->va + (pa - f->pa));
++}
++
++static volatile uint64_t *
++fp6_domain_table_map(void *ctx, uint64_t pa, uint32_t iova, unsigned level)
++{
++	struct fp6_gmu_domain *d = ctx;
++	if (level == 1)
++		return d->root.va && d->root.pa == pa ? (volatile uint64_t *)(void *)d->root.va : NULL;
++	unsigned i = (iova >> 30) & 3u;
++	if (level == 2)
++		return d->l2[i].va && d->l2[i].pa == pa ? (volatile uint64_t *)(void *)d->l2[i].va : NULL;
++	if (level == 3) {
++		unsigned j = (iova >> 21) & 511u;
++		return d->l3[i][j].va && d->l3[i][j].pa == pa ? (volatile uint64_t *)(void *)d->l3[i][j].va : NULL;
++	}
++	return NULL;
++}
++
+ static struct fp6_gmu_domain fp6_gmu_domain;
+ static vm_offset_t fp6_gmu_window;
+ static int fp6_gmu_kernel_alloc(void *ctx, uint32_t size, struct fp6_gmu_domain_page *page)
+@@ -2984,6 +3038,13 @@
+  for (unsigned i = 0; i < fp6_gmu_domain.count; i++) {
+   struct fp6_gmu_domain_range *r = &fp6_gmu_domain.ranges[i];
+   for (uint32_t n = 0; n < r->mapped_size; n += 4096) {
++   if (fp6_smmu_read32(base, FP6_SMMU_IDR0) & FP6_SMMU_ID0_ATOSNS) {
++    uint64_t pa = fp6_smmu_soft_walk(fp6_domain_table_map, &fp6_gmu_domain,
++        fp6_gmu_domain.root.pa, r->address + n);
++    if (pa != r->backing.pa + n) {
++     printf("QCOM GMU: persistent table walk failed IOVA=0x%x PA=0x%llx\n", r->address + n, (unsigned long long)pa);return 0;
++    }
++   } else {
+    fp6_smmu_write64(base, cb_off + FP6_SMMU_CB_ATS1PR, (uint64_t)r->address + n);
+    for (polls = 0; polls < 1000; polls++) {
+     if (!(fp6_smmu_read32(base, cb_off + FP6_SMMU_CB_ATSR) & 1)) break;
+@@ -2993,6 +3054,7 @@
+    if (polls == 1000 || (par & 1) || (par & 0x0000fffffffff000ULL) != r->backing.pa + n) {
+     printf("QCOM GMU: persistent ATS failed IOVA=0x%x PAR=0x%llx\n", r->address + n, (unsigned long long)par);return 0;
+    }
++   }
+    checked++;
+   }
+  }
+@@ -3395,6 +3457,15 @@
+ #undef FP6_SMMU_FIELD_CHECK
+ 	route_live = 1;
+ 
++	if (fp6_smmu_read32(base, FP6_SMMU_IDR0) & FP6_SMMU_ID0_ATOSNS) {
++		struct fp6_flat_tables flat = { table_va, table_pa, FP6_SMMU_TABLE_BYTES };
++		uint64_t pa = fp6_smmu_soft_walk(fp6_flat_table_map, &flat, table_pa, FP6_SMMU_GMU_IOVA);
++		uint64_t expected = table_pa + 0x3000u;
++		passed = pa == expected;
++		printf("QCOM SMMU: IDR0.ATOSNS (no ATOS); table walk IOVA=0x%08x PA=0x%llx expected=0x%llx passed=%u\n",
++		    FP6_SMMU_GMU_IOVA, (unsigned long long)pa, (unsigned long long)expected, passed);
++		goto checked;
++	}
+ 	fp6_smmu_write64(base, cb_off + FP6_SMMU_CB_ATS1PR, FP6_SMMU_GMU_IOVA);
+ 	unsigned ats_polls;
+ 	for (ats_polls = 0; ats_polls < 1000; ats_polls++) {
+@@ -3411,6 +3482,7 @@
+ 	} else {
+ 		printf("QCOM SMMU: GMU SID5 ATOS timed out\n");
+ 	}
++checked:
+ 
+ 	if (passed && fp6_gmu_persistent_upload(base, cb_off, smr_off, old_smr, &clocks)) {
+ 		printf("QCOM GMU: retaining persistent context and clock votes; no firmware execution yet\n");
