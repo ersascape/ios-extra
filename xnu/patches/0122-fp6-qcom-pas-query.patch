@@ -78,20 +78,3 @@ index b05ab85..3c4a9dd 100644
 +	    (unsigned long long)(value != 0));
 +}
 +#endif /* ARM64_BOARD_CONFIG_FP6 */
-diff --git a/bsd/dev/sweet_ufs.c b/bsd/dev/sweet_ufs.c
-index 86eec24..dd4e7e1 100644
---- a/bsd/dev/sweet_ufs.c
-+++ b/bsd/dev/sweet_ufs.c
-@@ -60,3 +60,4 @@ extern void sweet_gpu_probe(void);
- #if defined(ARM64_BOARD_CONFIG_FP6)
- extern void fp6_gpu_inventory(void);
-+extern void fp6_qcom_pas_probe(void);
- #endif
-@@ -1023,6 +1024,7 @@ sweet_ufs_init(bool allow_write)
- #if defined(ARM64_BOARD_CONFIG_FP6)
- 	/* Read-only and opt-in via fp6gpu=1; GPU remains untouched by default. */
- 	fp6_gpu_inventory();
-+	fp6_qcom_pas_probe();
- #endif
- 	return 0;
- }

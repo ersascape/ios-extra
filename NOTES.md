@@ -1457,9 +1457,12 @@ error::ResourceWarning -m unittest discover -s tests` (also with
   `bsd/dev/sweet_ufs.c`: the patch used a zero-context declaration hunk that
   the strict patch runner could not locate. This was a patch-context failure;
   no compilation or phone test occurred in that run.
-- Corrected patch 0127 to anchor removal of the old UFS probe calls and
-  declarations to surrounding source context. The Adreno inventory, PAS query
-  and opt-in ZAP loader are registered through `fp6_adreno_startup` at
-  `EARLY_BOOT`; UFS no longer invokes GPU code. Host tests pass normally and
-  with ASan/UBSan. Awaiting a new CI result before any image packaging or phone
-  test.
+- A second attempt in commit f72c9d9 still failed at the first UFS hunk
+  (line 56); no compile or phone test occurred. Rather than patch that file in
+  a later step, remove the original UFS hook hunks from 0118 and 0122 as well
+  as the attempted removal from 0127. The GPU inventory, PAS query and opt-in
+  ZAP loader are registered together through `fp6_adreno_startup` at
+  `EARLY_BOOT`. This eliminates all GPU references from the UFS driver and
+  makes the patch series independent of that file's evolving context. Normal
+  and ASan/UBSan host tests pass; a corrected CI build is still required before
+  image packaging or phone testing.

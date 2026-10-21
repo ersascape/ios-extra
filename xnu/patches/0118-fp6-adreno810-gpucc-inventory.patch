@@ -80,28 +80,3 @@ index 696a1df..b05ab85 100644
 +	printf("QCOM GPU: GPU core, GMU and SMMU not mapped; no hardware writes\n");
 +}
 +#endif /* ARM64_BOARD_CONFIG_FP6 */
-diff --git a/bsd/dev/sweet_ufs.c b/bsd/dev/sweet_ufs.c
-index 166c63d..86eec24 100644
---- a/bsd/dev/sweet_ufs.c
-+++ b/bsd/dev/sweet_ufs.c
-@@ -56,6 +56,9 @@ extern void sweet_touch_init(void);
- extern void sweet_usb_probe(void);
- extern void sweet_gpu_probe(void);
- #endif
-+#if defined(ARM64_BOARD_CONFIG_FP6)
-+extern void fp6_gpu_inventory(void);
-+#endif
- 
- #define REG_CAP         0x00
- #define REG_IS          0x20
-@@ -1017,6 +1020,10 @@ sweet_ufs_init(bool allow_write)
- 	sweet_touch_init();
- 	sweet_usb_probe();
- 	sweet_gpu_probe();
-+#endif
-+#if defined(ARM64_BOARD_CONFIG_FP6)
-+	/* Read-only and opt-in via fp6gpu=1; GPU remains untouched by default. */
-+	fp6_gpu_inventory();
- #endif
- 	return 0;
- }
