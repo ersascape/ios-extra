@@ -140,6 +140,31 @@ See [FP6 GMU first boot](docs/FP6_GMU_FIRST_BOOT.md), [FP6 Adreno Metal audit](d
   under ASan/UBSan. A system-Clang AArch64 compile of `sweet_gpu.c` against
   the exact CI 39728088129 build tree reports 0/1 failures. This source delta
   is local only: no CI build or phone test has been run for it yet.
+- Follow-up build `6c248dd` passed CI run `39730474027`; kernel
+  `SHA256=1dccb4fb5992417c37b73c28fc74d49e30c2f7dc8b3e2050fd5b8cfd08a02228`.
+  The temporary header-v2 image
+  `/tmp/ios-extra-run-39730474027/package/fp6-gmu-timer-wcomb.img` has
+  `SHA256=f2b92b5fcfeb6af4e86a953dae8202b12abda5c1f700e8a9c59cd51d69137845`.
+  Its phone boot still refused the timer: `valid=0/16`, `read=0..0`,
+  `write=0..0`. USB capture contains 705 packets / 168,631 log bytes;
+  pcap SHA256 `048725f34765776a36d4ce5cbc13733854bbf47875ed30b491ca095e15f59dfe`,
+  decoded text SHA256 `e14fbf9b65b5a6dd6ff6f4d6d791f254933d0530ec79ad71d8d7bcbc94aed83a`.
+  It confirms SMMU test contained and no firmware upload. All samples were
+  discarded as backward before recording timing ranges.
+- Source inspection found XNU's `ml_get_hwclock()` is its nonspeculative
+  `CNTVCT` hardware timebase; the driver had used raw `CNTPCT`. The latest
+  local update uses `ml_get_hwclock()` and logs backward-read counts plus the
+  final raw sample triple. This is an XNU-specific counter-source correction
+  inferred from the phone result; no CI or phone result exists for it yet.
+- The interrupted test exposed a prompt loop in `phone-ecm-host.py`: setup
+  errors retried two `pkexec` commands every 100 ms, while the outer test also
+  made separate capture/cleanup authorization requests. The updated helper
+  performs setup, bounded capture and stale-capture cleanup under one
+  authorization, fails immediately on setup/auth errors, and self-stops
+  tcpdump. The prior root capture at
+  `/tmp/ios-extra-run-39730474027/logs/phone-0150-timer-wcomb.pcap` was not
+  stoppable after pkexec authorization was denied; the next authorized helper
+  call can stop only that exact capture path. No serial is stored.
 - Minimum DDR bandwidth/BCM voting remains unresolved. Do not send HFI messages
   until shared HFI backing is mapped Normal noncached on CPU pages and runtime
   BCM metadata is understood.

@@ -14,6 +14,7 @@ phone that is not already in fastboot. Uses `pkexec` for privileged host setup.
 import argparse
 import hashlib
 from pathlib import Path
+import select
 import subprocess
 import sys
 import time
@@ -25,21 +26,6 @@ DEFAULT_LOGS = Path('/run/media/dipa/android/ios-extra-work/logs')
 def fastboot_devices():
     result = subprocess.run(['fastboot', 'devices'], capture_output=True, text=True)
     return [line.split()[0] for line in result.stdout.splitlines() if line.strip()]
-
-
-def our_tcpdump_pids(marker):
-    pids = []
-    for proc in Path('/proc').iterdir():
-        if not proc.name.isdigit():
-            continue
-        try:
-            if (proc / 'comm').read_text().strip() != 'tcpdump':
-                continue
-            if marker in (proc / 'cmdline').read_bytes().replace(b'\0', b' ').decode():
-                pids.append(proc.name)
-        except OSError:
-            continue
-    return pids
 
 
 def ping(host='192.168.7.2'):
@@ -54,6 +40,8 @@ def main():
     parser.add_argument('--name', required=True, help='log base name, e.g. phone-0092-rpmhinit')
     parser.add_argument('--settle', type=float, default=40, help='seconds to wait after ping')
     parser.add_argument('--logs', type=Path, default=DEFAULT_LOGS)
+    parser.add_argument('--stop-pcap', type=Path,
+                        help='stop a stale tcpdump only if its command names this pcap')
     args = parser.parse_args()
 
     if hashlib.sha256(args.image.read_bytes()).hexdigest() != args.sha256:
@@ -64,16 +52,29 @@ def main():
                          % len(devices))
     args.logs.mkdir(parents=True, exist_ok=True)
     pcap = args.logs / (args.name + '.pcap')
-    tcpdump = subprocess.Popen(
-        ['pkexec', 'tcpdump', '-U', '-n', '-i', 'any', '-s0', '-w', str(pcap),
-         'udp and src host 192.168.7.2 and dst port 5140'],
-        stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
-    ecm = None
+    host = subprocess.Popen(
+        ['pkexec', sys.executable, str(ROOT / 'tools/phone-ecm-host.py'),
+         '--timeout', '90', '--capture', str(pcap), '--capture-seconds', '65',
+         '--max-packets', '5000',
+         *(('--stop-pcap', str(args.stop_pcap)) if args.stop_pcap else ())],
+        stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True, bufsize=1)
     try:
-        time.sleep(2)
-        ecm = subprocess.Popen([sys.executable, str(ROOT / 'tools/phone-ecm-host.py'),
-                                '--timeout', '120'], stdout=subprocess.DEVNULL,
-                               stderr=subprocess.DEVNULL)
+        # Wait for the single pkexec authorization before touching the phone.
+        # If it is denied or times out, do not issue fastboot boot.
+        auth_deadline = time.monotonic() + 120
+        while time.monotonic() < auth_deadline:
+            if select.select([host.stdout], [], [], 0.25)[0]:
+                line = host.stdout.readline()
+                if line:
+                    print(line.strip())
+                    if line.strip() == 'ROOT HELPER READY':
+                        break
+            if host.poll() is not None:
+                stdout, stderr = host.communicate()
+                raise SystemExit('root capture helper failed before boot: ' +
+                                 (stderr.strip() or stdout.strip()))
+        else:
+            raise SystemExit('root capture authorization did not complete; refusing to boot')
         boot = subprocess.run(['fastboot', '-s', devices[0], 'boot', str(args.image)],
                               capture_output=True, text=True)
         text = (boot.stdout + boot.stderr).replace(devices[0], '<serial>')
@@ -88,11 +89,18 @@ def main():
         print('phone answers ping:', ping())
         time.sleep(args.settle)
     finally:
-        if ecm:
-            ecm.terminate()
-        for pid in our_tcpdump_pids(str(pcap)):
-            subprocess.run(['pkexec', 'kill', pid])
-        tcpdump.wait(timeout=10)
+        try:
+            host.wait(timeout=100)
+        except subprocess.TimeoutExpired:
+            # The root helper has a fixed interface and capture bound and will
+            # stop tcpdump itself without another authorization request.
+            print('capture helper is still inside its bounded timeout')
+    if host.poll() is not None:
+        stdout, stderr = host.communicate()
+        if stdout.strip():
+            print(stdout.strip())
+        if stderr.strip():
+            print(stderr.strip(), file=sys.stderr)
     subprocess.run([sys.executable, str(ROOT / 'tools/gpu-decode-pcap.py'), str(pcap)])
 
 

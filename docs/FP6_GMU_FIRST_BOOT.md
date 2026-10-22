@@ -159,15 +159,24 @@ host-model results until a CI build and phone observation are recorded. CI
 (`valid=0/16` at 19.2 MHz), before firmware upload. The follow-up diagnosis
 found that the original guard discarded equal read/write tick costs; 0151
 accepts zero-skew samples and records raw timing ranges. It is host-tested and
-locally cross-compiled, but not yet built by CI or phone-tested. The same local
-follow-up marks the five CPU 16 KiB pages backing the 0x12000-byte shared HFI
-allocation as `VM_WIMG_WCOMB` before queue initialization and domain publish.
-It verifies physical contiguity and only converts default-cached pages (or
-accepts pages already WCOMB), then checks every resulting attribute. This
-matches Linux's write-combined HFI mapping and avoids stale cached CPU lines
-overwriting GMU queue indices. Host tests and a system-Clang AArch64 compile
-against the exact 39728088129 XNU build tree pass; no CI build or phone result
-for this combined update exists yet.
+accepts zero-skew samples and records raw timing ranges. CI run `39730474027`
+also built the HFI CPU WCOMB preparation, which marks the five 16 KiB CPU pages
+backing the 0x12000-byte shared HFI allocation before queue initialization and
+domain publish. It verifies physical contiguity and only converts
+default-cached pages (or accepts pages already WCOMB), then checks each
+attribute. This matches Linux's write-combined HFI mapping and avoids stale
+cached CPU lines overwriting GMU queue indices. The 39730474027 phone run still
+reported `valid=0/16`, `read=0..0`, `write=0..0`: every sample was discarded
+as backward before costs were recorded. Firmware upload and HFI_CTRL did not
+run; the SMMU table-walk test remained contained. Its USB pcap and decoded
+text hashes are recorded in GPU_LOG.
+
+XNU's `ml_get_hwclock()` is the nonspeculative CNTVCT-based hardware timebase.
+The latest local follow-up switches from raw CNTPCT to that API and logs
+backward-sample counts and the last raw counter triple. This is an XNU-specific
+inference from the phone observation, not yet CI-built or phone-tested.
+Normal and ASan/UBSan host tests pass, and a system-Clang AArch64 compile
+against the exact 39730474027 build tree reports 0/1 failed.
 Minimum DDR bandwidth voting before CM3 release remains unimplemented
 (`gen8_hwsched_gmu_first_boot`). GMU interrupt
 masks do not mask the SMMU global fault interrupt. The read-only GIC inspection

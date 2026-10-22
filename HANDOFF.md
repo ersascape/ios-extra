@@ -34,7 +34,40 @@ then the next question.** The user prefers slow and careful over fast and clever
   beyond "N more measured steps".
 - Do not write product roadmaps or future-feature lists into NOTES/README.
 
+## Active FP6 GPU state (2026-10-22)
+
+- Work in this checkout on `main`; remote is `ersascape/ios-extra`. The goal is
+  FP6 Adreno 810 GMU firmware/HFI, then bounded GPU execution and an A810 Metal
+  path. `NOTES.md` and `docs/GPU_LOG.md` contain the full state and evidence.
+- Commit `6c248dda7cc4b1fc7dae519898e41ef730de0282` passed CI run
+  `39730474027`. Kernel SHA256 is
+  `1dccb4fb5992417c37b73c28fc74d49e30c2f7dc8b3e2050fd5b8cfd08a02228`.
+  Its temporary image was
+  `/tmp/ios-extra-run-39730474027/package/fp6-gmu-timer-wcomb.img`, SHA256
+  `f2b92b5fcfeb6af4e86a953dae8202b12abda5c1f700e8a9c59cd51d69137845`.
+- Phone result: CX timer still refused `valid=0/16`, with `read=0..0` and
+  `write=0..0`; all samples were discarded as backward. Firmware upload,
+  SCM, CM3 release and HFI did not run. SMMU context test passed and remained
+  contained. The matching pcap/text hashes and exact path are in `NOTES.md`.
+- The current uncommitted follow-up (check `git status`) switches the timer
+  sample source from raw CNTPCT to XNU's nonspeculative `ml_get_hwclock()`
+  (CNTVCT) and records backward counts/raw samples. Host and sanitizer probes
+  pass; system-Clang AArch64 compile against build 39730474027 reports 0/1
+  failures. No CI or phone result exists for this follow-up yet.
+- The USB test helper has also been changed to make one bounded `pkexec`
+  authorization cover ECM setup, capture and cleanup; setup failures abort
+  without retrying authorization. The previous root tcpdump may still be
+  running. Pass its exact pcap path with `--stop-pcap` on the next test; the
+  helper will stop only a tcpdump whose command line names that file.
+- Next: run focused checks, commit/push the combined follow-up once, verify its
+  single CI build and package a temporary image. Check `fastboot devices`
+  immediately before the phone test; the prior boot means fastboot state is
+  not assumed. Do not flash or use `fastboot getvar`.
+
 ## State in one paragraph
+
+The material below is historical ios-sweet 0080–0098 handoff context, not the
+active FP6 continuation. Use the active state above and NOTES.md for current work.
 
 Patches 0080-0092 are built and phone-tested. 0092 was temporarily booted on
 2026-10-19 at 16:55:16 UTC; the user confirmed the home screen. It reproduced all

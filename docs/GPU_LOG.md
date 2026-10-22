@@ -5,6 +5,36 @@ CI runs, phone results and the reasoning at the time. The current state and the 
 action are in [NOTES.md](../NOTES.md) and [HANDOFF.md](../HANDOFF.md). Entries that say
 "not yet built/booted" were true when written; newer entries supersede them.
 
+## FP6 0150 follow-up: phone counter reads backward (2026-10-22)
+
+- CI run `39730474027` passed for `6c248dd`. Kernel SHA256
+  `1dccb4fb5992417c37b73c28fc74d49e30c2f7dc8b3e2050fd5b8cfd08a02228`.
+  Header-v2 image
+  `/tmp/ios-extra-run-39730474027/package/fp6-gmu-timer-wcomb.img` SHA256
+  `f2b92b5fcfeb6af4e86a953dae8202b12abda5c1f700e8a9c59cd51d69137845`.
+- Phone console and USB log both show timer refusal `valid=0/16`,
+  `zero=0 shorter=0 outlier=0 read=0..0 write=0..0`; all samples were
+  discarded before timing-cost collection. Firmware upload, SCM CX setup, CM3
+  release and HFI_CTRL did not run. The SMMU software table-walk test passed
+  but stayed contained (`route_live=0`, bank reserved).
+- Capture: 705 UDP packets, 168,631 log bytes. Pcap
+  `/tmp/ios-extra-run-39730474027/logs/phone-0150-timer-wcomb.pcap`, SHA256
+  `048725f34765776a36d4ce5cbc13733854bbf47875ed30b491ca095e15f59dfe`; decoded
+  text SHA256
+  `e14fbf9b65b5a6dd6ff6f4d6d791f254933d0530ec79ad71d8d7bcbc94aed83a`.
+- XNU's `ml_get_hwclock()` calls its nonspeculative CNTVCT timebase. The prior
+  FP6 code read raw CNTPCT; because the phone run discarded every sample as
+  backward, the next local change uses `ml_get_hwclock()` and prints backward
+  counters plus the last counter triple. This is a source-based diagnosis, not
+  yet CI-built or phone-tested.
+- The test helper's ECM loop retried two separate `pkexec` commands every
+  100 ms after setup failure, and capture/cleanup used additional elevated
+  commands. The helper is revised to do interface setup, capture, and
+  exact-path stale-capture cleanup in one bounded root invocation, with no
+  authorization retries or follow-up kill prompt. The previous root tcpdump
+  is still live because the attempted cleanup authorization was denied; the
+  next authorized run can stop only its exact pcap path before capturing anew.
+
 ## FP6 0150 follow-up: zero-skew timer and HFI CPU cache attributes (2026-10-22)
 
 - The latest console photo reproduces the USB log result: timer validation
