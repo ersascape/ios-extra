@@ -22,6 +22,12 @@
   Patch applies to the CI source; `tests/test_gpu_probe.py` passes. Full CI and
   a retest are still required.
 
+## FP6 GMU clock-fix temporary image packaged (2026-10-22)
+
+- Packaged CI run `39674158109` / source `696a07851fb4e46fd4ab810bdc97e666c14013e2` with product ADT `4da4226e6b9ac393ff22b66a304d9172d6be2bfd6d558348a47379c51aab1d80` and Volcano DTB `8198534128258bfe7b05bbb5b227affc181aa49b376884c08eae8564fce124e3`.
+- Image: `research/local-fp6/package-696a078/fp6-gmu-clockfix-boot.img`, SHA256 `9a074945623e65676cf0f1d509a848de63ebe7d54c055b67bf844c9d0da6e989`. Header-v2, embedded payload and DTB round-trip validation passed. Manifest records boot args and all input hashes.
+- Package is not phone-tested. It enables the experimental SMMU, GMU load, bounded GMU firmware/HFI probe and read-only global IRQ inventory (`fp6smmu=2 fp6smmupower=1 fp6smmuirq=1 fp6gmuload=1 fp6gmuboot=1`).
+
 ## FP6 ADT and vendor DTS recovered locally (2026-10-22)
 
 - Copied `/home/ersa/Downloads/vendor_boot.img` to ignored `research/local-fp6/vendor_boot.img` (SHA256 `26dbd78d40a739fd0790518fdaa09bef2cfb4a2098a5daf51098617f0f2ad31c`). `unpack_bootimg` identified Android vendor_boot v4 and extracted its DTB, vendor ramdisk and bootconfig under `research/local-fp6/vendor_boot/`.
