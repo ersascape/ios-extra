@@ -2996,3 +2996,20 @@ error::ResourceWarning -m unittest discover -s tests` (also with
   observation. Patch 0169 remains untested on the phone because fastboot was
   absent. The next useful hardware step remains its read-only CB0 stage image
   after the user has placed the FP6 in fastboot.
+
+## FP6 Gen8.3 IOMMU/GPU boot ordering source review (2026-10-23)
+
+- Fairphone source shows KGSL attaches its GPU user SMMU domain during IOMMU
+  probe, then installs the default TTBR0 and SMMU aperture. Later
+  `kgsl_iommu_start()` applies page-fault policy/PRR state. On cold boot,
+  `gen8_hwsched_first_boot()` runs GMU first boot before GPU boot; GPU boot then
+  starts MMU policy, takes GPU OOB, runs `gen8_start()`, enables IRQs, loads
+  SQE/AQE bases and starts the scheduler. Ring startup programs the ring,
+  starts SQE, sends Gen8 CP initialization, authenticates ZAP and leaves secure
+  mode. This gives the ordering constraint for HFI MEM_ALLOC: complete and
+  publish each requested GPU/GMU map before replying, then retain backing until
+  a proven quiesce.
+- This is source inspection only; it does not explain the measured disabled,
+  nonzero CB0 state or prove the XNU mapping path. Keep the next 0169 phone boot
+  read-only and compare CB0 at each stage before any first write. The detailed
+  source references are in `docs/FP6_ADRENO_METAL_AUDIT.md`.

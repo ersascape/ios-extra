@@ -113,6 +113,32 @@ The immediate SMMU/GMU work remains necessary whichever userspace frontend is
 chosen. Turnip meaningfully reduces the later compiler/rendering implementation;
 it does not remove the current hardware startup task.
 
+## Gen8.3 IOMMU and GPU boot ordering (source review, 2026-10-23)
+
+Fairphone's `kgsl_iommu_setup_context()` allocates and attaches the GPU user
+domain during KGSL IOMMU probe. `iommu_probe_user_context()` then creates the
+default pagetable, installs its TTBR0 on the user context, and applies the
+SMMU aperture before the first GMU boot. In contrast,
+`kgsl_iommu_start()` runs later and mainly applies fault policy/PRR state; it is
+not where Linux first constructs the context. This is consistent with the
+FP6's GPU-reserved CB0 being distinct from the GMU's later CB2 test context,
+but it does not identify who left the measured disabled CB0 register values.
+
+The cold-boot order is explicit in `gen8_hwsched_first_boot()`: initialize the
+MMU/firmware, run `gen8_hwsched_gmu_first_boot()`, then
+`gen8_hwsched_gpu_boot()`. The latter calls `kgsl_mmu_start()`, takes GMU GPU
+OOB, runs `gen8_start()`, enables GPU IRQs, programs SQE/AQE bases and boots
+the scheduler. Ring startup then programs ring/scratch addresses, starts SQE,
+sends Gen8 CP initialization, loads/authenticates ZAP and leaves secure mode.
+Therefore HFI `MEM_ALLOC` may arrive before GPU command processing is started;
+XNU must finish and publish every requested GPU/GMU mapping before replying,
+and retain its backing until a proven quiesce.
+
+This is source-order evidence only. It does not authorize replacing the
+measured nonzero CB0 state or prove XNU's current HFI mapping works. Keep the
+0169 boot read-only and compare its post-CB2, pre-CM3, post-firmware and
+first-allocation snapshots before attempting the first CB0 write.
+
 ## Gen8.3 HFI-to-GPU boundary (source review, 2026-10-22)
 
 The 0160 XNU candidate stopped after its `START` HFI transaction. Patch 0161

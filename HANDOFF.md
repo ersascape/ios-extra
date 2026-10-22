@@ -40,8 +40,10 @@ device proof.
 
 ## Active FP6 GPU state (2026-10-23)
 
-Patch 0168 is the latest diagnostic image built and phone-tested; 0167 remains
-the latest GMU/HFI phone test. The 0164 GPU-access path extends through
+Patch 0168 is the latest diagnostic image tested on the phone; patch 0169 is
+the latest diagnostic image built, and its read-only CB0 stage snapshot has
+host-test coverage but no phone result. Patch 0167 remains the latest phone run
+that exercised the GMU/HFI allocation path. The 0164 GPU-access path extends through
 post-`CORE_FW_START` HFI startup and accepts both request-ID and generic-ID
 ACKs. Patch 0164 commit
 `cacda42725fd0945a6a8df96bf28e27b8d8a2868` passed CI run `39807392802`. Kernel SHA256
@@ -134,6 +136,10 @@ header-v2 round-trip passed. It uses the verified DTB and diagnostic RAM disk;
 the CI ADT has no `/product` artwork. The phone was not in fastboot, so this
 image has not been booted. The next test should enable
 `fp6smmu=2 fp6smmupower=1 fp6gmuload=1 fp6gmuboot=1` and capture USB logs.
+Commit `6e0ca76` adds host coverage proving the stage snapshots do not write
+SMMU state. The focused harness passed normally and with ASan/UBSan; the full
+Python suite passed 13 tests with 5 dependency skips. This did not create a new
+kernel build or add phone evidence.
 
 Earlier phone evidence remains: patch 0159's CORE_FW_START path asserted with
 `irq=0x4 fw=0x900` and the bounded path verified CM3 reset. The 0165 phone test
