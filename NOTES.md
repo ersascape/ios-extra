@@ -61,8 +61,11 @@
   ARC records reside). Patch 0154 is being corrected to search ID 5, and the
   host fixture now identifies its records as BCM entries. The corrected patch
   passes the targeted ASan/UBSan host harness. The build and ID-5 phone retry
-  are recorded in the following section; the retry also failed metadata lookup.
-  No vote attempt has succeeded on hardware yet.
+  are recorded in the following section. Its USB log lacks the earlier
+  `metadata missing` line; source review found a separate stale address-ID=3
+  check, so the code likely found metadata and silently rejected BCM addresses.
+  Patch 0155 corrects the address check and test fixture; it is not built or
+  phone-tested yet. No vote attempt has succeeded on hardware.
 
 ## FP6 patch 0154 cmd-db ID-5 retry (2026-10-22)
 
@@ -78,10 +81,14 @@
   SMMU walk, ARC floors, clocks, timer and firmware upload succeeded; optional
   SCM remained unavailable. Bootstrap then still reported missing SH0 metadata
   and stopped before CM3 release. No BCM write occurred.
-- ID 5 is indeed BCM (`cmd-db.h`: ARC=3, VRM=4, BCM=5), but this correction
-  alone did not fix lookup. Investigate DB header/entry assumptions and runtime
-  BCM record visibility before another boot. See `docs/FP6_GPU_CONTINUATION.md`
-  for a source/build/phone handoff and exact next step.
+- The log does not contain `bootstrap BCM metadata missing name=SH0`; it only
+  contains the generic DDR-vote refusal. `fp6_gmu_bootstrap_bcm_vote()` still
+  required `(addr >> 16) == 3` after looking up records. Since BCM addresses
+  encode slave ID 5, and the host fixture also used `0x300xx`, this explains
+  the silent refusal. Patch 0155 changes validation to BCM ID 5, reports any
+  other ID, and uses `0x500xx` fixture addresses. It passes ASan/UBSan and
+  applies after 0154 to the exact prior CI source. Build and phone retry remain.
+  Handoff: `docs/FP6_GPU_CONTINUATION.md`.
 
 ## FP6 GMU first-boot attempt (2026-10-22)
 

@@ -1,0 +1,17 @@
+# FP6 cmd-db BCM resource addresses encode slave ID 5 (0155)
+diff --git a/bsd/dev/sweet_gpu.c b/bsd/dev/sweet_gpu.c
+--- a/bsd/dev/sweet_gpu.c
++++ b/bsd/dev/sweet_gpu.c
+@@ -3188,7 +3188,11 @@
+ 			printf("QCOM GMU: bootstrap BCM metadata missing name=%s\n", req[i].name);
+ 			return 0;
+ 		}
+-		if ((m[i].addr >> 16) != 3u) return 0;
++		if (((m[i].addr >> 16) & 0xfu) != 5u) {
++			printf("QCOM GMU: bootstrap BCM address has wrong slave ID name=%s addr=0x%08x\n",
++			    req[i].name, m[i].addr);
++			return 0;
++		}
+ 		for (unsigned j = 0; j < i; j++) if (m[i].addr == m[j].addr) return 0;
+ 	}
+ 	for (unsigned i = 0; i < sizeof(req) / sizeof(req[0]); i++) {

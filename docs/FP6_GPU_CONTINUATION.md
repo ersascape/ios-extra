@@ -33,10 +33,13 @@ GMU DMA, GPU command, rendering or Metal work has succeeded yet.
   via one idle ACTIVE RSC TCS. It bounds completion and keeps CM3 reset if any
   precondition or acknowledgment is uncertain.
 - The first 0154 image used the wrong cmd-db slave ID 3 (ARC). ID 5 is BCM per
-  Fairphone `include/soc/qcom/cmd-db.h` (`ARC=3, VRM=4, BCM=5`). Changing to 5
-  did **not** fix lookup: the second phone log still says
-  `bootstrap BCM metadata missing name=SH0`. No BCM writes occurred on either
-  boot. Do not treat the active vote as hardware-validated.
+  Fairphone `include/soc/qcom/cmd-db.h` (`ARC=3, VRM=4, BCM=5`). The second
+  phone log does **not** say metadata missing; it only has the generic vote
+  refusal. Source review found the stale check `(addr >> 16) == 3` after the
+  lookup, and the host fixture also modeled addresses as `0x300xx`. Patch 0155
+  changes address validation to BCM ID 5 and the fixture to `0x500xx`. This is
+  the likely reason for the ID-5 boot refusal, but it remains unverified on
+  hardware. No BCM write has succeeded.
 
 ## Latest build and phone evidence
 
@@ -61,16 +64,11 @@ GMU DMA, GPU command, rendering or Metal work has succeeded yet.
 
 ## Next debugging step
 
-Inspect why the cmd-db lookup for BCM ID 5 cannot find `SH0`, without another
-boot until source-based possibilities are exhausted. Linux `cmd_db_get_header()`
-scans all slave headers and compares an 8-byte zero-padded resource ID. The XNU
-reader currently assumes an 8-entry header at byte 8, 24-byte entries starting
-at byte 144, and BCM slave ID 5. Existing `fp6_arc_level()` succeeds on the
-phone using the same header/entry offsets for ARC ID 3, so the base mapping and
-ARC layout are real. Compare actual BCM enum/ID, entry alignment, DB version and
-reserved-memory mapping against Linux and the stock DT. If another phone dump is
-needed, add a bounded read-only diagnostic that logs header fields and names;
-do not relax the fail-closed guard or send a guessed TCS vote.
+Patch 0155 has corrected the post-lookup address validation to BCM slave ID 5
+and updated the host fixture. It must be built and measured once. If that boot
+still refuses, inspect the specific new address-ID diagnostic and add bounded
+read-only header/entry diagnostics; do not relax the fail-closed guard or send a
+guessed TCS vote.
 
 Once metadata lookup is verified, run the targeted host test and compile,
 commit/push one focused patch, wait for CI, package with the known local ADT/DTB,

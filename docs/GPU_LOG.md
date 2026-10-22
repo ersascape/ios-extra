@@ -22,9 +22,12 @@
   screen showed `bootstrap BCM metadata missing name=SH0`; fail-closed logic
   stopped before CM3 release and no BCM write occurred. No USB ECM/pcap was
   available. Review found BCM entries use cmd-db slave ID 5, while the
-  candidate searched ARC ID 3. Corrected the lookup to BCM ID 5 and updated the
-  fixture; ASan/UBSan host test and patch application pass. Rebuild and phone
-  retry are pending.
+  candidate searched ARC ID 3. The subsequent CI `39752494051` log does not
+  contain a metadata-missing line; source review found it silently rejected
+  BCM resource addresses because the separate address check still required ID
+  3, and the test fixture modeled `0x300xx` addresses. Patch 0155 changes that
+  check to ID 5 and the fixture to `0x500xx`; ASan/UBSan host test and patch
+  application after 0154 pass. Rebuild and phone retry are pending.
 - CI `39752494051` / commit `4f68fcb...` included the ID-5 correction and
   passed; image SHA256 `fe97c9fadae1388605b37124550677f596201c3f51bdc151afd6e80d4f835494`
   was temporarily booted with `fp6usb=2`. The 96-packet USB log shows the

@@ -112,7 +112,7 @@ static void make_cmd_db(void) {
  fp6_cmd_db[2]=(112u<<16)|5u; /* BCM slave ID, distinct from ARC ID 3 */
  fp6_cmd_db[3]=(3u<<16)|880u;
  const uint32_t names[3]={0x00304853u,0x0030434du,0x00564341u};
- const uint32_t addrs[3]={0x30020u,0x30030u,0x30040u};
+ const uint32_t addrs[3]={0x50020u,0x50030u,0x50040u};
  const uint32_t widths[3]={16u,4u,4u};
  for(unsigned i=0;i<3;i++) {
   unsigned e=(256u+24u*i)/4u;
@@ -178,11 +178,11 @@ int main(void) {
  fp6_gmu_first_boot(2,0x1000,0x800);
  assert(route_writes==1 && release_count==1 && hfi_starts==1);
  assert(rsc_command_count==1);
- assert(fp6_rsc[(0xd00u+0x38u)/4]==0x30020u);
+ assert(fp6_rsc[(0xd00u+0x38u)/4]==0x50020u);
  assert(fp6_rsc[(0xd00u+0x3cu)/4]==0x20000858u); /* 2,136,718 kB/s -> 2,136 votes */
- assert(fp6_rsc[(0xd00u+0x38u+24u)/4]==0x30030u);
+ assert(fp6_rsc[(0xd00u+0x38u+24u)/4]==0x50030u);
  assert(fp6_rsc[(0xd00u+0x3cu+24u)/4]==0x20000858u);
- assert(fp6_rsc[(0xd00u+0x38u+48u)/4]==0x30040u);
+ assert(fp6_rsc[(0xd00u+0x38u+48u)/4]==0x50040u);
  assert(fp6_rsc[(0xd00u+0x3cu+48u)/4]==0x60000000u);
  unsigned published_before=publish_count;
  assert(!fp6_gmu_domain_publish(&fp6_gmu_domain));
