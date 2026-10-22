@@ -73,8 +73,18 @@
   compiles with system Clang against the exact CI buildtree from run
   `39739290127` (`0 of 1 files failed`). The repository's configured Swift
   Clang is absent, so the local replay used `/usr/bin/clang`.
-- CI build and phone validation are pending. Do not call 0153 a confirmed panic
-  fix until a boot of its packaged image reaches USB logging without the panic.
+- Commit `e53c66ab499d75d2101b1736ffbb85a7642e64f8` passed CI run
+  `39745254929`; packaging was skipped because `FP6_STOCK_DTB_URL` is unset.
+  The verified CI kernel was locally packaged as
+  `/tmp/ios-extra-run-39745254929/package/fp6-gmu-hfi-cache-isolation.img`
+  (SHA256 `cca41889433f9c1005ddf0aa79513f5be29f49a0bbb1b49808bc150de0d18c5e`).
+- One temporary phone boot produced a complete USB log (411 packets, 121,789
+  bytes) and reached launchd without the prior panic. The phone confirms
+  `FW_INIT_RESULT=0x100`, `HFI_CTRL_STATUS=1`, and verified CM3 reset after the
+  bounded probe; see the exact hashes and limits in the current-state entry in
+  `NOTES.md`. This supports 0153 as the fix for the observed panic, but the
+  panic stack was unavailable, so it does not prove the original call site.
+  HFI messages, GMU DMA and GPU execution have not been tested.
 
 This is the full per-step record that used to be `NOTES.md`: exact images, hashes,
 CI runs, phone results and the reasoning at the time. The current state and the next

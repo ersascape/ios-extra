@@ -1,5 +1,39 @@
 # ios-extra — current state
 
+## FP6 HFI cache-path phone retest (2026-10-22)
+
+- Patch 0153 commit `e53c66ab499d75d2101b1736ffbb85a7642e64f8` passed CI run
+  `39745254929` (build job 6m44s; FP6 boot job passed). Packaging was skipped
+  by CI because `FP6_STOCK_DTB_URL` is unset. The CI kernel was packaged locally
+  with the verified product ADT and Volcano DTB; package round-trip and SHA
+  manifest checks passed. Temporary image:
+  `/tmp/ios-extra-run-39745254929/package/fp6-gmu-hfi-cache-isolation.img`,
+  SHA256 `cca41889433f9c1005ddf0aa79513f5be29f49a0bbb1b49808bc150de0d18c5e`.
+- One authorized `fastboot boot` was run with `tools/gpu-phone-test.py`; no
+  partition writes or `getvar` calls. The USB capture contains 411 packets and
+  121,789 bytes. Pcap SHA256
+  `440ad1cde70cb785db62a2f78b1d1bdb839a4a31593398d88883c9353dae367a`;
+  decoded log SHA256
+  `cd93331eea3af227a2808a44c2f6192130b6a106a928f79b6d3800c9d001ab23`.
+  Both are under `/tmp/ios-extra-run-39745254929/logs/`.
+- Source, build and phone evidence agree: the 0153 image boots through launchd
+  without the earlier `phystokv_range` panic. GMU firmware reports
+  `FW_INIT_RESULT=0x100`, `HFI_CTRL_STATUS=1`, then the bounded probe verifies
+  CM3 reset and retains the context and clock votes. CX timer seeding is
+  healthy (16 samples; XNU CNTVCT at 19.2 MHz). The optional
+  `GPU_INIT_CX_REGS` SCM call is unavailable and is logged as nonfatal.
+  `CB_FSR=0x400` remains the known FORMAT-only status. The SMMU SID stays
+  disabled; firmware upload is still `0` (persistent pages only), no HFI
+  messages, GMU DMA, GPU commands, or rendering were exercised. Removing the
+  WIMG rewrite is strongly supported as the panic fix, though the original
+  panic had no stack trace, so causality is not formally proven.
+- Next: trace and implement the FP6/Linux-matching minimum DDR/BCM vote before
+  any HFI traffic. Then add HFI tables and MEM_ALLOC handling with explicit
+  cache ownership transitions; preserve bounded reset behavior until those
+  operations are validated. GPU MMU/OOB, SQE/AQE submission, a bounded GPU
+  memory-write test, rendering/readback, and the A810-compatible IOKit/Metal
+  path remain outstanding.
+
 ## FP6 GMU first-boot attempt (2026-10-22)
 
 - Repackaged CI kernel from run `39667763253` (commit `c79f49f`) with the
