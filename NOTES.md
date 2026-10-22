@@ -23,7 +23,7 @@
   healthy (16 samples; XNU CNTVCT at 19.2 MHz). The optional
   `GPU_INIT_CX_REGS` SCM call is unavailable and is logged as nonfatal.
   `CB_FSR=0x400` remains the known FORMAT-only status. The SMMU SID stays
-  disabled; firmware upload is still `0` (persistent pages only), no HFI
+  disabled; the persistent firmware upload returned `0` (success). No HFI
   messages, GMU DMA, GPU commands, or rendering were exercised. Removing the
   WIMG rewrite is strongly supported as the panic fix, though the original
   panic had no stack trace, so causality is not formally proven.
