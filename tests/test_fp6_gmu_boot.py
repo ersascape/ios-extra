@@ -20,9 +20,6 @@ typedef uint64_t ppnum_t;
 #define FALSE 0
 #define PAGE_SIZE 0x4000u
 #define PAGE_MASK (PAGE_SIZE-1u)
-#define VM_WIMG_MASK 0xffu
-#define VM_WIMG_DEFAULT 0x2u
-#define VM_WIMG_WCOMB 0x6u
 #define kernel_pmap ((void *)1)
 #define ptoa_64(pn) ((uint64_t)(pn) << 14)
 #include "domain.h"
@@ -83,24 +80,11 @@ static void fp6_smmu_write32(vm_offset_t b,uint32_t o,uint32_t v) {
  if(o==0x47618) hfi_starts++;
 }
 static unsigned allocs;
-static unsigned cache_set_count;
-static struct { ppnum_t pn; unsigned attr; } cache_attrs[16];
-static ppnum_t pmap_find_phys(void *map, addr64_t va) {
- (void)map;return (ppnum_t)(va >> 14);
-}
-static unsigned pmap_cache_attributes(ppnum_t pn) {
- for(unsigned i=0;i<16;i++)if(cache_attrs[i].pn==pn)return cache_attrs[i].attr;
- return VM_WIMG_DEFAULT;
-}
-static void pmap_set_cache_attributes(ppnum_t pn,unsigned attr) {
- for(unsigned i=0;i<16;i++)if(cache_attrs[i].pn==pn){cache_attrs[i].attr=attr;cache_set_count++;return;}
- for(unsigned i=0;i<16;i++)if(!cache_attrs[i].pn){cache_attrs[i].pn=pn;cache_attrs[i].attr=attr;cache_set_count++;return;}
- assert(0);
-}
+static unsigned publish_count;
 static int alloc_page(void *c,uint32_t n,struct fp6_gmu_domain_page *p) {
  (void)c;size_t bytes=(n+PAGE_MASK)&~(size_t)PAGE_MASK;p->va=aligned_alloc(PAGE_SIZE,bytes);if(p->va)memset(p->va,0,bytes);p->pa=0x900000000ULL+(++allocs)*0x100000ULL;return !p->va;
 }
-static int publish(void *c,const void *p,uint32_t n) {(void)c;(void)p;(void)n;return 0;}
+static int publish(void *c,const void *p,uint32_t n) {(void)c;(void)p;(void)n;publish_count++;return 0;}
 '''
 MAIN = r'''
 static void run_probe(uint32_t fw, uint32_t hfi, int fail_reset) {
@@ -118,8 +102,6 @@ int main(void) {
  static const struct fp6_gmu_domain_ops ops={alloc_page,publish};
  assert(!fp6_gmu_domain_init(&fp6_gmu_domain,&ops,0));
  assert(!fp6_gmu_boot_reserve());
- assert(cache_set_count==5);
- for(unsigned i=0;i<5;i++)assert(cache_attrs[i].attr==VM_WIMG_WCOMB);
  uint32_t *vrb=(uint32_t *)(void *)fp6_gmu_range_va(fp6_gmu_vrb_va);
  uint32_t *trace=(uint32_t *)(void *)fp6_gmu_range_va(vrb[2]);
  assert(trace && vrb[2]==fp6_gmu_trace_va);
@@ -148,11 +130,9 @@ int main(void) {
  reset_value=1;release_count=reset_count=route_writes=hfi_starts=0;scm_calls=0;
  fp6_gmu_first_boot(2,0x1000,0x800);
  assert(route_writes==1 && release_count==1 && hfi_starts==1);
- unsigned cache_sets_before_publish=cache_set_count;
+ unsigned published_before=publish_count;
  assert(!fp6_gmu_domain_publish(&fp6_gmu_domain));
- assert(cache_set_count==cache_sets_before_publish);
- assert(fp6_gmu_hfi_set_wcomb(&fp6_gmu_domain,fp6_gmu_hfi_va));
- assert(cache_set_count==cache_sets_before_publish); /* frozen domain: no cache mutation */
+ assert(publish_count>published_before); /* CPU-initialized HFI buffers are cleaned before GMU access */
  run_probe(0x100,1,0); /* successful HFI still stops */
  run_probe(0x100,1,1); /* reset write rejected */
  run_probe(0x300,1,0); /* success bits plus firmware assert must fail */
@@ -179,6 +159,7 @@ with tempfile.TemporaryDirectory(prefix='fp6-gmu-boot-') as td:
         if b'+++ b/bsd/dev/sweet_gpu.c\n' in patch.read_bytes():
             subprocess.run(['git','apply','--include=bsd/dev/sweet_gpu.c',str(patch)],cwd=work,check=True)
     source=(work/'bsd/dev/sweet_gpu.c').read_text()
+    assert 'pmap_set_cache_attributes(' not in source
     region=source[source.index('#define FP6_GMU_HFI_SIZE'):source.index('/* Called only after temporary ATS passes.')]
     region=region.replace('__asm__ volatile("dsb sy" ::: "memory");','')
     patch=(ROOT/'xnu/patches/0133-fp6-gmu-persistent-domain.patch').read_text()

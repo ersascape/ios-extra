@@ -1,0 +1,85 @@
+diff --git a/bsd/dev/sweet_gpu.c b/bsd/dev/sweet_gpu.c
+--- a/bsd/dev/sweet_gpu.c
++++ b/bsd/dev/sweet_gpu.c
+@@ -1984,14 +1984,11 @@
+ #include <kern/clock.h>
+ #include <arm/machine_routines.h>
+ #include <arm/caches_internal.h>
+-#include <vm/memory_types.h>
+ #include <vm/pmap.h>
+ #include <vm/vm_kern.h>
+ 
+ extern vm_offset_t ml_io_map(vm_offset_t, vm_size_t);
+ extern uint64_t ml_get_hwclock(void);
+-extern unsigned int pmap_cache_attributes(ppnum_t);
+-extern void pmap_set_cache_attributes(ppnum_t, unsigned int);
+ 
+ #define FP6_GPUCC_PA       0x03d90000
+ #define FP6_GPUCC_SIZE     0x00009800
+@@ -3044,53 +3041,11 @@
+ 	return NULL;
+ }
+ 
+-/* HFI queue indices are shared CPU/GMU state. Use Normal noncached CPU
+- * mappings so CPU cache-line writeback cannot overwrite GMU-owned indices. */
+-static int
+-fp6_gmu_hfi_set_wcomb(struct fp6_gmu_domain *d, uint32_t address)
+-{
+-	ppnum_t pages[8];
+-	uint64_t first_pa = 0;
+-	unsigned count = 0;
+-	if (!d || d->frozen || d->failed || address != fp6_gmu_hfi_va)
+-		return -1;
+-	struct fp6_gmu_domain_range *range = NULL;
+-	for (unsigned i = 0; i < d->count; i++)
+-		if (d->ranges[i].complete && d->ranges[i].address == address)
+-			range = &d->ranges[i];
+-	if (!range || !range->backing.va || !range->mapped_size ||
+-	    ((uintptr_t)range->backing.va & PAGE_MASK))
+-		return -1;
+-	vm_size_t bytes = (range->mapped_size + PAGE_MASK) & ~PAGE_MASK;
+-	if (!bytes || bytes / PAGE_SIZE > sizeof(pages) / sizeof(pages[0]))
+-		return -1;
+-	for (vm_size_t offset = 0; offset < bytes; offset += PAGE_SIZE) {
+-		ppnum_t ppn = pmap_find_phys(kernel_pmap,
+-		    (addr64_t)(uintptr_t)range->backing.va + offset);
+-		if (!ppn) return -1;
+-		uint64_t pa = ptoa_64(ppn);
+-		if (offset == 0) first_pa = pa;
+-		else if (pa != first_pa + offset) return -1;
+-		unsigned int attr = pmap_cache_attributes(ppn) & VM_WIMG_MASK;
+-		if (attr != VM_WIMG_DEFAULT && attr != VM_WIMG_WCOMB) return -1;
+-		pages[count++] = ppn;
+-	}
+-	for (unsigned i = 0; i < count; i++)
+-		if ((pmap_cache_attributes(pages[i]) & VM_WIMG_MASK) != VM_WIMG_WCOMB)
+-			pmap_set_cache_attributes(pages[i], VM_WIMG_WCOMB);
+-	__asm__ volatile("dsb sy" ::: "memory");
+-	for (unsigned i = 0; i < count; i++) {
+-		if ((pmap_cache_attributes(pages[i]) & VM_WIMG_MASK) != VM_WIMG_WCOMB) {
+-			printf("QCOM GMU: HFI CPU cache attribute verify failed page=%u ppn=0x%llx\n",
+-			    i, (unsigned long long)pages[i]);
+-			return -1;
+-		}
+-	}
+-	printf("QCOM GMU: HFI CPU backing WCOMB pages=%u size=0x%x PA=0x%llx\n",
+-	    count, range->mapped_size, (unsigned long long)first_pa);
+-	return 0;
+-}
+-
++/* HFI stays in ordinary CPU-cached memory for this bounded first-boot probe.
++ * fp6_gmu_domain_publish() cleans initialized buffers before routing the GMU.
++ * HFI message traffic must add explicit cache ownership transitions before it
++ * reads GMU-written queue state or publishes CPU-written messages.
++ */
+ /* KGSL GMU_NONCACHED_KERNEL: first fit from 0x60000000, below 0x80000000. */
+ static uint32_t
+ fp6_gmu_next_va(uint32_t size)
+@@ -3111,7 +3066,6 @@
+ {
+ 	fp6_gmu_hfi_va = fp6_gmu_next_va(FP6_GMU_HFI_SIZE);
+ 	if (!fp6_gmu_hfi_va || fp6_gmu_domain_reserve(&fp6_gmu_domain, fp6_gmu_hfi_va, FP6_GMU_HFI_SIZE, 0)) return -1;
+-	if (fp6_gmu_hfi_set_wcomb(&fp6_gmu_domain, fp6_gmu_hfi_va)) return -1;
+ 	fp6_gmu_log_va = fp6_gmu_next_va(FP6_GMU_LOG_SIZE);
+ 	if (!fp6_gmu_log_va || fp6_gmu_domain_reserve(&fp6_gmu_domain, fp6_gmu_log_va, FP6_GMU_LOG_SIZE, 0)) return -1;
+ 	fp6_gmu_vrb_va = fp6_gmu_next_va(FP6_GMU_VRB_SIZE);

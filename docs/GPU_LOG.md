@@ -52,6 +52,30 @@
   object/submission ABI remains separate. Reference commits and file paths are
   in `NOTES.md`.
 
+## FP6 HFI cache-path isolation (0153, 2026-10-22)
+
+- The only new operation after the previously successful 0149 HFI-controller
+  boot that rewrote a CPU page's WIMG type was 0150's
+  `pmap_set_cache_attributes(..., VM_WIMG_WCOMB)` for the HFI backing pages.
+  XNU routes that API through cache-attribute page-table updates; this matches
+  the panic's `phystokv_range()` failure shape, although the absent panic stack
+  means causality remains unproven.
+- Patch 0153 removes that WIMG rewrite for the bounded `HFI_CTRL_INIT` probe.
+  CPU-initialized buffers remain ordinary cached memory and use the existing
+  `fp6_gmu_domain_publish()` clean before the GMU is routed. This is sufficient
+  for the current probe, which does not exchange HFI messages or inspect
+  GMU-written queue state. Any later HFI messaging must explicitly clean CPU
+  writes before handing a queue to the GMU and invalidate GMU-written cache
+  lines before CPU reads; it cannot assume this probe's cache policy is enough.
+- `tests/test_fp6_gmu_boot.py` passes normally and with ASan/UBSan; it now
+  verifies publication still occurs and the integrated source no longer calls
+  `pmap_set_cache_attributes()`. `git diff --check` passes. `sweet_gpu.c`
+  compiles with system Clang against the exact CI buildtree from run
+  `39739290127` (`0 of 1 files failed`). The repository's configured Swift
+  Clang is absent, so the local replay used `/usr/bin/clang`.
+- CI build and phone validation are pending. Do not call 0153 a confirmed panic
+  fix until a boot of its packaged image reaches USB logging without the panic.
+
 This is the full per-step record that used to be `NOTES.md`: exact images, hashes,
 CI runs, phone results and the reasoning at the time. The current state and the next
 action are in [NOTES.md](../NOTES.md) and [HANDOFF.md](../HANDOFF.md). Entries that say

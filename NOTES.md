@@ -142,14 +142,18 @@
 
 The target is FP6 Adreno 810 Gen8.3. Patches 0148/0149 booted on the phone: the corrected GPU PLL/GMU clocks came up, 159 persistent pages were checked/uploaded, GMU firmware reported `FW_INIT_RESULT=0x100`, HFI controller initialization reported `HFI_CTRL_STATUS=1`, and CM3 reset was verified afterward. The photo records early GPU lines; the later USB capture started after that segment. GMU DMA and HFI command processing are still unproven.
 
-First trace the 0152 panic address `0x3df4000` to its caller. It is the
-base-relative offset `0x903df4000 - 0x900000000`, but the panic stack is not
-available and the HFI WCOMB path is only a candidate. Do not boot another image
-until the address conversion is understood and corrected. Then resume with the
-minimum Linux-matching DDR vote before HFI traffic, full HFI tables and
-MEM_ALLOC handling, safe idle, GPU MMU/OOB and Gen8 SQE/AQE execution, a bounded
-GPU memory write, draw/readback, then an IOKit allocation/submission/fence ABI
-and an A810-compatible Metal frontend and IOSurface presentation.
+The focused 0153 follow-up removes the new HFI WIMG rewrite that is the only
+new path to `pmap_set_cache_attributes()` in this boot; the established
+allocator and clean-before-publish sequence already ran in the earlier HFI
+controller boot. Patch 0153 passes the GMU host probe normally and under
+ASan/UBSan, and `sweet_gpu.c` compiles against CI run `39739290127`'s buildtree
+with system Clang. CI and a phone result are pending. Keep HFI controller init
+bounded; add explicit cache ownership transitions before HFI message traffic.
+After the phone confirms the panic is gone, resume with the minimum
+Linux-matching DDR vote, full HFI tables and MEM_ALLOC handling, safe idle, GPU
+MMU/OOB and Gen8 SQE/AQE execution, a bounded GPU memory write, draw/readback,
+then an IOKit allocation/submission/fence ABI and an A810-compatible Metal
+frontend and IOSurface presentation.
 
 See [FP6 GMU first boot](docs/FP6_GMU_FIRST_BOOT.md), [FP6 Adreno Metal audit](docs/FP6_ADRENO_METAL_AUDIT.md) and [FP6 SMMU power](docs/FP6_SMMU_POWER.md).
 
