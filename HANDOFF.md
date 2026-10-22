@@ -64,6 +64,18 @@ then the next question.** The user prefers slow and careful over fast and clever
   immediately before the phone test; the prior boot means fastboot state is
   not assumed. Do not flash or use `fastboot getvar`.
 
+## FP6 continuation update (2026-10-22)
+
+The active branch has advanced past the timer follow-up above. Current HEAD is
+`77d990a`; patch 0153 passed CI `39745254929` and one phone test, as recorded
+at the top of `NOTES.md`. Patch 0154 is under review: Linux-matched minimum DDR
+BCM vote before CM3 release. Its targeted host harness passes with UBSan and it
+applies to the exact source from that CI buildtree. It has not been built by CI
+or tested on phone. Next, finish source review, then make one focused commit
+and push for CI; package a temporary image and use the existing authorized
+phone test only after checking `fastboot devices`. This is not GPU execution:
+HFI traffic, GMU DMA, GPU command execution and Metal remain unimplemented.
+
 ## State in one paragraph
 
 The material below is historical ios-sweet 0080–0098 handoff context, not the

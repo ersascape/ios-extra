@@ -1,0 +1,168 @@
+# FP6 bootstrap DDR bandwidth vote before GMU firmware start (0154)
+# Uses live cmd-db metadata and a bounded ACTIVE TCS transaction; holds CM3 in reset on any uncertainty.
+diff --git a/bsd/dev/sweet_gpu.c b/bsd/dev/sweet_gpu.c
+--- a/bsd/dev/sweet_gpu.c
++++ b/bsd/dev/sweet_gpu.c
+@@ -3120,6 +3120,151 @@
+ 	return 0;
+ }
+ 
++struct fp6_bcm_meta {
++	uint32_t addr, unit;
++	uint16_t width;
++	uint8_t vcd;
++};
++
++static int
++fp6_cmd_db_bcm(vm_offset_t db, uint32_t name0, struct fp6_bcm_meta *meta)
++{
++	if (fp6_smmu_read32(db, 4) != 0x0c0330dbu) return 0;
++	for (unsigned h = 8; h < 136; h += 16) {
++		uint32_t a = fp6_smmu_read32(db, h);
++		if ((a & 0xffffu) != 3u) continue;
++		uint32_t b = fp6_smmu_read32(db, h + 4);
++		unsigned entries = 144u + (a >> 16);
++		unsigned aux = 144u + (b & 0xffffu);
++		unsigned count = b >> 16;
++		if (entries > 0x20000u || count > (0x20000u - entries) / 24u || aux > 0x20000u)
++			return 0;
++		for (unsigned n = 0; n < count; n++) {
++			unsigned e = entries + n * 24u;
++			if (fp6_smmu_read32(db, e) != name0 || fp6_smmu_read32(db, e + 4) != 0)
++				continue;
++			uint32_t tail = fp6_smmu_read32(db, e + 20);
++			unsigned len = tail & 0xffffu;
++			unsigned off = aux + (tail >> 16);
++			if (len < 8 || off > 0x20000u || len > 0x20000u - off) return 0;
++			meta->addr = fp6_smmu_read32(db, e + 16);
++			meta->unit = fp6_smmu_read32(db, off);
++			uint32_t fields = fp6_smmu_read32(db, off + 4);
++			meta->width = fields & 0xffffu;
++			meta->vcd = (fields >> 16) & 0xffu;
++			return meta->addr && meta->addr != 0xffffffffu && meta->unit && meta->width;
++		}
++	}
++	return 0;
++}
++
++/* Linux gen8_gmu_device_start() submits this peak-only vote before CM3 start.
++ * Parse all metadata and reserve one idle ACTIVE TCS before writing anything. */
++static int
++fp6_gmu_bootstrap_bcm_vote(void)
++{
++	static int attempted, complete;
++	static const struct {
++		const char *name;
++		uint32_t name0;
++		uint32_t buswidth;
++		int fixed;
++	} req[] = {
++		{ "SH0", 0x00304853u, 16, 0 },
++		{ "MC0", 0x0030434du, 4, 0 },
++		{ "ACV", 0x00564341u, 0, 1 },
++	};
++	struct fp6_bcm_meta m[sizeof(req) / sizeof(req[0])];
++	vm_offset_t db = ml_io_map(0x81c60000u, 0x20000u);
++	vm_offset_t drv = ml_io_map(0x17a20000u, 0x10000u);
++	const uint64_t ib_kbps = 0x209a8eu;
++	uint32_t y[sizeof(req) / sizeof(req[0])];
++	uint32_t data[sizeof(req) / sizeof(req[0])];
++	if (attempted) return complete;
++	if (!db || !drv) return 0;
++	for (unsigned i = 0; i < sizeof(req) / sizeof(req[0]); i++) {
++		if (!fp6_cmd_db_bcm(db, req[i].name0, &m[i])) {
++			printf("QCOM GMU: bootstrap BCM metadata missing name=%s\n", req[i].name);
++			return 0;
++		}
++		if ((m[i].addr >> 16) != 3u) return 0;
++		for (unsigned j = 0; j < i; j++) if (m[i].addr == m[j].addr) return 0;
++	}
++	for (unsigned i = 0; i < sizeof(req) / sizeof(req[0]); i++) {
++		y[i] = 0;
++		if (req[i].fixed) {
++			/* Fixed ACV enable vote, without GPU performance-mode bit. */
++		} else {
++			uint64_t scaled = ib_kbps * m[i].width / req[i].buswidth;
++			uint64_t vote = scaled * 1000u / m[i].unit;
++			if (ib_kbps && !vote) vote = 1;
++			if (vote > 0x3fffu) vote = 0x3fffu;
++			y[i] = (uint32_t)vote;
++		}
++		int commit = i + 1 == sizeof(req) / sizeof(req[0]) || m[i].vcd != m[i + 1].vcd;
++		data[i] = ((uint32_t)commit << 30) | (1u << 29) | (y[i] & 0x3fffu);
++	}
++	uint32_t id = fp6_smmu_read32(drv, 0);
++	uint32_t config = fp6_smmu_read32(drv, 0x0cu);
++	unsigned ncpt = config >> 27;
++	if (id == 0xffffffffu || ((id >> 16) & 0xffu) != 3u ||
++	    ((config >> 12) & 0x3fu) < 3u || ncpt < 3u || ncpt > 16u) {
++		printf("QCOM GMU: bootstrap BCM refused RSC id=0x%08x config=0x%08x\n", id, config);
++		return 0;
++	}
++	vm_offset_t tcs = drv + 0xd00u;
++	int slot = -1;
++	for (unsigned i = 0; i < 3; i++) {
++		uint32_t b = 672u * i;
++		if (fp6_smmu_read32(tcs, b + 0x24u) == 0 &&
++		    fp6_smmu_read32(tcs, b + 0x28u) == 1 &&
++		    fp6_smmu_read32(tcs, b + 0x2cu) == 0) {
++			slot = (int)i;
++			break;
++		}
++	}
++	if (slot < 0) {
++		printf("QCOM GMU: bootstrap BCM refused; no idle ACTIVE TCS\n");
++		return 0;
++	}
++	attempted = 1;
++	uint32_t b = 672u * (unsigned)slot;
++	for (unsigned i = 0; i < sizeof(req) / sizeof(req[0]); i++) {
++		uint32_t c = 24u * i;
++		if (!fp6_power_write(tcs, b + 0x34u + c, 0x00010108u) ||
++		    !fp6_power_write(tcs, b + 0x38u + c, m[i].addr) ||
++		    !fp6_power_write(tcs, b + 0x3cu + c, data[i])) goto quarantine;
++	}
++	if (!fp6_power_write(tcs, b + 0x20u, 7u) ||
++	    !fp6_power_write(tcs, b + 0x2cu, 7u)) goto quarantine;
++	uint32_t control = fp6_smmu_read32(tcs, b + 0x24u);
++	control &= ~(1u << 24);
++	if (!fp6_power_write(tcs, b + 0x24u, control)) goto quarantine;
++	control &= ~(1u << 16);
++	if (!fp6_power_write(tcs, b + 0x24u, control) ||
++	    !fp6_power_write(tcs, b + 0x24u, 1u << 16) ||
++	    !fp6_power_write(tcs, b + 0x24u, (1u << 16) | (1u << 24))) goto quarantine;
++	for (unsigned i = 0; i < sizeof(req) / sizeof(req[0]); i++)
++		if (!fp6_power_poll(tcs, b + 0x40u + 24u * i, 0x10100u, 0x10100u, 100000u)) goto quarantine;
++	if (!fp6_power_poll(tcs, b + 0x28u, 1u, 1u, 100000u)) goto quarantine;
++	control = fp6_smmu_read32(tcs, b + 0x24u) & ~(1u << 24);
++	if (!fp6_power_write(tcs, b + 0x24u, control)) goto quarantine;
++	control &= ~(1u << 16);
++	if (!fp6_power_write(tcs, b + 0x24u, control) ||
++	    !fp6_power_write(tcs, b + 0x2cu, 0) ||
++	    !fp6_power_write(tcs, b + 0x20u, 0)) goto quarantine;
++	for (unsigned i = 0; i < sizeof(req) / sizeof(req[0]); i++)
++		printf("QCOM GMU: bootstrap BCM vote name=%s addr=0x%08x width=%u unit=%u vcd=%u ib_kbps=%llu vote=%u cmd=0x%08x\n",
++		    req[i].name, m[i].addr, m[i].width, m[i].unit, m[i].vcd,
++		    (unsigned long long)ib_kbps, y[i], data[i]);
++	printf("QCOM GMU: bootstrap DDR BCM vote acknowledged slot=%d retained\n", slot);
++	complete = 1;
++	return 1;
++quarantine:
++	printf("QCOM GMU: bootstrap DDR BCM vote uncertain slot=%d; GMU held reset, TCS quarantined\n", slot);
++	return 0;
++}
++
+ static void
+ fp6_gmu_first_boot(vm_offset_t smmu, uint32_t cb_off, uint32_t smr_off)
+ {
+@@ -3173,6 +3318,10 @@
+ 	printf("QCOM GMU: firmware versions %08x %08x %08x %08x %08x (DTCM+0x3fe0..)\n",
+ 	    fp6_smmu_read32(g, 0x3dfe0u), fp6_smmu_read32(g, 0x3dfe4u), fp6_smmu_read32(g, 0x3dfe8u),
+ 	    fp6_smmu_read32(g, 0x3dfecu), fp6_smmu_read32(g, 0x3dff0u));
++	if (!fp6_gmu_bootstrap_bcm_vote()) {
++		printf("QCOM GMU: first boot stopped before CM3 release; DDR vote unavailable\n");
++		return;
++	}
+ 	__asm__ volatile("dsb sy" ::: "memory");
+ 	printf("QCOM GMU: releasing CM3 (first GMU firmware execution)\n");
+ 	fp6_smmu_write32(g, 0x47000u, 0);                       /* CM3_SYSRESET */

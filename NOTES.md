@@ -27,20 +27,19 @@
   messages, GMU DMA, GPU commands, or rendering were exercised. Removing the
   WIMG rewrite is strongly supported as the panic fix, though the original
   panic had no stack trace, so causality is not formally proven.
-- Next: implement the FP6/Linux-matching minimum DDR/BCM vote before any HFI
-  traffic. Local Fairphone source (`9535e0f08` plus its Gen8.3 module) confirms
-  the Linux sequence: after firmware load/version/config and before
-  `gen8_gmu_device_start()`, vote peak-only ICC bandwidth using the default
-  pwrlevel's `bus_min`. The FP6 stock DT selects DDR table index 2 (`0x209a8e`
-  kB/s, about 2.14 GB/s). Later HFI bandwidth tables cover SH0, MC0, fixed ACV
-  and optional CN0. The required per-BCM cmd-db addresses and `unit/width/vcd`
-  fields come from AOP reserved memory at `0x81c60000`, not the DT or source
-  checkout. First capture and validate those fields read-only; then calculate
-  and test sourced active-state commands. No vote values have been guessed or
-  written. Afterward add HFI tables and MEM_ALLOC handling with explicit cache
-  ownership transitions, keeping reset bounded until validated. GPU MMU/OOB,
-  SQE/AQE submission, bounded GPU memory write, rendering/readback, and the
-  A810-compatible IOKit/Metal path remain outstanding.
+- Patch 0154 implements the Linux-equivalent minimum DDR BCM vote before CM3
+  release. It reads live cmd-db BCM addresses/aux data at `0x81c60000`, computes
+  the peak-only 2,136,718 kB/s request from the stock FP6 DT, and uses one idle
+  ACTIVE RPMh TCS. It waits for all command acknowledgments and keeps CM3 in
+  reset if metadata, TCS state, or completion is uncertain. Fairphone Linux
+  source (`9535e0f08` plus its Gen8.3 module) supports the encoding and startup
+  order. The host harness passes with UBSan and the patch applies to the exact
+  source from CI run `39745254929`; no CI build or phone observation exists for
+  0154 yet. This is an active bus-vote write, not read-only. After validating it
+  once on phone, continue with HFI BW/PERF tables and MEM_ALLOC handling with
+  explicit cache ownership transitions. GPU MMU/OOB, SQE/AQE submission,
+  bounded GPU memory write, rendering/readback, and the A810-compatible
+  IOKit/Metal path remain outstanding.
 
 ## FP6 GMU first-boot attempt (2026-10-22)
 

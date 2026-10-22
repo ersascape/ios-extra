@@ -35,6 +35,8 @@ static int PE_parse_boot_argn(const char *s, void *v, int n) {(void)s;(void)v;(v
 static uint64_t fake_ticks=1000000, fake_frequency=19200000, cx_seed, cx_seed_tick;
 static uint32_t cx_pending_lo;
 static int cx_map_fail, irq_enabled=1, scm_available=1, scm_status;
+static uint32_t fp6_cmd_db[0x20000/4], fp6_rsc[0x10000/4];
+static unsigned rsc_command_count;
 static unsigned cx_rate_num=1, cx_rate_den=1, cx_writes, cx_reads, cx_write_ticks=5;
 static unsigned scm_calls;
 static uint64_t scm_fid[2], scm_arginfo[2], scm_arg0[2];
@@ -42,7 +44,12 @@ static uint64_t fp6_gmu_test_counter(void) { return fake_ticks += 20; }
 static uint64_t fp6_gmu_test_frequency(void) { return fake_frequency; }
 static boolean_t ml_set_interrupts_enabled(boolean_t enable) { int old=irq_enabled;irq_enabled=enable;return old; }
 static vm_offset_t ml_io_map(uint64_t a, uint32_t n) {
- (void)n;if(a==0x03d9e000u)return cx_map_fail?0:3;if(a==0x03d0f000u)return 4;return 3;
+ (void)n;
+ if(a==0x03d9e000u)return cx_map_fail?0:3;
+ if(a==0x03d0f000u)return 4;
+ if(a==0x81c60000u)return a;
+ if(a==0x17a20000u)return a;
+ return 3;
 }
 static void delay(int n) { if(n>0)fake_ticks+=(uint64_t)n*19200u/1000u; }
 static void fp6_scm_invoke(uint64_t fid,uint64_t arginfo,uint64_t arg0,uint64_t *status,uint64_t *value) {
@@ -50,6 +57,8 @@ static void fp6_scm_invoke(uint64_t fid,uint64_t arginfo,uint64_t arg0,uint64_t 
  *status=0;*value=0;if(fid==0x42000101u)*value=scm_available;else *status=scm_status;
 }
 static uint32_t fp6_smmu_read32(vm_offset_t b, uint32_t o) {
+ if (b>=0x81c60000u && b<0x81c80000u) return fp6_cmd_db[((b-0x81c60000u)+o)/4];
+ if (b>=0x17a20000u && b<0x17a30000u) return fp6_rsc[((b-0x17a20000u)+o)/4];
  if (b==2) return o==0x800 ? smr : 0;
  if (b==3) {
   cx_reads++;
@@ -72,12 +81,49 @@ static void fp6_smmu_write32(vm_offset_t b,uint32_t o,uint32_t v) {
   if(o==0x204){cx_seed=((uint64_t)v<<32)|cx_pending_lo;cx_seed_tick=fake_ticks;}return;
  }
  if (b==4) return;
+ if (b>=0x17a20000u && b<0x17a30000u) {
+  uint32_t off=(b-0x17a20000u)+o;
+  fp6_rsc[off/4]=v;
+  if(off>=0xd00u && (off-0xd00u)%672u==0x24u && (v&(1u<<24))) {
+   uint32_t base=off-0x24u;
+   for(unsigned i=0;i<3;i++) fp6_rsc[(base+0x40u+24u*i)/4]=0x10100u;
+   fp6_rsc[(base+0x28u)/4]=1;
+   rsc_command_count++;
+  }
+  return;
+ }
  if (b!=1) return;
  if (o==0x47000) {
   if (!v) {release_count++;reset_value=0;}
   else {reset_count++;if(!refuse_reset)reset_value=v;}
  }
  if(o==0x47618) hfi_starts++;
+}
+static int fp6_power_write(vm_offset_t b,uint32_t o,uint32_t v) {
+ fp6_smmu_write32(b,o,v);return fp6_smmu_read32(b,o)==v;
+}
+static int fp6_power_poll(vm_offset_t b,uint32_t o,uint32_t mask,uint32_t want,unsigned count) {
+ for(unsigned i=0;i<count;i++) if((fp6_smmu_read32(b,o)&mask)==want)return 1;
+ return 0;
+}
+static void make_cmd_db(void) {
+ fp6_cmd_db[1]=0x0c0330dbu;
+ /* One RPMh resource header, three BCM entries at byte offset 256. */
+ fp6_cmd_db[2]=(112u<<16)|3u;
+ fp6_cmd_db[3]=(3u<<16)|880u;
+ const uint32_t names[3]={0x00304853u,0x0030434du,0x00564341u};
+ const uint32_t addrs[3]={0x30020u,0x30030u,0x30040u};
+ const uint32_t widths[3]={16u,4u,4u};
+ for(unsigned i=0;i<3;i++) {
+  unsigned e=(256u+24u*i)/4u;
+  fp6_cmd_db[e]=names[i];fp6_cmd_db[e+4]=addrs[i];
+  fp6_cmd_db[e+5]=((8u*i)<<16)|8u;
+  unsigned aux=(144u+880u+8u*i)/4u;
+  fp6_cmd_db[aux]=1000000u;fp6_cmd_db[aux+1]=widths[i];
+ }
+ fp6_rsc[0]=3u<<16;
+ fp6_rsc[3]=(3u<<12)|(4u<<27); /* three ACTIVE TCSes, four commands per TCS */
+ fp6_rsc[(0xd00u+0x28u)/4]=1;
 }
 static unsigned allocs;
 static unsigned publish_count;
@@ -99,6 +145,7 @@ static void run_probe(uint32_t fw, uint32_t hfi, int fail_reset) {
  assert(hfi_starts==((fw==0x100)?1u:0u));
 }
 int main(void) {
+ make_cmd_db();
  static const struct fp6_gmu_domain_ops ops={alloc_page,publish};
  assert(!fp6_gmu_domain_init(&fp6_gmu_domain,&ops,0));
  assert(!fp6_gmu_boot_reserve());
@@ -130,6 +177,13 @@ int main(void) {
  reset_value=1;release_count=reset_count=route_writes=hfi_starts=0;scm_calls=0;
  fp6_gmu_first_boot(2,0x1000,0x800);
  assert(route_writes==1 && release_count==1 && hfi_starts==1);
+ assert(rsc_command_count==1);
+ assert(fp6_rsc[(0xd00u+0x38u)/4]==0x30020u);
+ assert(fp6_rsc[(0xd00u+0x3cu)/4]==0x20000858u); /* 2,136,718 kB/s -> 2,136 votes */
+ assert(fp6_rsc[(0xd00u+0x38u+24u)/4]==0x30030u);
+ assert(fp6_rsc[(0xd00u+0x3cu+24u)/4]==0x20000858u);
+ assert(fp6_rsc[(0xd00u+0x38u+48u)/4]==0x30040u);
+ assert(fp6_rsc[(0xd00u+0x3cu+48u)/4]==0x60000000u);
  unsigned published_before=publish_count;
  assert(!fp6_gmu_domain_publish(&fp6_gmu_domain));
  assert(publish_count>published_before); /* CPU-initialized HFI buffers are cleaned before GMU access */

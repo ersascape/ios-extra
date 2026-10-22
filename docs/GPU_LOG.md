@@ -1,5 +1,23 @@
 # GPU bring-up log (chronological, newest first)
 
+## FP6 patch 0154: Linux-matched bootstrap DDR vote (source + host only)
+
+- Fairphone Linux `gen8_gmu_device_start()` submits the default pwrlevel
+  `bus_min` as a peak-only ICC vote before CM3 release. The verified FP6 value
+  is `0x209a8e` kB/s (= 2,136,718 kB/s). Linux Gen8 constructs DDR BCM
+  commands for SH0 (width 16), MC0 (width 4), and fixed ACV using runtime cmd-db
+  addresses and aux `unit/width/vcd` data; the command encoding and VCD commit
+  rules match the candidate implementation.
+- Patch 0154 reads and bounds-checks those cmd-db records, validates RPMh RSC
+  v3 and an idle ACTIVE TCS, emits the minimum vote, waits for command status
+  and TCS idle, then holds the vote. An uncertain transaction stops before
+  CM3 release and quarantines the slot. This is an active write sourced from
+  Linux; no hardware result exists yet.
+- `tests/test_fp6_gmu_boot.py` passes with UBSan and models the BCM records,
+  vote calculation, RPMh acknowledgment, FW_INIT and bounded reset. The patch
+  applies to the exact XNU file from CI run `39745254929`. No new CI build or
+  phone test has run. GPU execution is still not implemented.
+
 ## FP6 CX timer USB diagnosis and seed fix (2026-10-22)
 
 - CI run `39735265609` passed for `089d4ef39822e751ada55eae9bc53f3ccc4472f2`.
