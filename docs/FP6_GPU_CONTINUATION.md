@@ -24,9 +24,9 @@ GMU DMA, GPU command, rendering or Metal work has succeeded yet.
 
 ## Current source state
 
-- HEAD `4f68fcb011d5cbec92485f5b076a470140560f59` changes patch 0154's cmd-db
-  filter from slave ID 3 to ID 5. It passes CI `39752494051` and the targeted
-  `tests/test_fp6_gmu_boot.py` ASan/UBSan host harness.
+- HEAD `8462f999359f501ec523daaf1852693e3f384db6` includes patch 0155, which
+  fixes patch 0154's post-lookup slave-ID check. It passes CI `39755620038` and
+  the targeted `tests/test_fp6_gmu_boot.py` ASan/UBSan host harness.
 - Patch 0154 implements a Linux-equivalent bootstrap DDR BCM vote before CM3
   release. It reads the cmd-db at `0x81c60000`, requests the stock FP6 minimum
   peak DDR rate (`0x209a8e` kB/s = 2,136,718 kB/s), and sends SH0/MC0/fixed ACV
@@ -64,15 +64,16 @@ GMU DMA, GPU command, rendering or Metal work has succeeded yet.
 
 ## Next debugging step
 
-Patch 0155 has corrected the post-lookup address validation to BCM slave ID 5
-and updated the host fixture. It must be built and measured once. If that boot
-still refuses, inspect the specific new address-ID diagnostic and add bounded
-read-only header/entry diagnostics; do not relax the fail-closed guard or send a
-guessed TCS vote.
+Patch 0155 corrected post-lookup address validation; the phone shows SH0/MC0
+pass and ACV missing. Linux `cmd_db_get_header()` searches all populated slave
+headers, but our parser currently filters to ID 5. Inspect cmd-db ordering and
+ACV metadata semantics, then reproduce Linux name lookup while retaining explicit
+validation of each address and aux record. Do not relax fail-closed behavior or
+send a guessed TCS vote.
 
-Once metadata lookup is verified, run the targeted host test and compile,
-commit/push one focused patch, wait for CI, package with the known local ADT/DTB,
-then perform one temporary boot. After an acknowledged vote, the next source
+After the lookup behavior is validated against Linux and host fixtures, run the
+targeted host test and compile, commit/push one focused patch, wait for CI, package
+with the known local ADT/DTB, then perform one temporary boot. After an acknowledged vote, the next source
 milestone is HFI table/start-message exchange with pre-mapped MEM_ALLOC handling
 and explicit cache ownership. Only then implement a tiny GPU memory write and
 readback. Rendering/Metal is later; no display change is expected from the

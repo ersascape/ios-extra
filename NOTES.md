@@ -1,5 +1,30 @@
 # ios-extra — current state
 
+## FP6 BCM address-ID correction phone result (2026-10-22)
+
+- Patch 0155 commit `8462f999359f501ec523daaf1852693e3f384db6` passed CI run
+  `39755620038` (XNU build and FP6 boot job success; CI packaging skipped
+  because its stock-DTB URL is unset). Kernel SHA256
+  `72a9a9d0166fd390caf96beeec39d4e08671f3285e18acadbbb58b0229cd5683`.
+  Locally packaged with the verified product ADT and stock Volcano DTB; header-v2
+  round-trip passed. Image:
+  `/tmp/ios-extra-run-39755620038/package/fp6-gmu-bcm-address-id.img`, SHA256
+  `0d4ff5ab9ee7aef5a1139841bcf6a909ed20d0be7ac73c65b43cf7899bbbf24a`.
+- One temporary `fastboot boot` was performed through the USB helper; no partition
+  writes or `getvar`. Capture: 93 UDP packets, 19,248 decoded bytes. Log
+  `/tmp/ios-extra-run-39755620038/logs/phone-0155-bcm-address-id.txt`, SHA256
+  `6a7bb87ec85d75558f95e9b1e81e6ec5d75e13657054ce097c0ed47a56e7ca0e`; pcap
+  SHA256 `d437f9b66424434075057c7951f4fa7a40967c6f57f2f1e9e78d3d99b72b2ea7`.
+- New result: BCM ID 5 validation now accepts the SH0/MC0 records, but lookup stops
+  at `bootstrap BCM metadata missing name=ACV`. CM3 remains held in reset; no BCM
+  command was issued, so this boot did not execute firmware/HFI or GPU work.
+  Fairphone Linux `cmd_db_get_header()` scans each populated slave header (up to
+  eight), whereas the current local parser searches only ID 5. Next inspect the
+  live cmd-db header ordering and ACV entry semantics, then mirror Linux name
+  lookup while preserving safe validation of vote address/aux data. Do not relax
+  fail-closed behavior or guess an ACV address.
+
+
 ## FP6 HFI cache-path phone retest (2026-10-22)
 
 - Patch 0153 commit `e53c66ab499d75d2101b1736ffbb85a7642e64f8` passed CI run

@@ -1,5 +1,25 @@
 # GPU bring-up log (chronological, newest first)
 
+## FP6 patch 0155 BCM address-ID correction (CI + phone)
+
+- Commit `8462f999359f501ec523daaf1852693e3f384db6` passed CI `39755620038`;
+  kernel SHA256 `72a9a9d0166fd390caf96beeec39d4e08671f3285e18acadbbb58b0229cd5683`.
+  CI skipped packaging because the stock-DTB URL is unset. Local temporary image
+  package round-trip passed with the verified ADT and Volcano DTB:
+  `/tmp/ios-extra-run-39755620038/package/fp6-gmu-bcm-address-id.img`, SHA256
+  `0d4ff5ab9ee7aef5a1139841bcf6a909ed20d0be7ac73c65b43cf7899bbbf24a`.
+- One authorized temporary boot reached USB ECM and captured 93 UDP packets.
+  Decoded log SHA256 `6a7bb87ec85d75558f95e9b1e81e6ec5d75e13657054ce097c0ed47a56e7ca0e`;
+  pcap SHA256 `d437f9b66424434075057c7951f4fa7a40967c6f57f2f1e9e78d3d99b72b2ea7`.
+  Full files are in `/tmp/ios-extra-run-39755620038/logs/`.
+- 0155 fixed the BCM slave-ID check: it passes SH0 and MC0, then reports
+  `bootstrap BCM metadata missing name=ACV`. No TCS vote was sent and CM3 stayed
+  reset. The Linux cmd-db resolver scans all populated slave headers, while this
+  parser only scans ID 5. Next determine ACV's live header/aux format and match
+  Linux name-resolution semantics without weakening address and metadata checks.
+  No firmware execution, HFI exchange, GPU command or render was tested.
+
+
 ## FP6 patch 0154: Linux-matched bootstrap DDR vote (source + host only)
 
 - Fairphone Linux `gen8_gmu_device_start()` submits the default pwrlevel

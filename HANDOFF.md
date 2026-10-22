@@ -73,11 +73,12 @@ release because the BCM lookup incorrectly used ARC cmd-db ID 3. Commit
 `4f68fcb` changed it to BCM ID 5, passed CI `39752494051`, and was packaged as
 `/tmp/ios-extra-run-39752494051/package/fp6-gmu-bootstrap-ddr-vote-cmdb5.img`
 (SHA256 `fe97c9fadae1388605b37124550677f596201c3f51bdc151afd6e80d4f835494`).
-The USB log did not report missing SH0 metadata, but CM3 was not released and no
-BCM write occurred. Source review found a stale post-lookup ARC-ID check (3) even
-after BCM lookup was corrected to ID 5. Local patch 0155 corrects that validation
-and updates the fixture; it still needs CI and phone validation. Exact artifacts
-and diagnosis are in `docs/FP6_GPU_CONTINUATION.md`. Do not assume fastboot. This is not GPU
+Patch 0155 passed CI `39755620038` and a temporary phone boot. SH0/MC0 BCM ID 5
+validation succeeds, then the cmd-db parser reports missing ACV. It sends no vote
+and keeps CM3 reset. Linux `cmd_db_get_header()` searches all populated slave IDs,
+but the current parser searches ID 5 only; inspect ACV header and aux data before
+changing lookup behavior. Exact image/log evidence is in `NOTES.md` and
+`docs/GPU_LOG.md`. Do not assume fastboot. This is not GPU
 execution: HFI traffic, GMU DMA, GPU command execution and Metal remain
 unimplemented.
 
