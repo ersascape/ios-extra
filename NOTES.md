@@ -22,6 +22,13 @@
   Patch applies to the CI source; `tests/test_gpu_probe.py` passes. Full CI and
   a retest are still required.
 
+## FP6 ADT and vendor DTS recovered locally (2026-10-22)
+
+- Copied `/home/ersa/Downloads/vendor_boot.img` to ignored `research/local-fp6/vendor_boot.img` (SHA256 `26dbd78d40a739fd0790518fdaa09bef2cfb4a2098a5daf51098617f0f2ad31c`). `unpack_bootimg` identified Android vendor_boot v4 and extracted its DTB, vendor ramdisk and bootconfig under `research/local-fp6/vendor_boot/`.
+- The DTB is a concatenation of 14 FDT blobs. All were split and decompiled with `dtc` under `research/local-fp6/vendor_boot/dtbs/`. `dtb-04` is Volcano (`qcom,volcano`, MSM ID `0x27c`) and its SHA256 `8198534128258bfe7b05bbb5b227affc181aa49b376884c08eae8564fce124e3` matches the previously verified FP6 stock DTB. Selected DTS and DTB are `research/local-fp6/fp6-stock.dts` and `.dtb`.
+- Generated `research/local-fp6/fp6.adt` with `tools/mkadt.py --device fp6`; it parsed successfully and contains the iPhone10,3 identity and D22AP `/product` artwork traits. It uses the existing read-only product-tree reference. SHA256 `4da4226e6b9ac393ff22b66a304d9172d6be2bfd6d558348a47379c51aab1d80`.
+- Full local artifact inventory, hashes and regeneration commands are in ignored `research/local-fp6/README.md`. None of these device or Apple-derived files are tracked by Git.
+
 ## GMU clock fix pushed; bounded boot probe added (2026-10-22)
 
 - Push to `ersascape/ios-extra` on `main`: commit `696a07851fb4e46fd4ab810bdc97e666c14013e2` (`fix(fp6): work on gmu support`). CI run `39674158109` passed; build artifact kernel SHA256 `a10bf7fb4b756f528c95af80d1dc14ed1e66dc8a290c5c0f3dfc6d1fc3670291`. The `fp6-boot` packaging step skipped because `FP6_STOCK_DTB_URL` is unset.
