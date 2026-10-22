@@ -22,6 +22,15 @@
   Patch applies to the CI source; `tests/test_gpu_probe.py` passes. Full CI and
   a retest are still required.
 
+## GMU clock fix pushed; bounded boot probe added (2026-10-22)
+
+- Push to `ersascape/ios-extra` on `main`: commit `696a07851fb4e46fd4ab810bdc97e666c14013e2` (`fix(fp6): work on gmu support`). CI run `39674158109` passed; build artifact kernel SHA256 `a10bf7fb4b756f528c95af80d1dc14ed1e66dc8a290c5c0f3dfc6d1fc3670291`. The `fp6-boot` packaging step skipped because `FP6_STOCK_DTB_URL` is unset.
+- Patch 0147's phone retry (`/tmp/ios-extra-run-39670975229/logs/phone-0147-gmu-first-boot.txt`, decoded SHA256 `8221b5123fd0ff78b92ebba115458007e007927d75af6a78f97ff2871a939aa2`) confirms GMU `CM3_SYSRESET=1` before setup and MX ARC floor acknowledged. Clock setup then refused without a named failure, so firmware upload/CM3 release did not occur on that boot. The temporary log directory is no longer present in this workspace.
+- Patches 0148/0149 add stage-specific clock diagnostics and Linux-aligned setup: MX SVS_L1 floor `0xc0` for GPU PLL calibration, enabling outputs on a compatible inherited Lucid OLE PLL without changing its rate/divider, and waiting for RCG root-on before changing CFG. Unreadable/unsupported live PLL state still refuses; the PLL FSM path remains unsupported because gpucc-volcano exports no software vote register.
+- Patch 0149 adds a 16 KiB trace buffer/header, checks firmware fault bits before success bits, and bounds even successful CM3/HFI initialization by asserting reset and verifying it. It retains DMA pages, SID/context and clock votes after the probe, including if reset readback fails, because reset alone does not show bus transactions drained.
+- Source review used Fairphone Linux kernel `9535e0f0885d3d4b91c38054541e16019d1e64bd` and modules `54c948d9b30c2ba01835e64c36b68b80692554ac`. `python3 tests/test_gpu_probe.py`, its ASan/UBSan run, and `python3 tests/test_fp6_gmu_boot.py` pass. CI verifies compilation of the patched XNU tree; it does not run these host tests.
+- No phone boot has tested 0148/0149. Product ADT and stock DTB files used for the previous temporary boot are absent from this workspace now; CI cannot package without the stock DTB. GMU DMA, HFI messages, GPU execution and Metal remain unproven. Linux review also identified pending CX timer synchronization, SCM CX setup, minimum DDR bandwidth vote, HFI perf/BW tables plus MEM_ALLOC service, and Gen8 GPU MMU/OOB/SQE startup. UniXNU NativeAdreno/NativeMetal contains A740-specific register and GMEM assumptions and cannot be treated as A810 support.
+
 ## Patch 0145 phone log: software table walk passes (2026-10-22)
 
 - A later report appended to `/tmp/claude-1000/-home-ersa-Dev-ios-extra/febca858-d68f-4e09-bdd9-8bdf4a7eb119/scratchpad/gmu-boot4.log` has boot args matching the locally packaged SMMU test (`fp6smmu=2 fp6smmupower=1`). This is a new run in the same log file; the earlier ATOS failure remains above it.
@@ -53,14 +62,11 @@
 
 ## Current FP6 GPU path
 
-The target is FP6 Adreno 810 Gen8.3. The immediate sequence is:
+The target is FP6 Adreno 810 Gen8.3. Patches 0148/0149 have passed host tests and CI compilation, but no phone has booted these changes. Patch 0147 was phone-tested: the reset guard and MX vote succeeded, then clock setup refused without identifying the individual check. The latest source adds that diagnostic and corrects three Linux clock details. CI image packaging skipped because the stock DTB URL is unset, and the previously used product ADT/DTB are currently absent locally.
 
-1. Patch 0145's ATOSNS software walk passed on the phone: IOVA `0x60000000` mapped to expected PA `0x903617000`. The SMMU context was left disabled/reserved, so this is CPU-visible PTE validation only.
-2. Patch 0146 adds an opt-in read-only GIC check for the stock SMMU global-fault SPI (0x2a1 / INTID 705), reporting enable, pending, and trigger configuration without writes. Host normal and ASan/UBSan tests pass; full XNU CI and phone result are pending. This check does not contain global faults.
-3. The first-start image reached `fp6_gmu_clocks_prepare` but stopped at the inherited GMU clock guard (`0x90d4=0x2001`) before upload. Patch 0147 verifies CM3 reset before allowing clock reconfiguration. After CI, retry the bounded GMU start and retain buffers until reset is verified. GMU DMA and GPU execution remain unmeasured.
-4. After GMU startup/HFI succeeds, validate GMU-driven GX power, SQE/CP initialization, then one bounded command that writes a known value to mapped memory. GPU execution and a Metal bridge are not established.
+Before any GMU release, complete the pending CX timer synchronization, SCM CX initialization semantics, minimum DDR bandwidth vote and SMMU global-fault IRQ preflight. Then validate upload and the bounded firmware/HFI probe on the phone. The actual HFI policy/request service, GPU MMU/OOB/SQE startup and a known-value GPU memory write are still missing. Metal requires a working kernel allocation/submission/fence ABI and an A810-correct Turnip/NativeMetal path; the local NativeAdreno hardware sequence assumes A740. No GMU DMA, GPU command execution or Metal rendering is established.
 
-Phone work uses the repository's temporary-boot helper and fastboot checks described below. Source/host results and phone measurements are recorded separately. See [FP6 GMU first boot](docs/FP6_GMU_FIRST_BOOT.md) and [FP6 SMMU power](docs/FP6_SMMU_POWER.md) for implementation details.
+Phone work uses the repository's temporary-boot helper and fastboot checks described below. Source, host tests, CI results and phone observations remain distinct. See [FP6 GMU first boot](docs/FP6_GMU_FIRST_BOOT.md), [FP6 Adreno Metal audit](docs/FP6_ADRENO_METAL_AUDIT.md) and [FP6 SMMU power](docs/FP6_SMMU_POWER.md).
 
 ## FP6 GPU SMMU: TCR2 passes, FSR FORMAT bits (2026-10-21)
 
