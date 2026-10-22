@@ -19,8 +19,9 @@ source = r'''
 #include <string.h>
 #include "gpu_domain.h"
 static unsigned nalloc, npublish;
-static int alloc_table(void *ctx, struct fp6_gpu_global_page *p) {
+static int alloc_table(void *ctx, uint32_t size, struct fp6_gpu_global_page *p) {
  (void)ctx;
+ assert(size == 4096);
  p->va=aligned_alloc(4096,4096);
  p->pa=0x900000000ULL+(uint64_t)nalloc++*0x1000;
  return p->va ? 0 : -1;

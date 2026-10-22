@@ -1,5 +1,32 @@
 # ios-extra — current state
 
+## FP6 GPU HFI global-memory integration candidate (0163/0164, 2026-10-22)
+
+- Patch 0163's GPU global-domain helper now takes an explicit allocation size
+  for each table page; its added-file hunk count is corrected. Patch 0164 connects
+  HFI `MEM_ALLOC` requests with `GFX_ACC` to permanent 16 KiB-contiguous backing,
+  the 20 MiB GPU TTBR1 aperture at `0x0001ff8000000000`, and a 4 KiB S1 map.
+  It programs the GPU-reserved CB0 and enables an unused fault-routed SMR group
+  for SID0 only after table publication and readback. When firmware also requests
+  `GMU_ACC`, the same pages are appended to the existing GMU domain before the
+  ACK. Unsupported/secure requests continue to fail closed. Backing and tables
+  are retained permanently.
+- The context checks now tolerate only the FP6 SMMU's measured readback changes:
+  TCR2 TBI0/TBI1 are forced to 1 (`0x38011` reads `0x38071`) and SCTLR.ASIDPNE
+  reads as 0 (`0x1167` reads `0x0167`). Other programmed bits remain checked.
+  A host MMIO peer exercises the actual context setup and a synthetic
+  `GFX_ACC` HFI request through its ACK; it walks the resulting TTBR1 PTE and
+  checks the route, dirty-CB0 refusal-before-write, and idempotent setup.
+  The standalone page-table tests, GPU probe tests and ASan/UBSan GPU probe tests
+  pass. `sweet_gpu.c` cross-compiles to arm64 against CI buildtree
+  `39793471917` (`0 of 1 files failed`), and the patch series applies in the host
+  harness. This is source/host/compiler evidence only.
+- CI has not yet built this candidate. No phone has tested it; the
+  phone's next real `MEM_ALLOC` descriptor, GMU acceptance, SID0 route, GPU
+  execution and Metal are unverified. The CI build and temporary image are the
+  next review point; do not treat the modeled ACK or software walk as proof of
+  device DMA.
+
 ## FP6 GPU global-memory source audit (2026-10-22)
 
 - Read-only Fairphone SM7635 kernel review confirms GPU SID 0 uses the

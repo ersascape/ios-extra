@@ -3,7 +3,7 @@ new file mode 100644
 index 0000000..1111111
 --- /dev/null
 +++ b/bsd/dev/fp6_gpu_global_domain.h
-@@ -0,0 +1,175 @@
+@@ -0,0 +1,193 @@
 +/*
 + * FP6 Adreno global-memory window in the SID-0 TTBR1 translation regime.
 + * This is intentionally separate from the GMU's 32-bit TTBR0 domain.
@@ -22,7 +22,7 @@ index 0000000..1111111
 +#define FP6_GPU_GLOBAL_PTE_XN     (3ULL << 53)
 +struct fp6_gpu_global_page { uint8_t *va; uint64_t pa; };
 +struct fp6_gpu_global_ops {
-+ int (*alloc_table)(void *, struct fp6_gpu_global_page *);
++ int (*alloc_table)(void *, uint32_t, struct fp6_gpu_global_page *);
 + int (*publish)(void *, const void *, uint32_t);
 +};
 +struct fp6_gpu_global_range {
@@ -45,7 +45,7 @@ index 0000000..1111111
 +fp6_gpu_global_alloc_table(struct fp6_gpu_global_domain *d,
 +    struct fp6_gpu_global_page *p)
 +{
-+ if (d->ops->alloc_table(d->ctx, p) || !p->va ||
++ if (d->ops->alloc_table(d->ctx, FP6_GPU_GLOBAL_PAGE, p) || !p->va ||
 +     ((uintptr_t)p->va & (FP6_GPU_GLOBAL_PAGE - 1u)) ||
 +     (p->pa & (FP6_GPU_GLOBAL_PAGE - 1u)) ||
 +     p->pa >= (1ULL << 36) || FP6_GPU_GLOBAL_PAGE > (1ULL << 36) - p->pa) {

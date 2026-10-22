@@ -15,6 +15,14 @@ import unittest
 ROOT = Path(__file__).resolve().parents[1]
 
 
+def added_header(patch_path, header_path):
+    text = patch_path.read_text()
+    marker = f'+++ b/{header_path}\n'
+    section = text.split(marker, 1)[1].split('\ndiff --git ', 1)[0]
+    return '\n'.join(line[1:] for line in section.splitlines()
+                      if line.startswith('+') and not line.startswith('+++')) + '\n'
+
+
 class GPUProbeTests(unittest.TestCase):
     def test_mmio_boundaries(self):
         with tempfile.TemporaryDirectory(prefix='ios-extra-gpu-test-') as directory:
@@ -28,7 +36,17 @@ class GPUProbeTests(unittest.TestCase):
             for name in ('fp6_gmu_loader.h',):
                 shutil.copyfile(ROOT / 'xnu/helpers' / name, work / name)
             domain_patch = (ROOT / 'xnu/patches/0133-fp6-gmu-persistent-domain.patch').read_text()
-            (work / 'fp6_gmu_domain.h').write_text('\n'.join(line[1:] for line in domain_patch.splitlines() if line.startswith('+') and not line.startswith('+++')))
+            domain_header = '\n'.join(line[1:] for line in domain_patch.splitlines()
+                                       if line.startswith('+') and not line.startswith('+++'))
+            patch_0163 = ROOT / 'xnu/patches/0163-fp6-gpu-global-domain.patch'
+            (work / 'fp6_gpu_global_domain.h').write_text(
+                added_header(patch_0163, 'bsd/dev/fp6_gpu_global_domain.h'))
+            domain_dir = work / 'bsd/dev'
+            domain_dir.mkdir(parents=True, exist_ok=True)
+            (domain_dir / 'fp6_gmu_domain.h').write_text(domain_header)
+            subprocess.run(['git', 'apply', '--include=bsd/dev/fp6_gmu_domain.h',
+                            str(patch_0163)], cwd=work, check=True)
+            shutil.copyfile(domain_dir / 'fp6_gmu_domain.h', work / 'fp6_gmu_domain.h')
             (work / 'fp6_gmu_fw.h').write_text(
                 'struct fp6_gmu_fw_preallocation { uint32_t address,size,type; };\n'
                 'struct fp6_gmu_fw_block { uint32_t address,size,type,value; const uint8_t *data; };\n'
@@ -120,6 +138,8 @@ class GPUProbeTests(unittest.TestCase):
             self.assertIn('PASS: RSC wake/stop', result.stdout)
             self.assertIn('PASS: 29 pre-boot registers', result.stdout)
             self.assertIn('PASS: GMU buffers 29 ATOS checks', result.stdout)
+            self.assertIn('PASS: GPU SID0 TTBR1 setup accepts measured TBI/ASIDPNE readbacks', result.stdout)
+            self.assertIn('PASS: HFI GFX_ACC allocation returns a live GPU TTBR1 mapping', result.stdout)
             self.assertIn('PASS: 14 clock/cache cases, 30 ARC cases + 512 mutations, 61 CX experiment cases', result.stdout)
             self.assertIn('PASS: FP6 GPUCC inventory is opt-in, read-only, and bounded', result.stdout)
             self.assertIn('PASS: FP6 Qualcomm SCM PAS query is opt-in and never authenticates firmware', result.stdout)
@@ -166,6 +186,8 @@ static uint32_t fp6_rsc[0x10000 / 4], fp6_cmd_db[0x20000 / 4];
 static unsigned fp6_ats64_writes;
 static uint32_t fp6_refuse_off; static unsigned fp6_refuse_nth, fp6_refuse_count;
 static uint32_t fp6_seen_tcr2, fp6_seen_cbar, fp6_seen_fsr_clear;
+static int fp6_gpu_smmu_model, global_alloc_mode;
+static size_t global_alloc_offset;
 static int present, mode, map_calls, fail_gcc, fail_cc;
 static int fp6_mode, fp6_smmu_mode;
 static unsigned fp6_map_calls, fp6_smmu_maps;
@@ -182,7 +204,7 @@ static uint32_t locator[2], database[1024];
 static uint32_t gmu_mem[GPU_GMU_SIZE / 4];
 static int gmu_maps, fail_gmu_map;
 /* Fake DMA page, SMMU ATOS model and cache-clean counters (sweetgpu=8). */
-static unsigned char dma_block[0x10000] __attribute__((aligned(16384)));
+static unsigned char dma_block[0x40000] __attribute__((aligned(16384)));
 static unsigned long long fake_pa_base;
 static int fail_alloc, alloc_calls, clean_calls, ats_stuck, tlb_stuck;
 static uint64_t last_ats, fp6_last_ats;
@@ -263,6 +285,10 @@ static void test_store32(vm_offset_t base, uint32_t off, uint32_t value)
             smmu_mem[(GPU_SMMU_CB0 + 3 * 0x1000 + GPU_SMMU_CB_TLBSTATUS)/4] = tlb_stuck ? 1 : 0;
         if (off == refuse_smmu_off && value && !refused_writes++) return;
     }
+    if (base == (vm_offset_t)fp6_smmu && fp6_gpu_smmu_model) {
+        if (off == 0x20010 && value == 0x00038011u) value |= 0x60u; /* measured TBI readback */
+        if (off == 0x20000 && value == 0x1167u) value &= ~0x1000u; /* measured ASIDPNE readback */
+    }
     if (base == (vm_offset_t)fp6_smmu && off == fp6_refuse_off &&
         fp6_refuse_nth && ++fp6_refuse_count == fp6_refuse_nth) return;
     if (base == (vm_offset_t)fp6_smmu && value == 0x00038011u) fp6_seen_tcr2 = value;
@@ -284,9 +310,13 @@ static void test_store64(vm_offset_t base, uint32_t off, uint64_t value)
 {
     all_mmio_writes++;
     if (base == (vm_offset_t)fp6_smmu) {
-        assert(off == FP6_TEST_CB_BASE + 0x800 && value == 0x60000000ull);
-        fp6_ats64_writes++;
-        fp6_smmu[(FP6_TEST_CB_BASE + 0x8f0)/4] = 1;
+        if (fp6_gpu_smmu_model) {
+            assert(off == 0x20020 || off == 0x20028);
+        } else {
+            assert(off == FP6_TEST_CB_BASE + 0x800 && value == 0x60000000ull);
+            fp6_ats64_writes++;
+            fp6_smmu[(FP6_TEST_CB_BASE + 0x8f0)/4] = 1;
+        }
     }
     if (base == (vm_offset_t)smmu_mem) {
         smmu_write_calls++;
@@ -369,6 +399,11 @@ void clean_dcache64(addr64_t addr, unsigned count, int phys) {
         clean_calls++;
         return;
     }
+    if (global_alloc_mode) {
+        assert(addr >= (addr64_t)(uintptr_t)dma_block &&
+            addr + count <= (addr64_t)(uintptr_t)(dma_block + sizeof(dma_block)) && phys == 0);
+        clean_calls++; return;
+    }
     assert(addr == fake_pa_base && phys == TRUE);
     clean_bytes = count; clean_calls++;
     if (count == GPU_BUF_BYTES) {
@@ -400,6 +435,14 @@ kern_return_t kmem_alloc_contig(vm_map_t m, vm_offset_t *a, vm_size_t size, vm_o
     alloc_calls++;
     assert(size <= sizeof(dma_block) && (flags & 2));
     if (fail_alloc) return 1;
+    if (global_alloc_mode) {
+        size_t bytes = (size + 0x3fffu) & ~0x3fffu;
+        assert(global_alloc_offset + bytes <= sizeof(dma_block));
+        *a = (vm_offset_t)dma_block + global_alloc_offset;
+        memset((void *)(uintptr_t)*a, 0, bytes);
+        global_alloc_offset += bytes;
+        return KERN_SUCCESS;
+    }
     memset(dma_block, 0, sizeof(dma_block));
     *a = alloc_null ? 0 : (vm_offset_t)dma_block + (alloc_unaligned ? 4 : 0);
     return KERN_SUCCESS;
@@ -704,6 +747,54 @@ static void irq_defaults(void)
 
 int main(void)
 {
+    /* Match the measured SMMU IDs and its TBI/ASIDPNE readback quirks while
+     * enabling the isolated GPU TTBR1 context. The refused preflight must not write. */
+    memset(fp6_smmu, 0, sizeof(fp6_smmu));
+    fp6_smmu[0x20/4] = 0x4c017e18u; fp6_smmu[0x24/4] = 0x40000016u;
+    fp6_smmu[0x28/4] = 0x5511u; fp6_smmu[0] = 0x00200626u;
+    for (unsigned i = 0; i < 24; i++) fp6_smmu[(0xc00 + 4*i)/4] = 0x20000u;
+    fp6_gpu_global_domain.l0.va = dma_block; fp6_gpu_global_domain.l0.pa = 0x900000000ULL;
+    fp6_smmu[0x1000/4] = 1; all_mmio_writes = 0;
+    assert(!fp6_gpu_global_context_enable((vm_offset_t)fp6_smmu) && all_mmio_writes == 0);
+    fp6_smmu[0x1000/4] = 0; fp6_gpu_smmu_model = 1;
+    assert(fp6_gpu_global_context_enable((vm_offset_t)fp6_smmu));
+    assert(fp6_smmu[0x20000/4] == 0x167u);
+    assert(fp6_smmu[0x20010/4] == 0x38071u);
+    assert(((uint64_t)fp6_smmu[0x20028/4] | ((uint64_t)fp6_smmu[0x2002c/4] << 32)) == 0x900000000ULL);
+    assert(fp6_smmu[0xc00/4] == 0u && fp6_smmu[0x800/4] == 0x80000000u);
+    int context_writes = all_mmio_writes;
+    assert(fp6_gpu_global_context_enable((vm_offset_t)fp6_smmu) && all_mmio_writes == context_writes);
+    fp6_gpu_smmu_model = 0; fp6_gpu_global_domain = (struct fp6_gpu_global_domain){0};
+    fp6_gpu_smmu_base = 0; fp6_gpu_smmu_live = 0;
+    puts("PASS: GPU SID0 TTBR1 setup accepts measured TBI/ASIDPNE readbacks, is idempotent, and refuses dirty CB0 without writes");
+
+    /* Run the actual GFX_ACC MEM_ALLOC path with distinct contiguous host pages,
+     * then verify the HFI ACK VA, published leaf and live TTBR1 route. */
+    memset(fp6_smmu, 0, sizeof(fp6_smmu));
+    fp6_smmu[0x20/4] = 0x4c017e18u; fp6_smmu[0x24/4] = 0x40000016u;
+    fp6_smmu[0x28/4] = 0x5511u; fp6_smmu[0] = 0x00200626u;
+    for (unsigned i = 0; i < 24; i++) fp6_smmu[(0xc00 + 4*i)/4] = 0x20000u;
+    fp6_gpu_global_domain = (struct fp6_gpu_global_domain){0};
+    fp6_gpu_smmu_base = 0; fp6_gpu_smmu_live = 0; fp6_hfi_mem_alloc_count = 0;
+    global_alloc_mode = 1; global_alloc_offset = 0; fake_pa_base = 0x900000000ULL;
+    fp6_gpu_smmu_model = 1; fp6_gmu_hfi_va = 0x60000000u;
+    static uint8_t hfi_mem[FP6_GMU_HFI_SIZE]; memset(hfi_mem, 0, sizeof(hfi_mem));
+    uint32_t *queue = (uint32_t *)(void *)(hfi_mem + 24);
+    queue[0] = 1; queue[1] = fp6_gmu_hfi_va + FP6_GMU_HFI_QUEUE0; queue[3] = 1024;
+    uint32_t request[11] = {0x1234u,0, 0,0,FP6_HFI_MEMFLAG_GFX_ACC,2,0,0xabcdu,0,0x3000,12};
+    unsigned sequence = 0; all_mmio_writes = 0;
+    assert(fp6_gmu_hfi_mem_alloc((vm_offset_t)fp6_smmu, 0x20000,
+        (vm_offset_t)fp6_gmu_regs, hfi_mem, request, 1, &sequence));
+    assert(sequence == 1 && fp6_hfi_mem_alloc_count == 1 && fp6_gpu_smmu_live);
+    assert(fp6_gpu_global_walk(&fp6_gpu_global_domain, FP6_GPU_GLOBAL_BASE) ==
+        fp6_hfi_mem_allocs[0].backing.pa);
+    uint32_t *reply = (uint32_t *)(void *)(hfi_mem + FP6_GMU_HFI_QUEUE0);
+    assert(reply[0] == ((1u << 20) | (1u << 16) | (11u << 8) | 0x14u) && reply[1] == request[0]);
+    assert(reply[2] == (uint32_t)FP6_GPU_GLOBAL_BASE && reply[3] == (uint32_t)(FP6_GPU_GLOBAL_BASE >> 32));
+    assert(reply[6] == 0xabcdu && reply[8] == 0 && reply[9] == 0x3000);
+    assert(fp6_smmu_read32((vm_offset_t)fp6_smmu, 0x20000) == 0x167u);
+    global_alloc_mode = fp6_gpu_smmu_model = 0;
+    puts("PASS: HFI GFX_ACC allocation returns a live GPU TTBR1 mapping and matching ACK");
     reset(); present = 0; sweet_gpu_probe();
     assert(map_calls == 0 && output[0] == 0);
     reset(); mode = 0; sweet_gpu_probe(); assert(map_calls == 0);

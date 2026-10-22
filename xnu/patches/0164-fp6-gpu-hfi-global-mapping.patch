@@ -1,0 +1,350 @@
+diff --git a/bsd/dev/sweet_gpu.c b/bsd/dev/sweet_gpu.c
+index ff1dea2..737deac 100644
+--- a/bsd/dev/sweet_gpu.c
++++ b/bsd/dev/sweet_gpu.c
+@@ -2318,6 +2318,9 @@ fp6_smmu_fault_irq_inventory(void)
+ #define FP6_SMMU_IDR1         0x0024u
+ #define FP6_SMMU_IDR2         0x0028u
+ #define FP6_SMMU_IDR7         0x003cu
++#define FP6_SMMU_GR1          0x1000u /* 4 KiB global register page selected below */
++#define FP6_HFI_MEMFLAG_GMU_PRIV       (1u << 4)
++#define FP6_HFI_MEMFLAG_GMU_WRITEABLE  (1u << 5)
+ #define FP6_SMMU_GFSR         0x0048u
+ #define FP6_SMMU_SCR0         0x0000u
+ #define FP6_SMMU_SMR(n)       (0x0800u + 4u * (n))
+@@ -2327,6 +2330,7 @@ fp6_smmu_fault_irq_inventory(void)
+ #define FP6_SMMU_CB_SCTLR     0x0000u
+ #define FP6_SMMU_CB_TCR2      0x0010u
+ #define FP6_SMMU_CB_TTBR0     0x0020u
++#define FP6_SMMU_CB_TTBR1     0x0028u
+ #define FP6_SMMU_CB_TCR       0x0030u
+ #define FP6_SMMU_ID0_SMS      (1u << 27)
+ #define FP6_SMMU_ID0_NUMSMRG  0xffu
+@@ -2739,6 +2743,7 @@ fail:
+ #include "fp6_gmu_fw.h"
+ #include "fp6_gmu_loader.h"
+ #include "fp6_gmu_domain.h"
++#include "fp6_gpu_global_domain.h"
+ 
+ static int fp6_gmu_clocks_prepare(struct fp6_smmu_clocks *);
+ 
+@@ -2802,6 +2807,212 @@ fp6_domain_table_map(void *ctx, uint64_t pa, uint32_t iova, unsigned level)
+ 
+ static struct fp6_gmu_domain fp6_gmu_domain;
+ static vm_offset_t fp6_gmu_window;
++static struct fp6_gpu_global_domain fp6_gpu_global_domain;
++static vm_offset_t fp6_gpu_smmu_base;
++static uint32_t fp6_gpu_cb_off;
++static unsigned fp6_gpu_smr_group;
++static int fp6_gpu_smmu_live;
++
++static int
++fp6_gpu_kernel_alloc(void *ctx, uint32_t size, struct fp6_gpu_global_page *page)
++{
++	(void)ctx;
++	vm_offset_t va = 0;
++	vm_size_t bytes = (size + PAGE_MASK) & ~PAGE_MASK;
++	if (!size || kmem_alloc_contig(kernel_map, &va, bytes, PAGE_MASK, 0, 0,
++	    KMA_DATA | KMA_ZERO | KMA_PERMANENT, VM_KERN_MEMORY_IOKIT) != KERN_SUCCESS || !va)
++		return -1;
++	ppnum_t ppn = pmap_find_phys(kernel_pmap, (addr64_t)va);
++	page->va = (uint8_t *)(uintptr_t)va;
++	page->pa = ptoa_64(ppn);
++	return !ppn || page->pa >= (1ULL << 36) || bytes > (1ULL << 36) - page->pa ? -1 : 0;
++}
++
++static int
++fp6_gpu_kernel_publish(void *ctx, const void *va, uint32_t size)
++{
++	(void)ctx;
++	clean_dcache64((addr64_t)(uintptr_t)va, size, 0);
++	__asm__ volatile("dsb sy" ::: "memory");
++	return 0;
++}
++
++static const struct fp6_gpu_global_ops fp6_gpu_global_ops = {
++	.alloc_table = fp6_gpu_kernel_alloc,
++	.publish = fp6_gpu_kernel_publish,
++};
++
++/* Configure Linux's GPU-reserved CB0 as the split TTBR1 global aperture.
++ * SID0 is blocked until all context state and translations are verified. */
++static int
++fp6_gpu_global_context_enable(vm_offset_t smmu)
++{
++	uint32_t id0, id1, id2, scr0;
++	unsigned groups, banks, page_shift, numpages, group = FP6_SMMU_MAX_STREAMS;
++	uint64_t cb_base;
++	uint32_t cb_off;
++	if (fp6_gpu_smmu_live)
++		return smmu == fp6_gpu_smmu_base;
++	if (!smmu || fp6_gpu_global_domain.failed || !fp6_gpu_global_domain.l0.va)
++		return 0;
++	id0 = fp6_smmu_read32(smmu, FP6_SMMU_IDR0);
++	id1 = fp6_smmu_read32(smmu, FP6_SMMU_IDR1);
++	id2 = fp6_smmu_read32(smmu, FP6_SMMU_IDR2);
++	scr0 = fp6_smmu_read32(smmu, FP6_SMMU_SCR0);
++	groups = id0 & FP6_SMMU_ID0_NUMSMRG;
++	banks = id1 & 0xffu;
++	page_shift = (id1 & FP6_SMMU_ID1_PAGESIZE) ? 16u : 12u;
++	numpages = 1u << (((id1 >> 28) & 7u) + 1u);
++	cb_base = (uint64_t)numpages << page_shift;
++	if (!(id0 & FP6_SMMU_ID0_SMS) || !groups || groups > FP6_SMMU_MAX_STREAMS ||
++	    banks < 3u || banks > FP6_SMMU_MAX_CBS || page_shift != 12u ||
++	    !(id2 & FP6_SMMU_ID2_PTFS_4K) || ((id2 >> 4) & 0xfu) != 1u ||
++	    scr0 == 0xffffffffu || (scr0 & 1u) || cb_base >= FP6_GPU_SMMU_SIZE) {
++		printf("QCOM GPU SMMU: SID0 setup refused unsupported geometry/global state\n");
++		return 0;
++	}
++	for (unsigned i = 0; i < groups; i++) {
++		uint32_t smr = fp6_smmu_read32(smmu, FP6_SMMU_SMR(i));
++		uint32_t s2cr = fp6_smmu_read32(smmu, FP6_SMMU_S2CR(i));
++		unsigned sid = smr & 0xffffu, mask = (smr >> 16) & 0x7fffu;
++		if ((smr & FP6_SMMU_SMR_VALID) && (((sid ^ 0u) & ~mask & 0xffffu) == 0)) {
++			printf("QCOM GPU SMMU: SID0 already matched group=%u; refusing takeover\n", i);
++			return 0;
++		}
++		if (!(smr & FP6_SMMU_SMR_VALID) &&
++		    (s2cr & FP6_SMMU_S2CR_TYPE_MASK) == FP6_SMMU_S2CR_FAULT &&
++		    group == FP6_SMMU_MAX_STREAMS)
++			group = i;
++	}
++	cb_off = (uint32_t)cb_base; /* CB0: reserved by Linux for GPU global TTBR1. */
++	if (group == FP6_SMMU_MAX_STREAMS ||
++	    fp6_smmu_read32(smmu, FP6_SMMU_CBAR(0)) ||
++	    fp6_smmu_read32(smmu, FP6_SMMU_CBA2R(0)) ||
++	    fp6_smmu_read32(smmu, cb_off + FP6_SMMU_CB_SCTLR) ||
++	    fp6_smmu_read32(smmu, cb_off + FP6_SMMU_CB_TCR) ||
++	    fp6_smmu_read64(smmu, cb_off + FP6_SMMU_CB_TTBR0) ||
++	    fp6_smmu_read64(smmu, cb_off + FP6_SMMU_CB_TTBR1) ||
++	    (fp6_smmu_read32(smmu, cb_off + FP6_SMMU_CB_TCR2) & ~0x60u) ||
++	    fp6_smmu_read32(smmu, cb_off + FP6_SMMU_CB_MAIR0) ||
++	    fp6_smmu_read32(smmu, cb_off + FP6_SMMU_CB_MAIR1) ||
++	    fp6_smmu_read32(smmu, cb_off + FP6_SMMU_CB_FSR)) {
++		printf("QCOM GPU SMMU: CB0 or fault-routed SID0 group is not clean\n");
++		return 0;
++	}
++	/* Linux TTBR1: T1SZ=16, SH1=Outer, TG1=4K, EPD0=1, A1=0. */
++	fp6_smmu_write32(smmu, FP6_SMMU_CBA2R(0), 1u);
++	fp6_smmu_write32(smmu, FP6_SMMU_CBAR(0), 0x0001f300u);
++	fp6_smmu_write32(smmu, cb_off + FP6_SMMU_CB_TCR2, 0x00038011u);
++	fp6_smmu_write32(smmu, cb_off + FP6_SMMU_CB_TCR, 0xa0100080u);
++	fp6_smmu_write64(smmu, cb_off + FP6_SMMU_CB_TTBR0, 0);
++	fp6_smmu_write64(smmu, cb_off + FP6_SMMU_CB_TTBR1, fp6_gpu_global_domain.l0.pa);
++	fp6_smmu_write32(smmu, cb_off + FP6_SMMU_CB_MAIR0, 0xf404ff44u);
++	fp6_smmu_write32(smmu, cb_off + FP6_SMMU_CB_MAIR1, 0x0000efe4u);
++	fp6_smmu_write32(smmu, cb_off + FP6_SMMU_CB_TLBIALL, FP6_SMMU_DUMMY_VAL);
++	fp6_smmu_write32(smmu, cb_off + FP6_SMMU_CB_TLBSYNC, FP6_SMMU_DUMMY_VAL);
++	for (unsigned i = 0; i < 1000u; i++) {
++		if (!(fp6_smmu_read32(smmu, cb_off + FP6_SMMU_CB_TLBSTATUS) & 1u)) goto tlb_ready;
++		delay(10);
++	}
++	printf("QCOM GPU SMMU: CB0 TLBI sync timed out; route remains blocked\n");
++	return 0;
++tlb_ready:
++	if (fp6_smmu_read32(smmu, FP6_SMMU_CBA2R(0)) != 1u ||
++	    fp6_smmu_read32(smmu, FP6_SMMU_CBAR(0)) != 0x0001f300u ||
++	    (fp6_smmu_read32(smmu, cb_off + FP6_SMMU_CB_TCR2) & ~0x60u) != 0x00038011u ||
++	    fp6_smmu_read32(smmu, cb_off + FP6_SMMU_CB_TCR) != 0xa0100080u ||
++	    fp6_smmu_read64(smmu, cb_off + FP6_SMMU_CB_TTBR1) != fp6_gpu_global_domain.l0.pa ||
++	    fp6_smmu_read32(smmu, cb_off + FP6_SMMU_CB_MAIR0) != 0xf404ff44u ||
++	    fp6_smmu_read32(smmu, cb_off + FP6_SMMU_CB_MAIR1) != 0x0000efe4u) {
++		printf("QCOM GPU SMMU: CB0 TTBR1 setup readback failed; route remains blocked\n");
++		return 0;
++	}
++	/* Match Linux's default non-halting GPU fault policy plus S1_ASIDPNE. */
++	fp6_smmu_write32(smmu, cb_off + FP6_SMMU_CB_SCTLR, 0x1167u);
++	fp6_smmu_write32(smmu, FP6_SMMU_S2CR(group), 0u); /* translate through CB0 */
++	fp6_smmu_write32(smmu, FP6_SMMU_SMR(group), FP6_SMMU_SMR_VALID);
++	if ((fp6_smmu_read32(smmu, cb_off + FP6_SMMU_CB_SCTLR) & ~0x1000u) != 0x0167u ||
++	    fp6_smmu_read32(smmu, FP6_SMMU_S2CR(group)) != 0u ||
++	    fp6_smmu_read32(smmu, FP6_SMMU_SMR(group)) != FP6_SMMU_SMR_VALID) {
++		fp6_smmu_write32(smmu, FP6_SMMU_SMR(group), 0u);
++		if (fp6_smmu_read32(smmu, FP6_SMMU_SMR(group)) == 0u) {
++			fp6_smmu_write32(smmu, cb_off + FP6_SMMU_CB_SCTLR, 0u);
++			(void)fp6_smmu_read32(smmu, FP6_SMMU_IDR0);
++		}
++		printf("QCOM GPU SMMU: SID0 route readback failed; mapping storage retained\n");
++		return 0;
++	}
++	fp6_gpu_smmu_base = smmu;
++	fp6_gpu_cb_off = cb_off;
++	fp6_gpu_smr_group = group;
++	fp6_gpu_smmu_live = 1;
++	printf("QCOM GPU SMMU: SID0 -> CB0 TTBR1 active group=%u root=0x%llx TCR=0xa0100080 SCTLR=0x%08x\n",
++	    group, (unsigned long long)fp6_gpu_global_domain.l0.pa,
++	    fp6_smmu_read32(smmu, cb_off + FP6_SMMU_CB_SCTLR));
++	return 1;
++}
++
++static int
++fp6_gpu_global_map_live(vm_offset_t smmu, uint64_t address, uint32_t size,
++		uint64_t pa, uint32_t flags)
++{
++	int live = fp6_gpu_smmu_live;
++	if (!smmu || (live && (smmu != fp6_gpu_smmu_base ||
++	    (fp6_smmu_read32(smmu, fp6_gpu_cb_off + FP6_SMMU_CB_SCTLR) & ~0x1000u) != 0x0167u)) ||
++	    fp6_gpu_global_domain.failed ||
++	    fp6_gpu_global_map(&fp6_gpu_global_domain, address, size, pa, flags) ||
++	    fp6_gpu_global_publish(&fp6_gpu_global_domain)) {
++		printf("QCOM GPU SMMU: global mapping publish failed VA=0x%llx bytes=%u\n",
++		    (unsigned long long)address, size);
++		return 0;
++	}
++	if (fp6_gpu_global_walk(&fp6_gpu_global_domain, address) != pa) return 0;
++	if (!live) return fp6_gpu_global_context_enable(smmu);
++	fp6_smmu_write32(smmu, fp6_gpu_cb_off + FP6_SMMU_CB_TLBIALL, FP6_SMMU_DUMMY_VAL);
++	fp6_smmu_write32(smmu, fp6_gpu_cb_off + FP6_SMMU_CB_TLBSYNC, FP6_SMMU_DUMMY_VAL);
++	for (unsigned i = 0; i < 1000u; i++) {
++		if (!(fp6_smmu_read32(smmu, fp6_gpu_cb_off + FP6_SMMU_CB_TLBSTATUS) & 1u)) {
++			__asm__ volatile("dsb sy" ::: "memory");
++			return fp6_gpu_global_walk(&fp6_gpu_global_domain, address) == pa;
++		}
++		delay(10);
++	}
++	printf("QCOM GPU SMMU: CB0 TLB sync timed out; mappings retained\n");
++	return 0;
++}
++
++static int
++fp6_gmu_domain_map_external_live(vm_offset_t smmu, uint32_t cb_off,
++		uint32_t address, uint32_t size, int cached, uint32_t flags,
++		const struct fp6_gpu_global_page *gpu_backing)
++{
++	struct fp6_gmu_domain_page backing;
++	if (!gpu_backing || !smmu || !fp6_gmu_domain.frozen || fp6_gmu_domain.failed ||
++	    fp6_smmu_read32(smmu, cb_off + FP6_SMMU_CB_SCTLR) != 0x27u) {
++		printf("QCOM GMU: shared HFI backing map refused: context not live\n");
++		return 0;
++	}
++	backing.va = (uint8_t *)(uintptr_t)gpu_backing->va;
++	backing.pa = gpu_backing->pa;
++	fp6_gmu_domain.frozen = 0;
++	int mapped = fp6_gmu_domain_reserve_external_access(&fp6_gmu_domain, address,
++	    size, cached, (flags & FP6_HFI_MEMFLAG_GMU_WRITEABLE) != 0,
++	    (flags & FP6_HFI_MEMFLAG_GMU_PRIV) != 0, &backing);
++	if (!mapped) mapped = fp6_gmu_domain_publish(&fp6_gmu_domain);
++	fp6_gmu_domain.frozen = 1;
++	if (mapped) return 0;
++	fp6_smmu_write32(smmu, cb_off + FP6_SMMU_CB_TLBIALL, FP6_SMMU_DUMMY_VAL);
++	fp6_smmu_write32(smmu, cb_off + FP6_SMMU_CB_TLBSYNC, FP6_SMMU_DUMMY_VAL);
++	for (unsigned i = 0; i < 1000u; i++) {
++		if (!(fp6_smmu_read32(smmu, cb_off + FP6_SMMU_CB_TLBSTATUS) & 1u)) {
++			__asm__ volatile("dsb sy" ::: "memory");
++			return 1;
++		}
++		delay(10);
++	}
++	printf("QCOM GMU: shared HFI backing TLB sync timed out; CM3 reset required\n");
++	return 0;
++}
+ static int fp6_gmu_kernel_alloc(void *ctx, uint32_t size, struct fp6_gmu_domain_page *page)
+ {
+  (void)ctx;
+@@ -3066,14 +3277,19 @@ fp6_gmu_next_va(uint32_t size)
+ #define FP6_HFI_MEM_ALLOC_MAX 32u
+ #define FP6_HFI_MEMKIND_HW_FENCE 23u
+ #define FP6_HFI_MEMKIND_MMIO_IPC_CORE 19u
++#define FP6_HFI_MEMKIND_MMIO_IPCC_AOSS 20u
++#define FP6_HFI_MEMKIND_MEMSTORE 22u
+ #define FP6_HFI_MEMKIND_MAX 26u
+ #define FP6_HFI_MEMFLAG_GFX_ACC (1u << 0)
++#define FP6_HFI_MEMFLAG_GFX_PRIV (1u << 1)
++#define FP6_HFI_MEMFLAG_GFX_WRITEABLE (1u << 2)
++#define FP6_HFI_MEMFLAG_GMU_ACC (1u << 3)
+ #define FP6_HFI_MEMFLAG_GMU_CACHEABLE (1u << 7)
+-#define FP6_HFI_MEMFLAG_GMU_PRIV (1u << 4)
+-#define FP6_HFI_MEMFLAG_GMU_WRITEABLE (1u << 5)
+ #define FP6_HFI_MEMFLAG_GFX_SECURE (1u << 12)
+ struct fp6_hfi_mem_alloc {
+ 	uint32_t mem_kind, gmu_handle;
++	uint64_t gpu_address;
++	struct fp6_gpu_global_page backing;
+ 	uint32_t desc[9]; /* gpu_addr[2], flags, kind, host, gmu_handle, gmu_addr, size, align */
+ };
+ static struct fp6_hfi_mem_alloc fp6_hfi_mem_allocs[FP6_HFI_MEM_ALLOC_MAX];
+@@ -3272,13 +3488,15 @@ fp6_gmu_hfi_mem_alloc(vm_offset_t smmu, uint32_t cb_off, vm_offset_t g,
+ 	unsigned off = 2u;
+ 	uint32_t desc[9] = {0};
+ 	uint32_t response[11] = {0};
++	struct fp6_gpu_global_page gpu_backing = {0};
+ 	unsigned words = mem_version ? 9u : 8u;
+ 	for (unsigned i = 0; i < words; i++) desc[i] = request[off + i];
+ 	uint32_t kind = desc[3], flags = desc[2], handle = desc[5];
+ 	uint32_t size = desc[7], align = desc[8];
+ 	if (kind >= FP6_HFI_MEMKIND_MAX || !handle || !size ||
+-	    (flags & (FP6_HFI_MEMFLAG_GFX_ACC | FP6_HFI_MEMFLAG_GFX_SECURE)) ||
+-	    kind == FP6_HFI_MEMKIND_HW_FENCE || kind == FP6_HFI_MEMKIND_MMIO_IPC_CORE) {
++	    (flags & FP6_HFI_MEMFLAG_GFX_SECURE) ||
++	    kind == FP6_HFI_MEMKIND_HW_FENCE ||
++	    kind == FP6_HFI_MEMKIND_MMIO_IPC_CORE || kind == FP6_HFI_MEMKIND_MMIO_IPCC_AOSS) {
+ 		printf("QCOM GMU: HFI MEM_ALLOC unsupported version=%u flags=0x%x kind=%u handle=%u bytes=%u align=0x%x; CM3 reset required\n",
+ 		    mem_version, flags, kind, handle, size, align);
+ 		return 0;
+@@ -3296,6 +3514,54 @@ fp6_gmu_hfi_mem_alloc(vm_offset_t smmu, uint32_t cb_off, vm_offset_t g,
+ 	}
+ 	uint64_t rounded = ((uint64_t)size + 4095ULL) & ~4095ULL;
+ 	if (!rounded || rounded > 0xffffffffULL) return 0;
++	if (flags & FP6_HFI_MEMFLAG_GFX_ACC) {
++		uint64_t gpu_address;
++		uint32_t gpu_mapped, gmu_address = 0;
++		if (!fp6_gpu_global_domain.l0.va &&
++		    fp6_gpu_global_init(&fp6_gpu_global_domain, &fp6_gpu_global_ops, NULL)) {
++			printf("QCOM GPU SMMU: global page-table allocation failed\n");
++			return 0;
++		}
++		if (fp6_gpu_global_va(&fp6_gpu_global_domain, size, align & 0xffu,
++		    &gpu_address, &gpu_mapped) || gpu_mapped != rounded ||
++		    fp6_gpu_kernel_alloc(NULL, gpu_mapped, &gpu_backing) ||
++		    fp6_gpu_kernel_publish(NULL, gpu_backing.va, gpu_mapped)) {
++			printf("QCOM GPU SMMU: HFI global backing allocation refused kind=%u handle=%u bytes=%u align=0x%x\n",
++			    kind, handle, size, align);
++			return 0;
++		}
++		if (flags & FP6_HFI_MEMFLAG_GMU_ACC) {
++			gmu_address = fp6_gmu_hfi_find_va((flags & FP6_HFI_MEMFLAG_GMU_CACHEABLE) != 0,
++			    (uint32_t)rounded, align);
++			if (!gmu_address || !fp6_gmu_domain_map_external_live(smmu, cb_off,
++			    gmu_address, (uint32_t)rounded,
++			    (flags & FP6_HFI_MEMFLAG_GMU_CACHEABLE) != 0, flags, &gpu_backing)) {
++				printf("QCOM GMU: shared HFI backing map refused kind=%u handle=%u\n", kind, handle);
++				return 0;
++			}
++		}
++		if (!fp6_gpu_global_map_live(smmu, gpu_address, gpu_mapped, gpu_backing.pa, flags)) {
++			printf("QCOM GPU SMMU: HFI global map refused kind=%u handle=%u VA=0x%llx PA=0x%llx; CM3 reset required\n",
++			    kind, handle, (unsigned long long)gpu_address,
++			    (unsigned long long)gpu_backing.pa);
++			return 0;
++		}
++		desc[0] = (uint32_t)gpu_address;
++		desc[1] = (uint32_t)(gpu_address >> 32);
++		desc[4] = handle;
++		desc[6] = gmu_address;
++		desc[7] = gpu_mapped;
++		struct fp6_hfi_mem_alloc *entry = &fp6_hfi_mem_allocs[fp6_hfi_mem_alloc_count++];
++		entry->mem_kind = kind;
++		entry->gmu_handle = handle;
++		entry->gpu_address = gpu_address;
++		entry->backing = gpu_backing;
++		memcpy(entry->desc, desc, sizeof(desc));
++		printf("QCOM HFI MEM_ALLOC GPU kind=%u flags=0x%x handle=%u gpu=0x%llx gmu=0x%x pa=0x%llx bytes=%u align=0x%x\n",
++		    kind, flags, handle, (unsigned long long)gpu_address, gmu_address,
++		    (unsigned long long)gpu_backing.pa, gpu_mapped, align);
++		goto reply;
++	}
+ 	uint32_t va = fp6_gmu_hfi_find_va((flags & FP6_HFI_MEMFLAG_GMU_CACHEABLE) != 0,
+ 	    (uint32_t)rounded, align);
+ 	if (!va || !fp6_gmu_domain_map_live(smmu, cb_off, va, (uint32_t)rounded,
+@@ -3314,9 +3580,9 @@ fp6_gmu_hfi_mem_alloc(vm_offset_t smmu, uint32_t cb_off, vm_offset_t g,
+ 	entry->mem_kind = kind;
+ 	entry->gmu_handle = handle;
+ 	memcpy(entry->desc, desc, sizeof(desc));
+-	printf("QCOM GMU: HFI MEM_ALLOC mapped kind=%u flags=0x%x handle=%u GMU=0x%x bytes=%u cached=%u\n",
++	printf("QCOM GMU: HFI MEM_ALLOC mapped kind=%u flags=0x%x handle=%u GMU=0x%x bytes=%u cached=%u align=0x%x\n",
+ 	    kind, flags, handle, va, (uint32_t)rounded,
+-	    (flags & FP6_HFI_MEMFLAG_GMU_CACHEABLE) != 0);
++	    (flags & FP6_HFI_MEMFLAG_GMU_CACHEABLE) != 0, align);
+ reply:
+ 	response[0] = (1u << 16) | 20u; /* HFI_MSG_ACK / F2H_MSG_MEM_ALLOC */
+ 	response[1] = request[0];       /* req_hdr echoes the GMU event header */
