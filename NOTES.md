@@ -106,14 +106,77 @@
   those checks. The host harness models a static post-seed CX counter;
   `python3 tests/test_fp6_gmu_boot.py` and `git diff --check` pass. CI and phone
   validation of this fix are pending.
+- Commit `09a398b2d85e1a38e17558003ecdb3e0faa64dc1` passed CI run
+  `39739290127`. Kernel SHA256 is
+  `9a5d96ef3eb2a2d9b6e854cdaf05852fce850ca18fe57e87e4376364e770a630`.
+  Packaged header-v2 image `/tmp/ios-extra-run-39739290127/package/fp6-gmu-cxtimer-linux-seed.img`
+  SHA256 `1062709ab0ab0d7a88b8bc5a15a25a3141b5bb4b48557c19741a54b6272ec881`
+  with product ADT SHA256 `4da4226e6b9ac393ff22b66a304d9172d6be2bfd6d558348a47379c51aab1d80`
+  and stock DTB SHA256 `8198534128258bfe7b05bbb5b227affc181aa49b376884c08eae8564fce124e3`.
+  Kernel checksum and package round-trip checks passed.
+- Initial checks found `fastbootd`, then no device. A later explicit user
+  authorization put the phone in bootloader fastboot and the image was tested
+  once, as recorded below. No flash or partition write occurred.
+- Linux Gen8 source confirms minimum DDR bandwidth is voted after firmware load,
+  SCM CX setup and version info, before GMU start and HFI. The XNU RPMh helper
+  currently supports ARC and VRM resources, not the interconnect/BCM vote, so
+  if timer removal reaches FW_INIT the following measured work is the minimum
+  DDR vote before enabling HFI traffic.
+- Phone test on `fp6-gmu-cxtimer-linux-seed.img` was then authorized and run
+  once through `tools/gpu-phone-test.py`. `fastboot boot` returned OKAY, but the
+  phone panicked before answering the USB ECM ping. The supplied panic is
+  `phystokv_range: illegal pa: 0x3df4000 phys base 0x900000000 size 0x100000000`
+  at `arm_vm_init.c:406`. No pcap was produced; only the helper's fastboot
+  transcript remains at
+  `/tmp/ios-extra-run-39739290127/logs/phone-0152-linux-cxtimer-seed-fastboot.txt`.
+  No second boot or recovery command was issued.
+- Source-order candidate (not yet confirmed by a panic backtrace): after the
+  timer check, `fp6_gmu_boot_reserve()` first changes the five HFI backing pages
+  to WCOMB. XNU's `pmap_set_cache_attributes()` reaches `phystokv_range()` when
+  the page is treated as managed RAM; the reported PA is outside the configured
+  high RAM window. The full panic backtrace is needed to confirm this caller
+  before changing allocation/cache policy. The device is currently back in
+  bootloader fastboot after the panic.
 
 ## Current FP6 GPU path
 
 The target is FP6 Adreno 810 Gen8.3. Patches 0148/0149 booted on the phone: the corrected GPU PLL/GMU clocks came up, 159 persistent pages were checked/uploaded, GMU firmware reported `FW_INIT_RESULT=0x100`, HFI controller initialization reported `HFI_CTRL_STATUS=1`, and CM3 reset was verified afterward. The photo records early GPU lines; the later USB capture started after that segment. GMU DMA and HFI command processing are still unproven.
 
-Next, build patch 0152 once in CI, verify/package it, then use one USB-captured temporary boot to see whether firmware reaches FW_INIT/HFI_CTRL. After that, inventory runtime DDR/BCM metadata and implement the minimum DDR vote before HFI messages. Full HFI needs perf/BW tables and MEM_ALLOC request handling. After HFI runs and idles safely, bring up GPU MMU/OOB, Gen8 SQE/AQE and scheduler; prove a bounded GPU write to mapped memory and then a simple draw/readback. Finally expose allocation, mapping/cache, submission and fence operations through an IOKit ABI and adapt an A810-correct Metal frontend and IOSurface presentation. Metal rendering remains unimplemented.
+First trace the 0152 panic address `0x3df4000` to its caller. It is the
+base-relative offset `0x903df4000 - 0x900000000`, but the panic stack is not
+available and the HFI WCOMB path is only a candidate. Do not boot another image
+until the address conversion is understood and corrected. Then resume with the
+minimum Linux-matching DDR vote before HFI traffic, full HFI tables and
+MEM_ALLOC handling, safe idle, GPU MMU/OOB and Gen8 SQE/AQE execution, a bounded
+GPU memory write, draw/readback, then an IOKit allocation/submission/fence ABI
+and an A810-compatible Metal frontend and IOSurface presentation.
 
 See [FP6 GMU first boot](docs/FP6_GMU_FIRST_BOOT.md), [FP6 Adreno Metal audit](docs/FP6_ADRENO_METAL_AUDIT.md) and [FP6 SMMU power](docs/FP6_SMMU_POWER.md).
+
+## Freedreno / Metal reference inspection (2026-10-22)
+
+- Read-only inspection of `/tmp/hackios-xnu-kernel` commit
+  `8e61187098f2c26c5daee8f9f72b6416aa64b9ab` and
+  `/tmp/hackios-xnu-userland` commit
+  `906425b75e02b4f99eb5d7bb1ef7c9583472d772`, especially
+  `tools/mesa/mk-mesa.sh`, `tools/mesa/freedreno-darwin.patch`,
+  `tools/mesa/redwood-drm/`, and `iokit/Kernel/RedwoodGPU.cpp`.
+- Confirmed the working rendering path is Mesa Freedreno (`msm` DRM KMD) over
+  an IOKit `RedwoodGPU` user client: buffer create/info/map/close, command
+  submission, and fence waits. The userland DRM shim maps the Linux ioctl
+  selector and structure ABI onto IOKit calls; buffer handles are mapped as
+  client memory. IOSurface import has a separate Redwood selector.
+- AIR is a Mesa frontend to NIR/ir3 and is callable from the Metal library
+  path, but it does not implement Apple's Metal object model or submission
+  ABI. The reference's measured hardware is Adreno 642L; FP6 is Adreno 810
+  Gen8.3, so its kernel interface and lifetime model are useful, while its
+  chip-specific command programming cannot be copied as A810 support.
+- Panic follow-up from CI buildtree `39739290127`: the reported PA
+  `0x3df4000` equals `0x903df4000 - gPhysBase(0x900000000)`, an offset within
+  the configured RAM window. This raises a specific question about a
+  base-relative page number being passed where XNU expects an absolute PA.
+  The exact code path is still unconfirmed without panic frames. Do not change
+  allocator/cache policy or run another phone test on this inference alone.
 
 ## Patch 0150: CX timer and SCM CX preflight (2026-10-22)
 

@@ -13,9 +13,44 @@
   its seed. That is why XNU's post-seed advance check refused firmware upload.
 - Patch 0152 follows Linux `gen8_cx_timer_init()`: seed the CX counter and
   proceed without an extra CX readback, offset, advance or rate gate. The host
-  test models the measured static counter and passes. CI and phone validation
-  remain pending. No firmware upload, SCM/CM3 release or HFI operation occurred
-  in the diagnostic boot.
+  test models the measured static counter and passes. Commit
+  `09a398b2d85e1a38e17558003ecdb3e0faa64dc1` passed CI run `39739290127`;
+  kernel SHA256 `9a5d96ef3eb2a2d9b6e854cdaf05852fce850ca18fe57e87e4376364e770a630`.
+  The packaged header-v2 image
+  `/tmp/ios-extra-run-39739290127/package/fp6-gmu-cxtimer-linux-seed.img` has
+  SHA256 `1062709ab0ab0d7a88b8bc5a15a25a3141b5bb4b48557c19741a54b6272ec881`;
+  it includes product ADT `4da4226e6b9ac393ff22b66a304d9172d6be2bfd6d558348a47379c51aab1d80`
+  and DTB `8198534128258bfe7b05bbb5b227affc181aa49b376884c08eae8564fce124e3`.
+- Initial checks found the device in `fastbootd`, then absent, so no boot was
+  issued at that point. A later explicitly authorized test booted 0152 once;
+  its result is recorded below. No partition write occurred.
+- Linux Gen8 votes minimum DDR bandwidth after GMU firmware/version setup and
+  before GMU start/HFI. The current XNU RPMh path handles ARC/VRM, not the
+  interconnect/BCM vote; that is the next source and hardware step after the
+  timer fix is measured on device.
+- The 0152 phone test was run once from bootloader fastboot. `fastboot boot`
+  returned OKAY, but the phone panicked before USB ECM appeared. User-provided
+  panic: `phystokv_range: illegal pa: 0x3df4000 phys base 0x900000000 size
+  0x100000000` at `arm_vm_init.c:406`. No pcap exists; the fastboot transcript
+  is `/tmp/ios-extra-run-39739290127/logs/phone-0152-linux-cxtimer-seed-fastboot.txt`.
+  No second boot/recovery command was issued.
+- Likely source-order suspect, not confirmed without a stack: the newly reached
+  HFI backing-page WCOMB change calls `pmap_set_cache_attributes()`, which can
+  call `phystokv_range()` on the page PA. The address is outside the configured
+  RAM window. Wait for/inspect the full panic backtrace before altering memory
+  allocation or cache attributes.
+- Follow-up against the exact CI `39739290127` buildtree: `0x3df4000` is the
+  offset `0x903df4000 - 0x900000000`, within the configured high-RAM window if
+  interpreted as a base-relative page number. XNU's `pmap_find_phys()` PTE walk
+  returns an absolute `ppnum_t` and `ptoa_64()` reconstructs a PA; `pa_index()`
+  is explicitly relative to `vm_first_phys`. This makes an index-versus-absolute
+  page-number mixup a concrete lead, but does not identify the panic caller.
+  No stack or pcap is available, so no allocator/cache change is justified yet.
+- Separate read-only review of HackiOS: its Mesa Freedreno Darwin port adapts
+  MSM DRM calls to an IOKit user client; its XNU service implements GEM buffers,
+  submission and fence waits. AIR translates to NIR/ir3, while Apple's Metal
+  object/submission ABI remains separate. Reference commits and file paths are
+  in `NOTES.md`.
 
 This is the full per-step record that used to be `NOTES.md`: exact images, hashes,
 CI runs, phone results and the reasoning at the time. The current state and the next
