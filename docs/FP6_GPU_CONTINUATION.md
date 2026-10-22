@@ -24,6 +24,16 @@ GMU DMA, GPU command, rendering or Metal work has succeeded yet.
 
 ## Current source state
 
+- Candidate patch 0160 now mirrors the bounded Linux Gen8 pre-start sequence:
+  GPU performance table, BW vote table, HWSCHED and KPROF controls, then
+  CORE_FW_START. The GPU row is the stock FP6 362 MHz point, BCM words contain
+  both AB/X and IB/Y values, and ACV perfmode stays off for the reduced DDR
+  table. Optional ACD/BCL/CLX/IFPC inputs still need source work. Host HFI
+  protocol/table checks, including bad ACK sequence rejection, pass under
+  ASan/UBSan; the broad GPU probe harness passes, and the changed XNU source
+  compiles against CI buildtree `39766804611`.
+  No full CI build, package or 0160 phone observation exists yet. The host
+  responder synthesizes ACKs; it does not model firmware validation.
 - Patch 0159 adds a bounded HFI `CORE_FW_START` request/ACK exchange based on
   Fairphone Linux Gen8. CI `39766804611` passed and the packaged image booted
   once. The phone reported `irq=0x4 fw=0x900` after the request; bit 2 is DBGQ
@@ -86,9 +96,9 @@ for that fixed request; the host test rejects zero-width SH0 while allowing fixe
 ACV. Patch 0158 is validated by CI and on hardware. Do not relax fail-closed
 behavior or guess a TCS vote.
 
-The next source milestone is HFI queue setup and a bounded core-firmware start
-message, then handling pre-mapped MEM_ALLOC requests with explicit cache
-ownership. Mirror the Linux startup order and request/reply formats; keep CM3
-reset as the failure containment path. Only after a measured HFI exchange should
-the code attempt a tiny GPU memory write/readback. Rendering and NativeMetal
+Next: finish review of patch 0160, run one CI build and package only after the
+source checks remain green. Wait for the user's Android work before any device
+test. If the 0160 phone probe gets CORE_FW_START ACK, next handle observed
+F2H MEM_ALLOC requests with pre-mapped backing and explicit cache ownership;
+then add a bounded GPU memory write/readback. Rendering and NativeMetal
 integration remain later milestones.

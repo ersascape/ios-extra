@@ -76,10 +76,11 @@ class GPUProbeTests(unittest.TestCase):
                                   '__attribute__((used)) = fn;\n#define EARLY_BOOT 1\n'
                                   '#define STARTUP_RANK_LAST 4\n',
                 'arm/caches_internal.h': '#define TRUE 1\ntypedef unsigned long long addr64_t;\n'
-                                         'void clean_dcache64(addr64_t, unsigned, int);\n',
+                                         'void clean_dcache64(addr64_t, unsigned, int);\n'
+                                         'void flush_dcache64(addr64_t, unsigned, int);\n',
                 'arm/machine_routines.h': 'typedef int boolean_t;\n#define FALSE 0\n'
                                           'boolean_t ml_set_interrupts_enabled(boolean_t);\n',
-                'vm/pmap.h': 'typedef unsigned long long addr64_t;\ntypedef unsigned int ppnum_t;\n'
+                'vm/pmap.h': '#include <vm/memory_types.h>\ntypedef unsigned long long addr64_t;\ntypedef unsigned int ppnum_t;\n'
                              'typedef void *pmap_t;\nextern pmap_t kernel_pmap;\n'
                              '#define ptoa_64(x) ((unsigned long long)(x) << 14)\n'
                              'extern ppnum_t pmap_find_phys(pmap_t, addr64_t);\n'
@@ -380,6 +381,9 @@ void clean_dcache64(addr64_t addr, unsigned count, int phys) {
         for (unsigned off = 0x3000; off < GPU_BUF_BYTES; off++)
             if (off < GPU_BUF_HFI_OFF || off >= GPU_BUF_HFI_OFF + sizeof(expected)) assert(dma_block[off] == 0);
     }
+}
+void flush_dcache64(addr64_t addr, unsigned count, int phys) {
+    (void)addr; (void)count; (void)phys;
 }
 ppnum_t pmap_find_phys(pmap_t p, addr64_t va)
 {

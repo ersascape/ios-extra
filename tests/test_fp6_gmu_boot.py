@@ -40,6 +40,7 @@ static unsigned rsc_command_count;
 static int hide_acv;
 static uint32_t fp6_gmu_hfi_irq;
 static unsigned fp6_hfi_doorbells, fp6_hfi_cache_flushes;
+static int fake_bad_hfi_ack;
 static uint32_t fp6_gmu_hfi_va;
 static uint8_t *fp6_gmu_range_va(uint32_t);
 static void flush_dcache64(uintptr_t address, unsigned count, int physical) {
@@ -119,11 +120,37 @@ static void fp6_smmu_write32(vm_offset_t b,uint32_t o,uint32_t v) {
   uint32_t *cmd_hdr=table+6, *msg_hdr=table+18;
   uint32_t *cmdq=(uint32_t *)(void *)(mem+0x350u);
   uint32_t *msgq=(uint32_t *)(void *)(mem+0x1350u);
-  uint32_t wi=(cmd_hdr[11]+1024u-4u)%1024u;
-  assert(cmdq[wi]==0x0010020eu && cmdq[(wi+1u)%1024u]==0);
-  assert(cmdq[(wi+2u)%1024u]==0xfafafafau && cmdq[(wi+3u)%1024u]==0xfafafafau);
+  uint32_t wi=cmd_hdr[10]; /* prior GMU read index is the next request start */
+  unsigned dwords=(cmdq[wi]>>8)&0xffu;
+  unsigned rounded=(dwords+3u)&~3u;
+  uint32_t req_hdr=cmdq[wi];
+  unsigned id=req_hdr&0xffu, seq=(req_hdr>>20)&0xffu;
+  assert((req_hdr>>16&0xfu)==0 && id!=126 && dwords>=2 && rounded<1024);
+  assert(seq==fp6_hfi_doorbells+1);
+  if(fp6_hfi_doorbells==0) {
+   assert(id==15 && dwords==19 && cmdq[(wi+1u)%1024u]==0);
+   assert(cmdq[(wi+2u)%1024u]==1 && cmdq[(wi+3u)%1024u]==2 && cmdq[(wi+4u)%1024u]==3);
+   assert(cmdq[(wi+5u)%1024u]==0 && cmdq[(wi+6u)%1024u]==0xffffffffu);
+   assert(cmdq[(wi+8u)%1024u]==0x00400101u && cmdq[(wi+9u)%1024u]==0xffffffffu);
+   assert(cmdq[(wi+10u)%1024u]==362000u);
+   assert(cmdq[(wi+11u)%1024u]==3 && cmdq[(wi+12u)%1024u]==2);
+   assert(cmdq[(wi+16u)%1024u]==350000u && cmdq[(wi+18u)%1024u]==650000u);
+  } else if(fp6_hfi_doorbells==1) {
+   assert(id==3 && dwords==160);
+   assert(cmdq[(wi+1u)%1024u]==3 && cmdq[(wi+2u)%1024u]==1 && cmdq[(wi+3u)%1024u]==3);
+   uint32_t ddr=(wi+32u)%1024u;
+   assert(cmdq[(ddr+8u)%1024u]==0x20c3430du); /* AB=IB, SH0 width 16 */
+   assert(cmdq[(ddr+9u)%1024u]==0x60c3430du); /* AB=IB, MC0 width 4 */
+   assert(cmdq[(ddr+10u)%1024u]==0x60000000u); /* ACV, no premature perfmode */
+  } else if(fp6_hfi_doorbells<4) {
+   assert(id==11 && dwords==4);
+   assert(cmdq[(wi+1u)%1024u]==(fp6_hfi_doorbells==2?1u:16u));
+   assert(cmdq[(wi+2u)%1024u]==1 && cmdq[(wi+3u)%1024u]==0);
+  } else {
+   assert(id==14 && dwords==2 && cmdq[(wi+1u)%1024u]==0);
+  }
   uint32_t ri=msg_hdr[11];
-  msgq[ri]=0x0011047eu; /* ACK, four dwords, sequence one, ACK id 126 */
+  msgq[ri]=(((seq+(fake_bad_hfi_ack?1u:0u))&0xffu)<<20)|0x0001047eu;
   msgq[(ri+1u)%1024u]=cmdq[wi];
   msgq[(ri+2u)%1024u]=0;
   msgq[(ri+3u)%1024u]=0;
@@ -142,21 +169,31 @@ static int fp6_power_poll(vm_offset_t b,uint32_t o,uint32_t mask,uint32_t want,u
 static void make_cmd_db(void) {
  fp6_cmd_db[1]=0x0c0330dbu;
  /* Linux cmd_db_get_header() scans all populated slave headers in order. */
- fp6_cmd_db[2]=(112u<<16)|3u; /* unrelated ARC entry precedes BCM */
- fp6_cmd_db[3]=(1u<<16)|960u;
- fp6_cmd_db[6]=(136u<<16)|5u; /* SH0/MC0/ACV in BCM slave header */
- fp6_cmd_db[7]=(3u<<16)|880u;
- fp6_cmd_db[64]=0x00504f41u; /* AOP */
- const uint32_t names[3]={0x00304853u,0x0030434du,0x00564341u};
- const uint32_t addrs[3]={0x50020u,0x50030u,0x50068u};
- const uint32_t widths[3]={16u,4u,0u}; /* fixed ACV has width zero */
- const uint32_t units[3]={1000000u,1000000u,1u};
+ fp6_cmd_db[2]=(400u<<16)|3u; /* unrelated ARC entry precedes BCM */
+ fp6_cmd_db[3]=(3u<<16)|960u;
+ fp6_cmd_db[6]=(136u<<16)|5u; /* SH0/MC0/ACV/CN0 in BCM slave header */
+ fp6_cmd_db[7]=(4u<<16)|880u;
+ const uint32_t arc_names[3][2]={{0x2e786667u,0x006c766cu},{0x6c2e7863u,0x00006c76u},{0x6c2e786du,0x00006c76u}};
+ const uint16_t arc_values[4]={0,0x40,0x80,0x100};
  for(unsigned i=0;i<3;i++) {
+  unsigned e=(544u+24u*i)/4u;
+  fp6_cmd_db[e]=arc_names[i][0];fp6_cmd_db[e+1]=arc_names[i][1];
+  fp6_cmd_db[e+5]=(8u*i<<16)|8u;
+  unsigned aux=(144u+960u+8u*i)/4u;
+  fp6_cmd_db[aux]=arc_values[0]|((uint32_t)arc_values[1]<<16);
+  fp6_cmd_db[aux+1]=arc_values[2]|((uint32_t)arc_values[3]<<16);
+ }
+ const uint32_t names[4]={0x00304853u,0x0030434du,0x00564341u,0x304e43u};
+ const uint32_t addrs[4]={0x50020u,0x50030u,0x50068u,0x50078u};
+ const uint32_t widths[4]={16u,4u,0u,4u}; /* fixed ACV has width zero */
+ const uint32_t units[4]={1000000u,1000000u,1u,1000000u};
+ const uint32_t vcds[4]={0u,0u,1u,2u};
+ for(unsigned i=0;i<4;i++) {
   unsigned e=(280u+24u*i)/4u;
-  fp6_cmd_db[e]=names[i];fp6_cmd_db[e+4]=addrs[i];
+  fp6_cmd_db[e]=names[i];fp6_cmd_db[e+1]=0;fp6_cmd_db[e+4]=addrs[i];
   fp6_cmd_db[e+5]=(8u*i<<16)|8u;
   unsigned aux=(144u+880u+8u*i)/4u;
-  fp6_cmd_db[aux]=units[i];fp6_cmd_db[aux+1]=widths[i];
+  fp6_cmd_db[aux]=units[i];fp6_cmd_db[aux+1]=widths[i]|(vcds[i]<<16);
  }
  fp6_rsc[0]=3u<<16;
  fp6_rsc[3]=(3u<<12)|(4u<<27); /* three ACTIVE TCSes, four commands per TCS */
@@ -181,8 +218,8 @@ static void run_probe(uint32_t fw, uint32_t hfi, int fail_reset) {
  /* Even an unverified reset must never unroute or disable the DMA context. */
  assert(route_writes==1 && smr==0x80000005u);
  assert(hfi_starts==((fw==0x100)?1u:0u));
- assert(fp6_hfi_doorbells==((fw==0x100 && hfi==1)?1u:0u));
- assert(fp6_hfi_cache_flushes==((fw==0x100 && hfi==1)?2u:0u));
+ assert(fp6_hfi_doorbells==((fw==0x100 && hfi==1)?(fake_bad_hfi_ack?1u:5u):0u));
+ assert(fp6_hfi_cache_flushes==((fw==0x100 && hfi==1)?(fake_bad_hfi_ack?2u:10u):0u));
 }
 int main(void) {
  make_cmd_db();
@@ -231,13 +268,16 @@ int main(void) {
  assert(fp6_rsc[(0xd00u+0x38u)/4]==0x50020u);
  assert(fp6_rsc[(0xd00u+0x3cu)/4]==0x20000858u); /* 2,136,718 kB/s -> 2,136 votes */
  assert(fp6_rsc[(0xd00u+0x38u+24u)/4]==0x50030u);
- assert(fp6_rsc[(0xd00u+0x3cu+24u)/4]==0x20000858u);
+ assert(fp6_rsc[(0xd00u+0x3cu+24u)/4]==0x60000858u);
  assert(fp6_rsc[(0xd00u+0x38u+48u)/4]==0x50068u);
  assert(fp6_rsc[(0xd00u+0x3cu+48u)/4]==0x60000000u);
  unsigned published_before=publish_count;
  assert(!fp6_gmu_domain_publish(&fp6_gmu_domain));
  assert(publish_count>published_before); /* CPU-initialized HFI buffers are cleaned before GMU access */
  run_probe(0x100,1,0); /* successful HFI still stops */
+ fake_bad_hfi_ack=1;
+ run_probe(0x100,1,0); /* mismatched HFI ACK sequence fails closed */
+ fake_bad_hfi_ack=0;
  run_probe(0x100,1,1); /* reset write rejected */
  run_probe(0x300,1,0); /* success bits plus firmware assert must fail */
  run_probe(0x100,0,0); /* HFI timeout */

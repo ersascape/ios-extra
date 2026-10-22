@@ -1,5 +1,20 @@
 # GPU bring-up log (chronological, newest first)
 
+## FP6 patch 0160 source/host review (2026-10-22)
+
+- Candidate patch 0160 adds the Linux Gen8 HFI performance and bandwidth tables,
+  HWSCHED/KPROF controls, and `CORE_FW_START` request path after 0159's
+  firmware assertion. Review against Fairphone KGSL and stock FP6 DTS corrected
+  the GPU point to 362 MHz, added both average/X and peak/Y BCM vote fields,
+  disabled ACV perfmode for a shortened DDR table, and validates zero ARC rows.
+- Host HFI model checks the five-request ordering, table values, sequence/ACK
+  matching, mismatched ACK rejection and reset/fault cases. `test_fp6_gmu_boot.py` and its ASan/UBSan run
+  pass; `test_gpu_probe.py` passes. Local XNU compile against CI buildtree
+  `39766804611` reports `0 of 1 files failed`.
+- Source inspection only: no 0160 CI run, package or phone result. Optional
+  ACD/BCL/CLX/IFPC startup inputs and F2H MEM_ALLOC servicing remain absent.
+  Phone testing is deferred while the user tests Android.
+
 ## FP6 patch 0159 CORE_FW_START firmware fault (2026-10-22)
 
 - Patch 0159 mirrors Linux Gen8 queue 0 submission: `H2F_MSG_CORE_FW_START`,

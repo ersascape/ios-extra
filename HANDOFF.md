@@ -36,16 +36,24 @@ then the next question.** The user prefers slow and careful over fast and clever
 
 ## Active FP6 GPU state (2026-10-22)
 
-The active state has advanced through patch 0159. CI `39766804611` passed and
-its packaged image booted once. The phone reported
+Patch 0159 remains the latest built and phone-tested source: CI `39766804611`
+passed and its packaged image booted once. The phone reported
 `HFI CORE_FW_START timeout/fault irq=0x4 fw=0x900`; Linux identifies bit 2 as
 DBGQ and FW_INIT_RESULT mask `0xe00` as a firmware assertion. The bounded probe
 verified CM3 reset. The debug queue payload was not captured. Source inspection
 found Linux sends scratch, perf/BW tables and optional feature/log controls
 before CORE_FW_START, while patch 0159 sent that command immediately after HFI
-controller initialization. Review actual FP6 Linux inputs and the debug/fault
-snapshot path before another build. No GPU execution has been demonstrated.
-Latest package and log hashes are in `NOTES.md` and `docs/GPU_LOG.md`.
+controller initialization.
+
+An unbuilt 0160 candidate now adds the stock 362 MHz GPU row, GMU 350/650 MHz
+rows, a bounded three-level DDR/two-level CNOC table with full AB/IB encoding,
+HWSCHED/KPROF controls, generic HFI ACK handling and debug-queue capture. Host
+protocol/table/reset checks and ASan/UBSan pass; the broad GPU MMIO harness and
+single-file XNU compile pass. No CI build, package or phone observation exists
+for 0160. Optional ACD/BCL/CLX/IFPC settings are not reproduced yet; F2H
+MEM_ALLOC is not handled. The user is testing Android, so defer device commands.
+No GPU execution has been demonstrated. Latest package and log hashes are in
+`NOTES.md` and `docs/GPU_LOG.md`.
 
 - Work in this checkout on `main`; remote is `ersascape/ios-extra`. The goal is
   FP6 Adreno 810 GMU firmware/HFI, then bounded GPU execution and an A810 Metal

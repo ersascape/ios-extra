@@ -1,0 +1,341 @@
+# FP6 populate Gen8 HFI tables before CORE_FW_START (0160)
+diff --git a/bsd/dev/sweet_gpu.c b/bsd/dev/sweet_gpu.c
+--- a/bsd/dev/sweet_gpu.c
++++ b/bsd/dev/sweet_gpu.c
+@@ -3126,23 +3126,48 @@
+  * invalidate again after the GMU-to-host interrupt before reading its reply.
+  */
+ static int
+-fp6_gmu_hfi_core_fw_start(vm_offset_t g)
+-{
+-	uint8_t *mem = fp6_gmu_range_va(fp6_gmu_hfi_va);
+-	if (!mem) return 0;
++fp6_gmu_hfi_debug_dump(uint8_t *mem)
++{
+ 	volatile uint32_t *t = (volatile uint32_t *)(void *)mem;
+-	volatile uint32_t *cmd_hdr = t + 6;       /* queue 0 header */
+-	volatile uint32_t *msg_hdr = t + 18;      /* queue 1 header */
+-	uint32_t sent = 0x0010020eu;     /* seq=1, 2 dwords, CMD, CORE_FW_START */
++	volatile uint32_t *dbg_hdr = t + 30;       /* queue 2 header */
++	volatile uint32_t *dbgq = (volatile uint32_t *)(void *)(mem + FP6_GMU_HFI_QUEUE0 + 0x2000u);
++	if (dbg_hdr[3] != 1024 || dbg_hdr[10] >= 1024 || dbg_hdr[11] >= 1024) {
++		printf("QCOM GMU: HFI DBGQ corrupt status=%u size=%u ri=%u wi=%u\n",
++		    dbg_hdr[0], dbg_hdr[3], dbg_hdr[10], dbg_hdr[11]);
++		return 0;
++	}
++	printf("QCOM GMU: HFI DBGQ status=%u ri=%u wi=%u type=0x%08x\n",
++	    dbg_hdr[0], dbg_hdr[10], dbg_hdr[11], dbg_hdr[2]);
++	unsigned i = dbg_hdr[10], end = dbg_hdr[11], n = 0;
++	while (i != end && n < 32) {
++		printf("QCOM GMU: HFI DBGQ[%u]=0x%08x\n", n, dbgq[i]);
++		i = (i + 1u) % 1024u;
++		n++;
++	}
++	return 1;
++}
++
++static int
++fp6_gmu_hfi_send_req(vm_offset_t g, uint8_t *mem, uint32_t *msg, unsigned dwords,
++	    unsigned *sequence)
++{
++	volatile uint32_t *t = (volatile uint32_t *)(void *)mem;
++	volatile uint32_t *cmd_hdr = t + 6;
++	volatile uint32_t *msg_hdr = t + 18;
+ 	volatile uint32_t *cmdq, *msgq;
+-	uint32_t irq = 0;
++	uint32_t irq = 0, sent;
++	unsigned id = msg[0] & 0xffu;
++	unsigned seq = ++*sequence;
++	unsigned rounded = (dwords + 3u) & ~3u;
++	if (dwords < 2 || dwords > 240 || rounded >= 1024u) return 0;
+ 	if (cmd_hdr[0] != 1 || msg_hdr[0] != 1 || cmd_hdr[3] != 1024 ||
+ 	    msg_hdr[3] != 1024 || cmd_hdr[10] >= 1024 || cmd_hdr[11] >= 1024 ||
+ 	    msg_hdr[10] >= 1024 || msg_hdr[11] >= 1024 ||
+ 	    cmd_hdr[1] != fp6_gmu_hfi_va + FP6_GMU_HFI_QUEUE0 ||
+ 	    msg_hdr[1] != fp6_gmu_hfi_va + FP6_GMU_HFI_QUEUE0 + 0x1000u ||
+ 	    cmd_hdr[10] != cmd_hdr[11] || msg_hdr[10] != msg_hdr[11]) {
+-		printf("QCOM GMU: HFI core start refused queue table q0=%u/%u/%u/%u/%u q1=%u/%u/%u/%u/%u addr=0x%x/0x%x expected=0x%x/0x%x\n",
++		printf("QCOM GMU: HFI request id=%u refused queue table q0=%u/%u/%u/%u/%u q1=%u/%u/%u/%u/%u addr=0x%x/0x%x expected=0x%x/0x%x\n",
++		    id,
+ 		    cmd_hdr[0], cmd_hdr[3], cmd_hdr[10], cmd_hdr[11], cmd_hdr[10] == cmd_hdr[11],
+ 		    msg_hdr[0], msg_hdr[3], msg_hdr[10], msg_hdr[11], msg_hdr[10] == msg_hdr[11],
+ 		    cmd_hdr[1], msg_hdr[1], fp6_gmu_hfi_va + FP6_GMU_HFI_QUEUE0,
+@@ -3151,12 +3176,13 @@
+ 	}
+ 	cmdq = (volatile uint32_t *)(void *)(mem + FP6_GMU_HFI_QUEUE0);
+ 	msgq = (volatile uint32_t *)(void *)(mem + FP6_GMU_HFI_QUEUE0 + 0x1000u);
++	if (cmd_hdr[10] != cmd_hdr[11]) return 0;
+ 	uint32_t wi = cmd_hdr[11];
+-	cmdq[wi] = sent;
+-	cmdq[(wi + 1u) % 1024u] = 0;     /* handle = 0, Linux core-fw-start */
+-	cmdq[(wi + 2u) % 1024u] = 0xfafafafau;
+-	cmdq[(wi + 3u) % 1024u] = 0xfafafafau;
+-	cmd_hdr[11] = (wi + 4u) % 1024u;
++	msg[0] = (msg[0] & 0xff0fffffu) | (seq << 20) | (dwords << 8);
++	sent = msg[0];
++	for (unsigned j = 0; j < dwords; j++) cmdq[(wi + j) % 1024u] = msg[j];
++	for (unsigned j = dwords; j < rounded; j++) cmdq[(wi + j) % 1024u] = 0xfafafafau;
++	cmd_hdr[11] = (wi + rounded) % 1024u;
+ 	flush_dcache64((addr64_t)(uintptr_t)mem, FP6_GMU_HFI_SIZE, FALSE);
+ 	__asm__ volatile("dsb sy" ::: "memory");
+ 	fp6_smmu_write32(g, 0x47650u, 1u); /* HOST2GMU_INTR_SET: MSGQ */
+@@ -3164,12 +3190,25 @@
+ 		irq = fp6_smmu_read32(g, 0x47648u); /* GMU2HOST_INTR_INFO */
+ 		if (irq & 1u) break;
+ 		uint32_t fw = fp6_smmu_read32(g, 0x47070u);
+-		if (fw & 0xe00u) break;
++		if ((irq & 0x0eu) || (fw & 0xe00u)) {
++			flush_dcache64((addr64_t)(uintptr_t)mem, FP6_GMU_HFI_SIZE, FALSE);
++			__asm__ volatile("dsb sy" ::: "memory");
++			printf("QCOM GMU: HFI request id=%u assert queue2 status=%u ri=%u wi=%u\n",
++			    id, t[30], t[40], t[41]);
++			(void)fp6_gmu_hfi_debug_dump(mem);
++			break;
++		}
+ 		delay(100);
+ 	}
+-	if (!(irq & 1u)) {
+-		printf("QCOM GMU: HFI CORE_FW_START timeout/fault irq=0x%08x fw=0x%08x\n",
+-		    irq, fp6_smmu_read32(g, 0x47070u));
++	uint32_t fw = fp6_smmu_read32(g, 0x47070u);
++	if (!(irq & 1u) || (irq & 0x0eu) || (fw & 0xe00u)) {
++		printf("QCOM GMU: HFI request id=%u timeout/fault irq=0x%08x fw=0x%08x\n",
++		    id, irq, fw);
++		if ((irq & 4u) || (fw & 0xe00u)) {
++			flush_dcache64((addr64_t)(uintptr_t)mem, FP6_GMU_HFI_SIZE, FALSE);
++			__asm__ volatile("dsb sy" ::: "memory");
++			(void)fp6_gmu_hfi_debug_dump(mem);
++		}
+ 		return 0;
+ 	}
+ 	fp6_smmu_write32(g, 0x47644u, 1u); /* GMU2HOST_INTR_CLR: MSGQ */
+@@ -3179,25 +3218,26 @@
+ 	if (ri >= 1024 || end >= 1024 || ri == end ||
+ 	    msg_hdr[1] < fp6_gmu_hfi_va ||
+ 	    msg_hdr[1] - fp6_gmu_hfi_va != FP6_GMU_HFI_QUEUE0 + 0x1000u) {
+-		printf("QCOM GMU: HFI CORE_FW_START empty/corrupt reply ri=%u wi=%u\n", ri, end);
++		printf("QCOM GMU: HFI request id=%u empty/corrupt reply ri=%u wi=%u\n", id, ri, end);
+ 		return 0;
+ 	}
+ 	uint32_t ack[4] = {0};
+ 	ack[0] = msgq[ri];
+ 	unsigned size = (ack[0] >> 8) & 0xffu;
+ 	if (size < 3u || size > 4u) {
+-		printf("QCOM GMU: HFI CORE_FW_START malformed ACK size=%u\n", size);
++		printf("QCOM GMU: HFI request id=%u malformed ACK size=%u\n", id, size);
+ 		return 0;
+ 	}
+ 	for (unsigned i = 1; i < size; i++) ack[i] = msgq[(ri + i) % 1024u];
+ 	msg_hdr[10] = (ri + ((size + 3u) & ~3u)) % 1024u;
+ 	if (((ack[0] >> 16) & 0xfu) != 1u || (ack[0] & 0xffu) != 126u ||
+-	    ack[1] != sent || ack[2] != 0u) {
+-		printf("QCOM GMU: HFI CORE_FW_START bad ACK hdr=0x%08x req=0x%08x status=0x%08x size=%u\n",
+-		    ack[0], ack[1], ack[2], size);
++	    ((ack[0] >> 20) & 0xffu) != seq || ack[1] != sent ||
++	    ack[2] != 0u || (size >= 4u && ack[3] != 0u)) {
++		printf("QCOM GMU: HFI request id=%u bad ACK hdr=0x%08x req=0x%08x status=0x%08x size=%u\n",
++		    id, ack[0], ack[1], ack[2], size);
+ 		return 0;
+ 	}
+-	printf("QCOM GMU: HFI CORE_FW_START ACK seq=1 status=0x%08x size=%u\n", ack[2], size);
++	printf("QCOM GMU: HFI request id=%u ACK seq=%u status=0x%08x size=%u\n", id, seq, ack[2], size);
+ 	return 1;
+ }
+ 
+@@ -3281,6 +3321,183 @@
+ 		}
+ 	}
+ 	return 0;
++}
++
++static uint16_t
++fp6_cmd_db_u16(vm_offset_t db, unsigned off)
++{
++	uint32_t word = fp6_smmu_read32(db, off & ~3u);
++	return (uint16_t)(word >> ((off & 2u) * 8u));
++}
++
++/* cmd_db_read_aux_data() returns a little-endian u16 array for ARC resources. */
++static int
++fp6_cmd_db_arc(vm_offset_t db, uint32_t name0, uint32_t name1,
++	    uint16_t *values, unsigned *count)
++{
++	if (fp6_smmu_read32(db, 4) != 0x0c0330dbu) return 0;
++	for (unsigned h = 8; h < 136; h += 16) {
++		uint32_t a = fp6_smmu_read32(db, h);
++		unsigned slave_id = a & 0xffffu;
++		if (!slave_id) break;
++		if (slave_id != 3u) continue;
++		uint32_t b = fp6_smmu_read32(db, h + 4);
++		unsigned entries = 144u + (a >> 16);
++		unsigned aux = 144u + (b & 0xffffu);
++		unsigned nentries = b >> 16;
++		if (entries > 0x20000u || nentries > (0x20000u - entries) / 24u || aux > 0x20000u)
++			return 0;
++		for (unsigned n = 0; n < nentries; n++) {
++			unsigned e = entries + n * 24u;
++			if (fp6_smmu_read32(db, e) != name0 || fp6_smmu_read32(db, e + 4) != name1)
++				continue;
++			uint32_t tail = fp6_smmu_read32(db, e + 20);
++			unsigned len = tail & 0xffffu;
++			unsigned off = aux + (tail >> 16);
++			if (len < 2 || (len & 1u) || off > 0x20000u || len > 0x20000u - off)
++				return 0;
++			unsigned max = len / 2u;
++			if (max > 16u) return 0;
++			for (unsigned i = 0; i < max; i++) values[i] = fp6_cmd_db_u16(db, off + 2u * i);
++			unsigned used = 1;
++			for (; used < max; used++)
++				if (values[used - 1] != 0 && values[used] == 0) break;
++			*count = used;
++			return 1;
++		}
++	}
++	return 0;
++}
++
++static int
++fp6_arc_vote(const uint16_t *primary, unsigned nprimary,
++	    const uint16_t *secondary, unsigned nsecondary, uint16_t level, uint32_t *vote)
++{
++	unsigned p, s;
++	uint16_t selected;
++	if (!nprimary || !nsecondary) return 0;
++	for (p = 0; p < nprimary; p++) if (primary[p] >= level) break;
++	if (p == nprimary) return 0;
++	selected = primary[p];
++	for (s = 0; s < nsecondary; s++)
++		if (secondary[s] >= selected || s + 1u == nsecondary) break;
++	if (s == nsecondary) s = 0;
++	*vote = ((uint32_t)selected << 16) | (s << 8) | p;
++	return 1;
++}
++
++static uint32_t
++fp6_hfi_hdr(unsigned id, unsigned dwords)
++{
++	return (id & 0xffu) | ((dwords & 0xffu) << 8);
++}
++
++static uint32_t
++fp6_hfi_bw_word(uint32_t level_kbps, unsigned bcm_width, unsigned buswidth,
++	    uint32_t unit, int commit)
++{
++	uint64_t vote;
++	if (!level_kbps) return commit ? 0x40000000u : 0u;
++	if (!buswidth || !unit) return 0xffffffffu;
++	vote = (uint64_t)level_kbps * bcm_width / buswidth;
++	vote = vote * 1000u / unit;
++	if (!vote) vote = 1;
++	if (vote > 0x3fffu) vote = 0x3fffu;
++	/* BCM_TCS_CMD(commit, valid, average-X, peak-Y), with AB=IB. */
++	return (commit ? 0x40000000u : 0u) | 0x20000000u |
++	    ((uint32_t)vote << 14) | (uint32_t)vote;
++}
++
++static int
++fp6_gmu_hfi_start_sequence(vm_offset_t g, uint8_t *mem)
++{
++	static const uint32_t ddr_levels[] = { 0, 0x000bebc2u, 0x00209a8eu };
++	static const uint32_t cnoc_levels[] = { 0, 0x64u };
++	static const uint32_t gpu_freq_khz = 362000u; /* stock FP6 selected pwrlevel */
++	static const uint32_t gmu_freq_khz[] = { 0, 350000u, 650000u };
++	static const uint16_t gpu_vlvl = 0x40u;
++	static const uint16_t gmu_vlvl[] = { 0, 0x40u, 0x80u };
++	uint16_t gfx[16] = {0}, cx[16] = {0}, mx[16] = {0};
++	unsigned ngfx = 0, ncx = 0, nmx = 0, seq = 0;
++	struct fp6_bcm_meta bcm[4];
++	vm_offset_t db = ml_io_map(0x81c60000u, 0x20000u);
++	uint32_t gx_vote, cx_vote[3];
++	uint32_t perf[20] = {0};
++	uint32_t bw[160] = {0};
++	unsigned perf_dw = 19;
++	if (!db || !fp6_cmd_db_arc(db, 0x2e786667u, 0x006c766cu, gfx, &ngfx) ||
++	    !fp6_cmd_db_arc(db, 0x6c2e7863u, 0x00006c76u, cx, &ncx) ||
++	    !fp6_cmd_db_arc(db, 0x6c2e786du, 0x00006c76u, mx, &nmx) ||
++	    gfx[0] != 0 || cx[0] != 0 || mx[0] != 0 ||
++	    !fp6_arc_vote(gfx, ngfx, mx, nmx, gpu_vlvl, &gx_vote) ||
++	    !fp6_arc_vote(cx, ncx, mx, nmx, gmu_vlvl[0], &cx_vote[0]) ||
++	    !fp6_arc_vote(cx, ncx, mx, nmx, gmu_vlvl[1], &cx_vote[1]) ||
++	    !fp6_arc_vote(cx, ncx, mx, nmx, gmu_vlvl[2], &cx_vote[2])) {
++		printf("QCOM GMU: HFI pre-start refused ARC data gfx/cx/mx=%u/%u/%u\n", ngfx, ncx, nmx);
++		return 0;
++	}
++	static const uint32_t names[4] = {
++		0x00304853u, 0x0030434du, 0x00564341u, 0x304e43u
++	};
++	for (unsigned i = 0; i < 4; i++) {
++		if (!fp6_cmd_db_bcm(db, names[i], &bcm[i]) || !bcm[i].addr ||
++		    bcm[i].addr == 0xffffffffu) {
++			printf("QCOM GMU: HFI pre-start refused BCM metadata index=%u\n", i);
++			return 0;
++		}
++	}
++	/* H2F_MSG_TABLE / HFI_TABLE_GPU_PERF: selected 362 MHz GPU row plus GMU 350/650 MHz. */
++	perf[0] = fp6_hfi_hdr(15u, perf_dw);
++	perf[1] = 0;
++	perf[2] = 1;
++	perf[3] = 2; perf[4] = 3;
++	perf[5] = 0; perf[6] = 0xffffffffu; perf[7] = 0;
++	perf[8] = gx_vote; perf[9] = 0xffffffffu; perf[10] = gpu_freq_khz;
++	perf[11] = 3; perf[12] = 2;
++	perf[13] = 0; perf[14] = 0;
++	perf[15] = cx_vote[1]; perf[16] = gmu_freq_khz[1];
++	perf[17] = cx_vote[2]; perf[18] = gmu_freq_khz[2];
++	if (!fp6_gmu_hfi_send_req(g, mem, perf, perf_dw, &seq)) return 0;
++	printf("QCOM GMU: HFI GPU perf table ACK gfx=%uMHz ARC=0x%08x GMU=%u/%uMHz\n",
++	    gpu_freq_khz / 1000u, gx_vote, gmu_freq_khz[1] / 1000u, gmu_freq_khz[2] / 1000u);
++	/* H2F_MSG_BW_VOTE_TBL. First three DDR levels are identical for DDR7/DDR8. */
++	bw[0] = fp6_hfi_hdr(3u, 160u);
++	bw[1] = 3; bw[2] = 1; bw[3] = 3;
++	bw[4] = 1;
++	for (unsigned j = 0; j < 3; j++)
++		if (j == 2 || bcm[j].vcd != bcm[j + 1].vcd) bw[5] |= 1u << j;
++	bw[6] = bcm[3].addr; /* CN0 command address */
++	bw[12] = bcm[3].addr;
++	for (unsigned i = 0; i < 2; i++) {
++		bw[12u + i * 6u] = fp6_hfi_bw_word(cnoc_levels[i], bcm[3].width, 4u,
++		    bcm[3].unit, 1);
++	}
++	for (unsigned i = 0; i < 3; i++) {
++		for (unsigned j = 0; j < 3; j++) {
++			unsigned idx = 24u + j;
++			bw[idx] = bcm[j].addr;
++			int commit = j == 2 || bcm[j].vcd != bcm[j + 1].vcd;
++			uint32_t data;
++			if (j == 2) {
++				/* ACV perfmode threshold is original DDR index 9, not this subset. */
++				data = i == 0 ? 0x40000000u : 0x60000000u;
++			} else {
++				unsigned buswidth = j == 0 ? 16u : 4u;
++				data = fp6_hfi_bw_word(ddr_levels[i], bcm[j].width, buswidth,
++				    bcm[j].unit, commit);
++			}
++			bw[32u + i * 8u + j] = data;
++		}
++	}
++	if (!fp6_gmu_hfi_send_req(g, mem, bw, 160u, &seq)) return 0;
++	printf("QCOM GMU: HFI DDR/CNOC table ACK levels=%u/%u BCM=%08x/%08x/%08x/%08x\n",
++	    3u, 2u, bcm[0].addr, bcm[1].addr, bcm[2].addr, bcm[3].addr);
++	uint32_t feature[4] = { fp6_hfi_hdr(11u, 4u), 1u, 1u, 0u };
++	if (!fp6_gmu_hfi_send_req(g, mem, feature, 4u, &seq)) return 0;
++	feature[0] = fp6_hfi_hdr(11u, 4u); feature[1] = 16u;
++	if (!fp6_gmu_hfi_send_req(g, mem, feature, 4u, &seq)) return 0;
++	uint32_t start[2] = { fp6_hfi_hdr(14u, 2u), 0u };
++	return fp6_gmu_hfi_send_req(g, mem, start, 2u, &seq);
+ }
+ 
+ /* Linux gen8_gmu_device_start() submits this peak-only vote before CM3 start.
+@@ -3469,7 +3686,11 @@
+ 		int hfi = fp6_gmu_poll(g, 0x47600u, 1u, 1u, &v);
+ 		printf("QCOM GMU: HFI_CTRL_STATUS=0x%08x %s; bounded probe complete\n",
+ 		    v, hfi ? "(HFI initialized)" : "(HFI init timeout)");
+-		if (hfi) (void)fp6_gmu_hfi_core_fw_start(g);
++		if (hfi) {
++			uint8_t *hfi_mem = fp6_gmu_range_va(fp6_gmu_hfi_va);
++			if (!hfi_mem || !fp6_gmu_hfi_start_sequence(g, hfi_mem))
++				printf("QCOM GMU: HFI pre-start sequence stopped; GMU will be reset\n");
++		}
+ 	}
+ 	/* No HFI command service exists yet. Stop on success as well as failure.
+ 	 * Do not remove SID/context/votes: reset readback alone does not prove

@@ -1,5 +1,31 @@
 # ios-extra — current state
 
+## FP6 Gen8 HFI prerequisite draft (0160, 2026-10-22)
+
+- Patch 0160 extends the failed 0159 `CORE_FW_START` probe with the Linux Gen8
+  HFI performance table, BW vote table, HWSCHED/KPROF controls and bounded
+  request/ACK handling. It captures the HFI debug queue on firmware assertion
+  and stops after CORE_FW_START, resetting CM3 as before. It does not service
+  F2H `MEM_ALLOC` or attempt GPU command execution.
+- The table values are checked against the extracted FP6 stock DTS and local
+  Fairphone KGSL source: GPU 362 MHz at rail level `0x40`; GMU 350/650 MHz;
+  zero ARC entries validated; first three DDR bandwidth rows (shared by DDR7
+  and DDR8); and CNOC levels. BCM commands encode both AB/X and IB/Y fields.
+  ACV perfmode remains off because its Linux threshold is original DDR index 9,
+  beyond this bounded three-level subset. Optional ACD/BCL/CLX/IFPC controls are
+  not sent because their runtime enable/data inputs have not been reproduced.
+- Host probe test checks five HFI requests, queue sequencing, table fields,
+  matching and mismatched ACK sequences, and reset containment; ASan/UBSan
+  version passes. `test_gpu_probe.py`
+  passes with a no-op cache-flush stub. Single-file XNU cross-compile against CI
+  buildtree `39766804611` reports `0 of 1 files failed`. This is source and host
+  evidence only: no full CI build, package or phone test has been run for 0160.
+  The simulated ACK is not evidence of GMU acceptance.
+- The original 0159 phone result remains `irq=0x4 fw=0x900`; debug data was not
+  captured. The next phone test should establish whether the corrected
+  pre-start tables clear that assertion. The phone is currently reserved for
+  the user's Android test; do not run a device command during it.
+
 ## FP6 first Gen8 HFI command phone result (2026-10-22)
 
 - Patch 0159 adds the Linux Gen8 HFI `CORE_FW_START` queue request after HFI
