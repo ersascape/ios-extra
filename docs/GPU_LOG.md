@@ -86,6 +86,23 @@
   panic stack was unavailable, so it does not prove the original call site.
   HFI messages, GMU DMA and GPU execution have not been tested.
 
+## FP6 Gen8 minimum DDR vote source trace (2026-10-22)
+
+- Local Fairphone source at kernel commit `9535e0f08` and its checked-out
+  graphics-kernel module show `gen8_gmu_device_start()` calling
+  `icc_set_bw(path, 0, kBps_to_icc(ddr_table[default_pwrlevel.bus_min]))`
+  after firmware/version/config setup and before CM3 start/HFI. The verified
+  FP6 stock DT has initial pwrlevel 8, `bus_min=2`, and DDR table value
+  `0x209a8e` kB/s (about 2.14 GB/s). This is a peak-only bootstrap request.
+- The later Gen8 HFI bandwidth table is constructed for DDR BCMs SH0/MC0/ACV
+  and optional CN0. KGSL uses runtime cmd-db resource addresses and aux fields
+  `unit`, `width`, and `vcd` to scale votes and group commits. The cmd-db is
+  runtime AOP memory at `0x81c60000`; the per-BCM metadata is not in the stock
+  DT or source checkout. A bounded read-only metadata capture is required
+  before implementing direct XNU BCM commands. No vote values should be
+  guessed. The initial vote must precede GMU start; the HFI bandwidth table is
+  delivered later during HFI startup.
+
 This is the full per-step record that used to be `NOTES.md`: exact images, hashes,
 CI runs, phone results and the reasoning at the time. The current state and the next
 action are in [NOTES.md](../NOTES.md) and [HANDOFF.md](../HANDOFF.md). Entries that say
