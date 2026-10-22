@@ -1869,3 +1869,13 @@ No additional phone action was taken during handoff.**
   Source inspection finds no autonomous reset path: `SweetPlatformExpert`
   does not override `haltRestart()`, and generic XNU handling here does not
   request Qualcomm PSCI reset or select a bootloader/fastboot reason.
+# FP6 CB0 transition diagnostics 0169 (2026-10-23)
+
+- Added read-only CB0/SID-group snapshots after CB2-test cleanup, just before
+  CM3 release, and after GMU firmware init. The existing first-GFX_ACC refusal
+  snapshot supplies the HFI endpoint. No CB0 writes or policy changes.
+- `git apply --check` passes against the CI `39831380821` buildtree;
+  `tools/xnu-cc.py` compiles `bsd/dev/sweet_gpu.c` with 0/1 failures. CI and
+  phone evidence are pending. The phone is not in fastboot, so no boot was
+  attempted. Goal is to distinguish CB2 diagnostic, GMU setup, firmware and
+  HFI as the stage associated with the CB0 readback change.

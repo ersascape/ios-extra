@@ -1,5 +1,22 @@
 # ios-extra — current state
 
+## FP6 CB0 transition diagnostics 0169 (2026-10-23)
+
+- Added patch `0169-fp6-smmu-cb0-stage-snapshots.patch`. It only reads CB0 and
+  stream-group state at three checkpoints: after the CB2 test cleanup, just
+  before CM3 release, and after GMU firmware init. The existing refusal log
+  remains the endpoint at the first GPU global allocation. This should show
+  whether the change is associated with the CB2 test, GMU setup, firmware
+  execution, or HFI without writing CB0.
+- The modified `sweet_gpu.c` cross-compiles against CI buildtree `39831380821`
+  (`0 of 1 files failed`). Patch `git apply --check` passed against that
+  buildtree. CI and phone results are pending. The phone is not in fastboot,
+  so no additional boot was attempted. The next test should use one temporary
+  image with `fp6smmu=2 fp6smmupower=1 fp6gmuload=1 fp6gmuboot=1` and USB logs.
+- This diagnostic does not change the GPU driver’s refusal policy and cannot
+  establish SMMU ownership by itself. Do not change CB0 until the checkpoints
+  identify an understood owner/state transition.
+
 ## Powered FP6 SMMU baseline measured (2026-10-23)
 
 - Commit `9eeb38e3657ba8bfd259c240155a97868b4db118` passed CI run

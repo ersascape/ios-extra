@@ -38,9 +38,10 @@ device proof.
   beyond "N more measured steps".
 - Do not write product roadmaps or future-feature lists into NOTES/README.
 
-## Active FP6 GPU state (2026-10-22)
+## Active FP6 GPU state (2026-10-23)
 
-Patch 0167 is the latest built and phone-tested candidate. The 0164 GPU-access path extends through
+Patch 0168 is the latest diagnostic image built and phone-tested; 0167 remains
+the latest GMU/HFI phone test. The 0164 GPU-access path extends through
 post-`CORE_FW_START` HFI startup and accepts both request-ID and generic-ID
 ACKs. Patch 0164 commit
 `cacda42725fd0945a6a8df96bf28e27b8d8a2868` passed CI run `39807392802`. Kernel SHA256
@@ -123,6 +124,12 @@ no Qualcomm PSCI reboot or bootloader-reason path in this port. The current
 fastboot protocol also disappears after the one-shot boot. Do not try a reset
 until a device-specific fastboot-return reason is implemented and independently
 validated.
+
+Patch 0169 adds read-only CB0 snapshots after CB2-test cleanup, before CM3
+release, and after firmware init. Its local CI-buildtree cross-compile passed;
+CI and phone results are pending. The next image should enable
+`fp6smmu=2 fp6smmupower=1 fp6gmuload=1 fp6gmuboot=1` and capture USB logs. It
+has not been booted because the phone is not in fastboot.
 
 Earlier phone evidence remains: patch 0159's CORE_FW_START path asserted with
 `irq=0x4 fw=0x900` and the bounded path verified CM3 reset. The 0165 phone test

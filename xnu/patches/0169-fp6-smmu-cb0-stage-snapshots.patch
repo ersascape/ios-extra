@@ -1,0 +1,70 @@
+# FP6 read-only CB0 stage snapshots around CB2 test and GMU startup.
+diff --git a/bsd/dev/sweet_gpu.c b/bsd/dev/sweet_gpu.c
+index 281a40d..0000000 100644
+--- a/bsd/dev/sweet_gpu.c
++++ b/bsd/dev/sweet_gpu.c
+@@ -2670,6 +2670,40 @@
+ 	}
+ }
+ 
++static void
++fp6_smmu_cb0_snapshot(vm_offset_t smmu, const char *stage)
++{
++	uint32_t id0 = fp6_smmu_read32(smmu, FP6_SMMU_IDR0);
++	uint32_t id1 = fp6_smmu_read32(smmu, FP6_SMMU_IDR1);
++	unsigned groups = id0 & FP6_SMMU_ID0_NUMSMRG;
++	unsigned shift = (id1 & FP6_SMMU_ID1_PAGESIZE) ? 16u : 12u;
++	unsigned pages = 1u << (((id1 >> 28) & 7u) + 1u);
++	uint32_t cb = (uint32_t)((uint64_t)pages << shift);
++	uint32_t gr1 = 1u << shift;
++	if (id0 == 0xffffffffu || id1 == 0xffffffffu || groups > FP6_SMMU_MAX_STREAMS) {
++		printf("QCOM SMMU: CB0 snapshot stage=%s invalid geometry\n", stage);
++		return;
++	}
++	printf("QCOM SMMU: CB0 stage=%s CBAR=0x%08x CBA2R=0x%08x SCTLR=0x%08x TCR=0x%08x TCR2=0x%08x\n",
++	    stage, fp6_smmu_read32(smmu, gr1), fp6_smmu_read32(smmu, gr1 + 0x800u),
++	    fp6_smmu_read32(smmu, cb + FP6_SMMU_CB_SCTLR),
++	    fp6_smmu_read32(smmu, cb + FP6_SMMU_CB_TCR),
++	    fp6_smmu_read32(smmu, cb + FP6_SMMU_CB_TCR2));
++	printf("QCOM SMMU: CB0 stage=%s TTBR0=0x%016llx TTBR1=0x%016llx MAIR0=0x%08x MAIR1=0x%08x FSR=0x%08x\n",
++	    stage, (unsigned long long)fp6_smmu_read64(smmu, cb + FP6_SMMU_CB_TTBR0),
++	    (unsigned long long)fp6_smmu_read64(smmu, cb + FP6_SMMU_CB_TTBR1),
++	    fp6_smmu_read32(smmu, cb + FP6_SMMU_CB_MAIR0),
++	    fp6_smmu_read32(smmu, cb + FP6_SMMU_CB_MAIR1),
++	    fp6_smmu_read32(smmu, cb + FP6_SMMU_CB_FSR));
++	for (unsigned i = 0; i < groups; i++) {
++		uint32_t smr = fp6_smmu_read32(smmu, FP6_SMMU_SMR(i));
++		uint32_t s2cr = fp6_smmu_read32(smmu, FP6_SMMU_S2CR(i));
++		if (smr || s2cr != 0x00020000u)
++			printf("QCOM SMMU: CB0 stage=%s group=%u SMR=0x%08x S2CR=0x%08x\n",
++			    stage, i, smr, s2cr);
++	}
++}
++
+ static int
+ fp6_smmu_clocks_get(struct fp6_smmu_clocks *clocks)
+ {
+@@ -4228,6 +4262,7 @@
+ 		printf("QCOM GMU: first boot stopped before CM3 release; DDR vote unavailable\n");
+ 		return;
+ 	}
++	fp6_smmu_cb0_snapshot(smmu, "pre-cm3-release");
+ 	__asm__ volatile("dsb sy" ::: "memory");
+ 	printf("QCOM GMU: releasing CM3 (first GMU firmware execution)\n");
+ 	fp6_smmu_write32(g, 0x47000u, 0);                       /* CM3_SYSRESET */
+@@ -4235,6 +4270,7 @@
+ 	printf("QCOM GMU: FW_INIT_RESULT=0x%08x %s intr_info=0x%08x ao_status=0x%08x cb_fsr=0x%08x\n",
+ 	    v, alive ? "(running)" : "(not ready or firmware fault)", fp6_smmu_read32(g, 0x47648u),
+ 	    fp6_smmu_read32(g, 0x57c14u), fp6_smmu_read32(smmu, cb_off + FP6_SMMU_CB_FSR));
++	fp6_smmu_cb0_snapshot(smmu, "post-fw-init");
+ 	if (alive) {
+ 		fp6_smmu_write32(g, 0x47618u, 1u);              /* HFI_CTRL_INIT */
+ 		int hfi = fp6_gmu_poll(g, 0x47600u, 1u, 1u, &v);
+@@ -4849,6 +4885,7 @@
+ 	    fp6_smmu_read32(base, smr_off) != old_smr ||
+ 	    fp6_smmu_read32(base, s2cr_off) != old_s2cr) contained = 0;
+ report:
++	fp6_smmu_cb0_snapshot(base, "post-cb2-test");
+ 	/* Complete SMMU writes before withdrawing any clock vote. If containment
+ 	 * failed, retain votes because an enabled context may still need them. */
+ 	(void)fp6_smmu_read32(base, FP6_SMMU_IDR0);
