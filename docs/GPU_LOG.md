@@ -1,5 +1,44 @@
 # GPU bring-up log (chronological, newest first)
 
+## FP6 patch 0159 bounded HFI CORE_FW_START source/model result
+
+- Patch 0159 mirrors Linux Gen8 queue 0 submission: `H2F_MSG_CORE_FW_START`,
+  sequence 1, 2-dword request, 4-dword queue alignment, host-to-GMU message
+  doorbell, and message-queue ACK validation. The HFI buffer transitions through
+  clean/invalidate before GMU ownership and invalidate after its interrupt.
+- The host fault-injection harness verifies packet contents, an ACK with
+  matching request header and zero status, and the reset containment paths.
+  Normal and ASan/UBSan runs pass. This does not simulate actual firmware
+  behavior. CI and device validation are pending.
+- If firmware returns `F2H_MSG_MEM_ALLOC` instead of the expected ACK, the code
+  logs the unexpected message and resets GMU. Linux dynamically allocates/maps
+  those descriptors; the phone response must establish the required allocation
+  kinds, sizes, flags, and GMU addresses before XNU can answer safely.
+
+## FP6 patch 0158 fixed ACV vote and GMU/HFI controller startup (2026-10-22)
+
+- Commit `548673a33b397ef80cdbc701cd503903ab63118a` passed CI
+  `39762347940`. Verified kernel SHA256 before local packaging. Temporary image
+  `/tmp/ios-extra-run-39762347940/package/fp6-gmu-bootstrap-acv-width.img`,
+  SHA256 `0c2e73788e98d3a0bbe768ee54e9f4989e3e88973cb2e82d7438ad76ae3f6c10`.
+- One temporary `fastboot boot` succeeded and captured 92 UDP packets. Decoded
+  log SHA256 `199a1032353ab16000e60d3424fc72edcc8d99e9941872be251fa66e56791526`;
+  pcap SHA256 `50e7f70104ca136dfc74a27e3642c725c7b953cca30328a1dedc9108a42c025a`.
+  Files are under `/tmp/ios-extra-run-39762347940/logs/`.
+- Runtime records: SH0 `addr=0x50004 width=32`, MC0 `addr=0x50000 width=8`,
+  ACV `addr=0x50068 width=0` (fixed), all using requested peak
+  `ib_kbps=2136718`. The TCS reported `DDR BCM vote acknowledged slot=0
+  retained`. CM3 was released; firmware reported `FW_INIT_RESULT=0x100
+  (running)` and `HFI_CTRL_STATUS=1 (HFI initialized)`. The bounded probe then
+  verified CM3 reset and retained persistent context/clock votes.
+- This establishes the fixed-width ACV parsing/vote path, first GMU firmware
+  execution, and HFI controller initialization. It does not establish HFI
+  message exchange, GMU DMA, GPU command execution, render/readback, or Metal.
+  Optional `GPU_INIT_CX_REGS` SCM service remains unavailable and is nonfatal.
+- Next: implement a bounded HFI startup message and pre-mapped MEM_ALLOC path
+  with explicit cache ownership. Keep the first GPU execution step to a bounded
+  memory write/readback.
+
 ## FP6 patch 0157 cmd-db diagnostic phone result
 
 - CI `39760355071` passed; temporary image
@@ -12,7 +51,7 @@
   with valid aux length 8, `unit=1`, `width=0`, `vcd=12`. Parser rejected width 0
   unconditionally. Linux Gen8 marks ACV fixed and doesn't use width. Patch 0158
   permits zero width only for fixed entries; variable SH0/MC0 still require a
-  nonzero width. Host ASan/UBSan passes and CI/phone validation are pending.
+  nonzero width. Patch 0158 passed CI and phone validation, documented above.
 
 ## FP6 patch 0156 Linux cmd-db lookup retest (CI + phone)
 

@@ -1,0 +1,100 @@
+# FP6 send bounded Gen8 HFI core firmware start and parse its ACK (0159)
+diff --git a/bsd/dev/sweet_gpu.c b/bsd/dev/sweet_gpu.c
+--- a/bsd/dev/sweet_gpu.c
++++ b/bsd/dev/sweet_gpu.c
+@@ -3120,6 +3120,87 @@
+ 	return 0;
+ }
+ 
++/* Linux adreno_gen8_hwsched_hfi.c HFI_CMD_ID queue write/inline ACK path.
++ * The HFI buffer is cached in XNU, so transfer ownership explicitly: clean
++ * and invalidate before ringing GMU; do not touch it while firmware runs;
++ * invalidate again after the GMU-to-host interrupt before reading its reply.
++ */
++static int
++fp6_gmu_hfi_core_fw_start(vm_offset_t g)
++{
++	uint8_t *mem = fp6_gmu_range_va(fp6_gmu_hfi_va);
++	if (!mem) return 0;
++	volatile uint32_t *t = (volatile uint32_t *)(void *)mem;
++	volatile uint32_t *cmd_hdr = t + 6;       /* queue 0 header */
++	volatile uint32_t *msg_hdr = t + 18;      /* queue 1 header */
++	uint32_t sent = 0x0010020eu;     /* seq=1, 2 dwords, CMD, CORE_FW_START */
++	volatile uint32_t *cmdq, *msgq;
++	uint32_t irq = 0;
++	if (cmd_hdr[0] != 1 || msg_hdr[0] != 1 || cmd_hdr[3] != 1024 ||
++	    msg_hdr[3] != 1024 || cmd_hdr[10] >= 1024 || cmd_hdr[11] >= 1024 ||
++	    msg_hdr[10] >= 1024 || msg_hdr[11] >= 1024 ||
++	    cmd_hdr[1] != fp6_gmu_hfi_va + FP6_GMU_HFI_QUEUE0 ||
++	    msg_hdr[1] != fp6_gmu_hfi_va + FP6_GMU_HFI_QUEUE0 + 0x1000u ||
++	    cmd_hdr[10] != cmd_hdr[11] || msg_hdr[10] != msg_hdr[11]) {
++		printf("QCOM GMU: HFI core start refused queue table q0=%u/%u/%u/%u/%u q1=%u/%u/%u/%u/%u addr=0x%x/0x%x expected=0x%x/0x%x\n",
++		    cmd_hdr[0], cmd_hdr[3], cmd_hdr[10], cmd_hdr[11], cmd_hdr[10] == cmd_hdr[11],
++		    msg_hdr[0], msg_hdr[3], msg_hdr[10], msg_hdr[11], msg_hdr[10] == msg_hdr[11],
++		    cmd_hdr[1], msg_hdr[1], fp6_gmu_hfi_va + FP6_GMU_HFI_QUEUE0,
++		    fp6_gmu_hfi_va + FP6_GMU_HFI_QUEUE0 + 0x1000u);
++		return 0;
++	}
++	cmdq = (volatile uint32_t *)(void *)(mem + FP6_GMU_HFI_QUEUE0);
++	msgq = (volatile uint32_t *)(void *)(mem + FP6_GMU_HFI_QUEUE0 + 0x1000u);
++	uint32_t wi = cmd_hdr[11];
++	cmdq[wi] = sent;
++	cmdq[(wi + 1u) % 1024u] = 0;     /* handle = 0, Linux core-fw-start */
++	cmdq[(wi + 2u) % 1024u] = 0xfafafafau;
++	cmdq[(wi + 3u) % 1024u] = 0xfafafafau;
++	cmd_hdr[11] = (wi + 4u) % 1024u;
++	flush_dcache64((addr64_t)(uintptr_t)mem, FP6_GMU_HFI_SIZE, FALSE);
++	__asm__ volatile("dsb sy" ::: "memory");
++	fp6_smmu_write32(g, 0x47650u, 1u); /* HOST2GMU_INTR_SET: MSGQ */
++	for (unsigned i = 0; i < 10000; i++) { /* 1 s bound, 100 us interval */
++		irq = fp6_smmu_read32(g, 0x47648u); /* GMU2HOST_INTR_INFO */
++		if (irq & 1u) break;
++		uint32_t fw = fp6_smmu_read32(g, 0x47070u);
++		if (fw & 0xe00u) break;
++		delay(100);
++	}
++	if (!(irq & 1u)) {
++		printf("QCOM GMU: HFI CORE_FW_START timeout/fault irq=0x%08x fw=0x%08x\n",
++		    irq, fp6_smmu_read32(g, 0x47070u));
++		return 0;
++	}
++	fp6_smmu_write32(g, 0x47644u, 1u); /* GMU2HOST_INTR_CLR: MSGQ */
++	flush_dcache64((addr64_t)(uintptr_t)mem, FP6_GMU_HFI_SIZE, FALSE);
++	__asm__ volatile("dsb sy" ::: "memory");
++	uint32_t ri = msg_hdr[10], end = msg_hdr[11];
++	if (ri >= 1024 || end >= 1024 || ri == end ||
++	    msg_hdr[1] < fp6_gmu_hfi_va ||
++	    msg_hdr[1] - fp6_gmu_hfi_va != FP6_GMU_HFI_QUEUE0 + 0x1000u) {
++		printf("QCOM GMU: HFI CORE_FW_START empty/corrupt reply ri=%u wi=%u\n", ri, end);
++		return 0;
++	}
++	uint32_t ack[4] = {0};
++	ack[0] = msgq[ri];
++	unsigned size = (ack[0] >> 8) & 0xffu;
++	if (size < 3u || size > 4u) {
++		printf("QCOM GMU: HFI CORE_FW_START malformed ACK size=%u\n", size);
++		return 0;
++	}
++	for (unsigned i = 1; i < size; i++) ack[i] = msgq[(ri + i) % 1024u];
++	msg_hdr[10] = (ri + ((size + 3u) & ~3u)) % 1024u;
++	if (((ack[0] >> 16) & 0xfu) != 1u || (ack[0] & 0xffu) != 126u ||
++	    ack[1] != sent || ack[2] != 0u) {
++		printf("QCOM GMU: HFI CORE_FW_START bad ACK hdr=0x%08x req=0x%08x status=0x%08x size=%u\n",
++		    ack[0], ack[1], ack[2], size);
++		return 0;
++	}
++	printf("QCOM GMU: HFI CORE_FW_START ACK seq=1 status=0x%08x size=%u\n", ack[2], size);
++	return 1;
++}
++
+ struct fp6_bcm_meta {
+ 	uint32_t addr, unit;
+ 	uint16_t width;
+@@ -3388,6 +3469,7 @@
+ 		int hfi = fp6_gmu_poll(g, 0x47600u, 1u, 1u, &v);
+ 		printf("QCOM GMU: HFI_CTRL_STATUS=0x%08x %s; bounded probe complete\n",
+ 		    v, hfi ? "(HFI initialized)" : "(HFI init timeout)");
++		if (hfi) (void)fp6_gmu_hfi_core_fw_start(g);
+ 	}
+ 	/* No HFI command service exists yet. Stop on success as well as failure.
+ 	 * Do not remove SID/context/votes: reset readback alone does not prove

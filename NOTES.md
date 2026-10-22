@@ -1,5 +1,46 @@
 # ios-extra — current state
 
+## FP6 first Gen8 HFI command source milestone (2026-10-22)
+
+- Patch 0159 adds the Linux Gen8 HFI `CORE_FW_START` queue request after HFI
+  controller init. It uses the existing 17-queue hwsched table, writes a
+  2-dword request with sequence 1, rings `HOST2GMU_INTR_SET`, waits up to one
+  second for the message IRQ, invalidates the cached HFI buffer, and validates
+  the returned ACK header, request header, and zero status. Cache ownership is
+  returned to the GMU before the doorbell; the CPU does not touch the buffer
+  while firmware owns it. An unexpected response fails closed and the existing
+  bounded path resets CM3.
+- `python3 tests/test_fp6_gmu_boot.py` and the same harness under
+  `-fsanitize=address,undefined` pass, including a simulated ACK and reset
+  failure handling. These are host-model results only. CI and phone validation
+  for patch 0159 remain pending.
+- Linux `adreno_gen8_hwsched_hfi.c` allocates/maps F2H `MEM_ALLOC` requests
+  dynamically. The next response must first identify any request the GMU makes;
+  XNU must not invent handles or addresses that are absent from the persistent
+  domain/SMMU tables. No HFI message has yet been exchanged on the phone.
+
+## FP6 ACV vote and GMU/HFI phone result (2026-10-22)
+
+- Commit `548673a33b397ef80cdbc701cd503903ab63118a` (patch 0158) passed CI
+  `39762347940`. The CI kernel SHA256 was verified before local packaging. Image
+  `/tmp/ios-extra-run-39762347940/package/fp6-gmu-bootstrap-acv-width.img`,
+  SHA256 `0c2e73788e98d3a0bbe768ee54e9f4989e3e88973cb2e82d7438ad76ae3f6c10`.
+- One `fastboot boot` succeeded; USB capture yielded 92 packets. Decoded log
+  `/tmp/ios-extra-run-39762347940/logs/phone-0158-gmu-bootstrap-acv-width.txt`,
+  SHA256 `199a1032353ab16000e60d3424fc72edcc8d99e9941872be251fa66e56791526`;
+  pcap SHA256 `50e7f70104ca136dfc74a27e3642c725c7b953cca30328a1dedc9108a42c025a`.
+- Hardware accepted the SH0 and MC0 variable votes and fixed ACV vote
+  (`addr=0x50068`, width 0). The bounded TCS acknowledged the DDR vote. CM3 was
+  released; firmware reported `FW_INIT_RESULT=0x100`, then
+  `HFI_CTRL_STATUS=1`. The probe stopped and verified CM3 reset while retaining
+  SMMU/context and clock votes. This confirms GMU firmware startup and HFI
+  controller initialization. It does not demonstrate HFI message exchange,
+  GMU DMA, GPU execution, rendering, or Metal. Optional `GPU_INIT_CX_REGS`
+  remains unavailable but nonfatal in this path.
+- Next measured milestone: bounded HFI startup message and pre-mapped MEM_ALLOC
+  handling with explicit cache ownership, followed by a small GPU memory
+  write/readback before rendering or Metal integration.
+
 ## FP6 cmd-db ACV metadata diagnosis (2026-10-22)
 
 - Patch 0157 commit `32e325fb8197eac394b91eb9e7f6b140d6a6b9fe` passed CI
@@ -13,10 +54,10 @@
 - The dump identifies ACV in BCM slave 5 at address `0x00050068`; aux record is
   valid (`unit=1`, `width=0`, `vcd=12`, length 8). The parser had rejected it
   because it required nonzero width for every BCM. Linux marks ACV `fixed=true`
-  and does not use its width. Candidate patch 0158 permits zero width only for
-  fixed entries, retains the nonzero-width requirement for SH0/MC0, and updates
-  the ASan/UBSan fixture to the observed ACV metadata. It is not built or
-  phone-tested yet.
+  and does not use its width. Patch 0158 permits zero width only for fixed
+  entries, retains the nonzero-width requirement for SH0/MC0, and updates the
+  ASan/UBSan fixture to the observed ACV metadata. CI and phone results are
+  recorded above; all three votes were accepted and HFI initialized.
 
 ## FP6 Linux cmd-db lookup phone retest (2026-10-22)
 

@@ -38,6 +38,13 @@ static int cx_map_fail, irq_enabled=1, scm_available=1, scm_status;
 static uint32_t fp6_cmd_db[0x20000/4], fp6_rsc[0x10000/4];
 static unsigned rsc_command_count;
 static int hide_acv;
+static uint32_t fp6_gmu_hfi_irq;
+static unsigned fp6_hfi_doorbells, fp6_hfi_cache_flushes;
+static uint32_t fp6_gmu_hfi_va;
+static uint8_t *fp6_gmu_range_va(uint32_t);
+static void flush_dcache64(uintptr_t address, unsigned count, int physical) {
+ assert(address && count && !physical); fp6_hfi_cache_flushes++;
+}
 static unsigned cx_rate_num=1, cx_rate_den=1, cx_writes, cx_reads, cx_write_ticks=5;
 static unsigned scm_calls;
 static uint64_t scm_fid[2], scm_arginfo[2], scm_arg0[2];
@@ -76,6 +83,7 @@ static uint32_t fp6_smmu_read32(vm_offset_t b, uint32_t o) {
  if (o==0x47000) return reset_value;
  if (o==0x47070) return fw_result;
  if (o==0x47600) return hfi_result;
+ if (o==0x47648) return fp6_gmu_hfi_irq;
  return 0;
 }
 static void fp6_smmu_write32(vm_offset_t b,uint32_t o,uint32_t v) {
@@ -103,6 +111,26 @@ static void fp6_smmu_write32(vm_offset_t b,uint32_t o,uint32_t v) {
   else {reset_count++;if(!refuse_reset)reset_value=v;}
  }
  if(o==0x47618) hfi_starts++;
+ if(o==0x47644) fp6_gmu_hfi_irq=0;
+ if(o==0x47650 && (v&1u)) {
+  uint8_t *mem=fp6_gmu_range_va(fp6_gmu_hfi_va);
+  assert(mem);
+  uint32_t *table=(uint32_t *)(void *)mem;
+  uint32_t *cmd_hdr=table+6, *msg_hdr=table+18;
+  uint32_t *cmdq=(uint32_t *)(void *)(mem+0x350u);
+  uint32_t *msgq=(uint32_t *)(void *)(mem+0x1350u);
+  uint32_t wi=(cmd_hdr[11]+1024u-4u)%1024u;
+  assert(cmdq[wi]==0x0010020eu && cmdq[(wi+1u)%1024u]==0);
+  assert(cmdq[(wi+2u)%1024u]==0xfafafafau && cmdq[(wi+3u)%1024u]==0xfafafafau);
+  uint32_t ri=msg_hdr[11];
+  msgq[ri]=0x0011047eu; /* ACK, four dwords, sequence one, ACK id 126 */
+  msgq[(ri+1u)%1024u]=cmdq[wi];
+  msgq[(ri+2u)%1024u]=0;
+  msgq[(ri+3u)%1024u]=0;
+  msg_hdr[11]=(ri+4u)%1024u;
+  cmd_hdr[10]=cmd_hdr[11]; /* GMU consumed the host-to-firmware packet */
+  fp6_gmu_hfi_irq=1; fp6_hfi_doorbells++;
+ }
 }
 static int fp6_power_write(vm_offset_t b,uint32_t o,uint32_t v) {
  fp6_smmu_write32(b,o,v);return fp6_smmu_read32(b,o)==v;
@@ -144,6 +172,7 @@ static int publish(void *c,const void *p,uint32_t n) {(void)c;(void)p;(void)n;pu
 MAIN = r'''
 static void run_probe(uint32_t fw, uint32_t hfi, int fail_reset) {
  fw_result=fw;hfi_result=hfi;refuse_reset=fail_reset;reset_value=1;
+ fp6_gmu_hfi_irq=0;fp6_hfi_doorbells=fp6_hfi_cache_flushes=0;
  release_count=reset_count=route_writes=hfi_starts=0;
  scm_calls=0;scm_available=1;scm_status=0;
  fp6_gmu_first_boot(2,0x1000,0x800);
@@ -152,6 +181,8 @@ static void run_probe(uint32_t fw, uint32_t hfi, int fail_reset) {
  /* Even an unverified reset must never unroute or disable the DMA context. */
  assert(route_writes==1 && smr==0x80000005u);
  assert(hfi_starts==((fw==0x100)?1u:0u));
+ assert(fp6_hfi_doorbells==((fw==0x100 && hfi==1)?1u:0u));
+ assert(fp6_hfi_cache_flushes==((fw==0x100 && hfi==1)?2u:0u));
 }
 int main(void) {
  make_cmd_db();
