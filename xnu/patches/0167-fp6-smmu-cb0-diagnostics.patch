@@ -1,0 +1,45 @@
+# FP6 HFI global-map refusal diagnostics. Preserve read-only refusal behavior;
+# capture all CB0 and candidate SID group fields before any context writes.
+diff --git a/bsd/dev/sweet_gpu.c b/bsd/dev/sweet_gpu.c
+index a445648..dbee929 100644
+--- a/bsd/dev/sweet_gpu.c
++++ b/bsd/dev/sweet_gpu.c
+@@ -2885,18 +2885,26 @@ fp6_gpu_global_context_enable(vm_offset_t smmu)
+ 			group = i;
+ 	}
+ 	cb_off = (uint32_t)cb_base; /* CB0: reserved by Linux for GPU global TTBR1. */
+-	if (group == FP6_SMMU_MAX_STREAMS ||
+-	    fp6_smmu_read32(smmu, FP6_SMMU_CBAR(0)) ||
+-	    fp6_smmu_read32(smmu, FP6_SMMU_CBA2R(0)) ||
+-	    fp6_smmu_read32(smmu, cb_off + FP6_SMMU_CB_SCTLR) ||
+-	    fp6_smmu_read32(smmu, cb_off + FP6_SMMU_CB_TCR) ||
+-	    fp6_smmu_read64(smmu, cb_off + FP6_SMMU_CB_TTBR0) ||
+-	    fp6_smmu_read64(smmu, cb_off + FP6_SMMU_CB_TTBR1) ||
+-	    (fp6_smmu_read32(smmu, cb_off + FP6_SMMU_CB_TCR2) & ~0x60u) ||
+-	    fp6_smmu_read32(smmu, cb_off + FP6_SMMU_CB_MAIR0) ||
+-	    fp6_smmu_read32(smmu, cb_off + FP6_SMMU_CB_MAIR1) ||
+-	    fp6_smmu_read32(smmu, cb_off + FP6_SMMU_CB_FSR)) {
+-		printf("QCOM GPU SMMU: CB0 or fault-routed SID0 group is not clean\n");
++	uint32_t cbar0 = fp6_smmu_read32(smmu, FP6_SMMU_CBAR(0));
++	uint32_t cba2r0 = fp6_smmu_read32(smmu, FP6_SMMU_CBA2R(0));
++	uint32_t sctlr0 = fp6_smmu_read32(smmu, cb_off + FP6_SMMU_CB_SCTLR);
++	uint32_t tcr0 = fp6_smmu_read32(smmu, cb_off + FP6_SMMU_CB_TCR);
++	uint64_t ttbr00 = fp6_smmu_read64(smmu, cb_off + FP6_SMMU_CB_TTBR0);
++	uint64_t ttbr10 = fp6_smmu_read64(smmu, cb_off + FP6_SMMU_CB_TTBR1);
++	uint32_t tcr20 = fp6_smmu_read32(smmu, cb_off + FP6_SMMU_CB_TCR2);
++	uint32_t mair00 = fp6_smmu_read32(smmu, cb_off + FP6_SMMU_CB_MAIR0);
++	uint32_t mair10 = fp6_smmu_read32(smmu, cb_off + FP6_SMMU_CB_MAIR1);
++	uint32_t fsr0 = fp6_smmu_read32(smmu, cb_off + FP6_SMMU_CB_FSR);
++	uint32_t group_smr = group < groups ? fp6_smmu_read32(smmu, FP6_SMMU_SMR(group)) : 0xffffffffu;
++	uint32_t group_s2cr = group < groups ? fp6_smmu_read32(smmu, FP6_SMMU_S2CR(group)) : 0xffffffffu;
++	if (group == FP6_SMMU_MAX_STREAMS || cbar0 || cba2r0 || sctlr0 || tcr0 ||
++	    ttbr00 || ttbr10 || (tcr20 & ~0x60u) || mair00 || mair10 || fsr0) {
++		printf("QCOM GPU SMMU: SID0 clean check failed group=%u/%u SMR=0x%08x S2CR=0x%08x\n",
++		    group, groups, group_smr, group_s2cr);
++		printf("QCOM GPU SMMU: CB0 CBAR=0x%08x CBA2R=0x%08x SCTLR=0x%08x TCR=0x%08x TCR2=0x%08x\n",
++		    cbar0, cba2r0, sctlr0, tcr0, tcr20);
++		printf("QCOM GPU SMMU: CB0 TTBR0=0x%016llx TTBR1=0x%016llx MAIR0=0x%08x MAIR1=0x%08x FSR=0x%08x\n",
++		    (unsigned long long)ttbr00, (unsigned long long)ttbr10, mair00, mair10, fsr0);
+ 		return 0;
+ 	}
+ 	/* Linux TTBR1: T1SZ=16, SH1=Outer, TG1=4K, EPD0=1, A1=0. */

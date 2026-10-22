@@ -30,6 +30,17 @@
   then permit clearing only a stale W1C FSR if SCTLR is disabled and all mapping
   controls are zero. Keep refusing any active/unknown translation context.
 
+## FP6 CB0/SID0 refusal diagnostics candidate 0167 (2026-10-22)
+
+- Candidate 0167 logs the selected stream-match group's SMR/S2CR and all CB0
+  fields used by the clean-state gate: CBAR, CBA2R, SCTLR, TCR/TCR2, TTBR0/1,
+  MAIR0/1 and FSR. It preserves the refusal-before-write behavior.
+- The host probe checks that a deliberately dirty CBAR refusal reports group 0,
+  SMR `0`, S2CR `0x20000`, CBAR `1`, and zero MMIO writes.
+  `python3 tests/test_gpu_probe.py` passes. This verifies only the host diagnostic
+  branch; 0167 has no CI build or phone observation. Next: build/package once and
+  use a bounded phone boot to identify the actual dirty CB0/group field.
+
 ## FP6 post-CORE_FW_START HFI candidate 0165 (2026-10-22)
 
 - User-requested rootfs write: verified Tegu sparse image from

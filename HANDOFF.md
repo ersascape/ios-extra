@@ -40,9 +40,10 @@ device proof.
 
 ## Active FP6 GPU state (2026-10-22)
 
-Patch 0166 is the current built candidate; it extends the 0164 GPU-access
-allocation path through post-`CORE_FW_START` HFI startup and accepts both
-request-ID and generic-ID ACKs. Patch 0164 commit
+Patch 0166 is the latest built candidate; 0167 is a diagnostic-only source
+candidate for the CB0/SID0 refusal. The 0164 GPU-access path extends through
+post-`CORE_FW_START` HFI startup and accepts both request-ID and generic-ID
+ACKs. Patch 0164 commit
 `cacda42725fd0945a6a8df96bf28e27b8d8a2868` passed CI run `39807392802`. Kernel SHA256
 `34e4835aa437df8ecd101fe0b98aba7b18e5a80094ab71ad860976dec0cc7539`.
 A local header-v2 image with the workflow RAM-disk init, matching CI ADT and
@@ -85,10 +86,13 @@ It measured successful ACKs for GPU perf TABLE, DDR/CNOC TABLE, configuration,
 and preemption, plus an acknowledged DDR bootstrap vote. FW_INIT_RESULT remained
 `0x100` and HFI_CTRL_STATUS was `1`. The first GPU global allocation request
 arrived, but CB0/fault-routed SID0 cleanliness check refused mapping; firmware
-was reset cleanly. No DMA, GPU command, draw or Metal result. Next: instrument
-the individual CB0 and SID0 fields; if only a stale W1C FSR is set, clear it
-only with SCTLR disabled and all translation controls otherwise clean. Then
-rebuild and repeat one bounded boot. The decoded 0165 log and pcap are under
+was reset cleanly. No DMA, GPU command, draw or Metal result. Candidate 0167
+logs individual CB0 and SID0 fields without changing MMIO state. Its host probe
+checks the diagnostic path and zero writes; it has not yet passed CI or run on
+the phone. Build/package once, then repeat one bounded boot to identify the
+actual dirty field. If a stale W1C FSR is implicated, confirm before the first
+CB0 FSR write and clear it only with SCTLR disabled and all translation controls
+otherwise clean. The decoded 0165 log and pcap are under
 `/tmp/ios-extra-run-39814973566/logs/phone-0165-gmu-hfi-start-resume.*`.
 The user explicitly requested flashing the Tegu rootfs from
 `/home/ersa/Dev/ios-extra/research/fp6-rootfs-tegu-20261021/` to the existing

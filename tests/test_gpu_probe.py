@@ -818,7 +818,10 @@ int main(void)
     for (unsigned i = 0; i < 24; i++) fp6_smmu[(0xc00 + 4*i)/4] = 0x20000u;
     fp6_gpu_global_domain.l0.va = dma_block; fp6_gpu_global_domain.l0.pa = 0x900000000ULL;
     fp6_smmu[0x1000/4] = 1; all_mmio_writes = 0;
+    output[0] = 0;
     assert(!fp6_gpu_global_context_enable((vm_offset_t)fp6_smmu) && all_mmio_writes == 0);
+    assert(strstr(output, "SID0 clean check failed group=0/24 SMR=0x00000000 S2CR=0x00020000"));
+    assert(strstr(output, "CB0 CBAR=0x00000001"));
     fp6_smmu[0x1000/4] = 0; fp6_gpu_smmu_model = 1;
     assert(fp6_gpu_global_context_enable((vm_offset_t)fp6_smmu));
     assert(fp6_smmu[0x20000/4] == 0x167u);

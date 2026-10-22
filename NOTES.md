@@ -65,9 +65,9 @@
   because CB0 or the selected fault-routed SID0 group failed the driver's
   cleanliness check. No GPU memory map, DMA, command execution, draw, or Metal
   was verified. Exact HFI lines and host setup are in `docs/GPU_LOG.md`.
-  The next source step is to log each CB0/group field at that refusal and safely
-  handle a stale W1C FSR only if CB0 is disabled and every translation control
-  is otherwise clean; then rebuild once and repeat the bounded boot.
+  The next source step is diagnostic-only: log the selected CB0/group fields at
+  that refusal while preserving the no-write gate. Candidate 0167 does this and
+  the host MMIO test passes; it is not yet CI-built or phone-tested.
 
 ## GMU cacheability source check (2026-10-22)
 
