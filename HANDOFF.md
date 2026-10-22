@@ -63,14 +63,17 @@ The allocation is secure preemption memory. Fairphone Linux maps it through
 flag. No HFI START ACK, GPU core boot, GPU DMA, command write/readback, draw or
 Metal output has been measured.
 
-Next, finish source review of the Gen8 non-preempting single-ring path and its
-preemption-memory dependencies. A future bounded probe may omit the HFI
-preemption enable only if source review confirms a valid single-ring startup
-and host tests cover the altered sequence. Current phone state is not fastboot;
-never reboot it unannounced. Before any later temporary boot, check
-`fastboot devices` and require exactly one device; helper repeats the check.
-Continue using the ramdisk and `/tmp` logs. No flash, `fastboot getvar`, or EDL
-commands.
+Source review confirms Linux omits the HFI preemption control and skips
+`gen8_preemption_init()` in its one-ring path when preemption is disabled.
+Candidate patch 0171 adds opt-in `fp6gmunopreempt=1`, preserving default A810
+preemption. Host, sanitizer, full-suite and local arm64 compile checks pass; CI
+and phone validation are pending. It changes only the HFI feature request and
+does not start GPU rings. Build/package once, then use the image to measure
+whether GMU still requests secure kind 5 or reaches the HFI START ACK. Current
+phone state is not fastboot; do not reboot it unannounced. Check
+`fastboot devices` before asking the user, and require exactly one device before
+the helper's single temporary boot. Continue using the ramdisk and `/tmp` logs.
+No flash, `fastboot getvar`, or EDL commands.
 
 Historical patch-by-patch evidence and earlier image identities are in
 `NOTES.md` and `docs/GPU_LOG.md`. The Linux bring-up/source audit is in

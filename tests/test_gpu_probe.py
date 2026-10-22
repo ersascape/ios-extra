@@ -141,6 +141,7 @@ class GPUProbeTests(unittest.TestCase):
             self.assertIn('PASS: GPU SID0 TTBR1 setup replaces only stale disabled CB0', result.stdout)
             self.assertIn('PASS: HFI GFX_ACC allocation returns a live GPU TTBR1 mapping', result.stdout)
             self.assertIn('PASS: HFI GET_VALUE and one-dword START share the bounded queue dispatcher', result.stdout)
+            self.assertIn('PASS: opt-in HFI no-preemption omits only the feature command; default A810 request remains intact', result.stdout)
             self.assertIn('PASS: 14 clock/cache cases, 30 ARC cases + 512 mutations, 61 CX experiment cases', result.stdout)
             self.assertIn('PASS: FP6 GPUCC inventory is opt-in, read-only, and bounded', result.stdout)
             self.assertIn('PASS: FP6 Qualcomm SCM PAS query is opt-in and never authenticates firmware', result.stdout)
@@ -183,7 +184,7 @@ static uint32_t hfi_fake_result;
 static int hfi_fake_enabled;
 static int fp6_gmu_clock_model, fp6_root_stuck, fp6_fail_pll_map;
 static int fp6_clock_refuse = -1;
-static int fp6_power_mode;
+static int fp6_power_mode, fp6_gmu_no_preempt_mode;
 static uint32_t fp6_rsc[0x10000 / 4], fp6_cmd_db[0x20000 / 4];
 #define FP6_TEST_CB 2u
 #define FP6_TEST_CB_BASE 0x22000u
@@ -546,6 +547,11 @@ int PE_parse_boot_argn(const char *name, void *value, int length)
 		return fp6_mode != 0;
 	}
 	if (strcmp(name, "fp6gmuload") == 0) { return 0; }
+	if (strcmp(name, "fp6gmunopreempt") == 0) {
+		assert(length == sizeof(fp6_gmu_no_preempt_mode));
+		if (fp6_gmu_no_preempt_mode) memcpy(value, &fp6_gmu_no_preempt_mode, sizeof(fp6_gmu_no_preempt_mode));
+		return fp6_gmu_no_preempt_mode != 0;
+	}
 	if (strcmp(name, "fp6smmupower") == 0) { memcpy(value, &fp6_power_mode, sizeof(fp6_power_mode)); return fp6_power_mode != 0; }
 	if (strcmp(name, "fp6smmu") == 0) {
 		assert(length == sizeof(fp6_smmu_mode));
@@ -785,6 +791,32 @@ int main(void)
     hfi_ack_legacy[2] = 1;
     assert(!fp6_gmu_hfi_ack_status_result(hfi_ack_legacy, 3, &hfi_result));
     assert(!fp6_gmu_hfi_ack_status_result(hfi_ack_legacy, 2, &hfi_result));
+
+    /* The opt-in no-preemption probe sends no feature request; default still sends Linux's A810 level-1 request. */
+    static uint8_t preempt_queue_mem[FP6_GMU_HFI_SIZE];
+    memset(preempt_queue_mem, 0, sizeof(preempt_queue_mem));
+    uint32_t *preempt_table = (uint32_t *)(void *)preempt_queue_mem;
+    uint32_t *preempt_cmd_hdr = preempt_table + 6, *preempt_msg_hdr = preempt_table + 18;
+    preempt_cmd_hdr[0] = preempt_msg_hdr[0] = 1u;
+    preempt_cmd_hdr[1] = fp6_gmu_hfi_va + FP6_GMU_HFI_QUEUE0;
+    preempt_msg_hdr[1] = fp6_gmu_hfi_va + FP6_GMU_HFI_QUEUE0 + 0x1000u;
+    preempt_cmd_hdr[3] = preempt_msg_hdr[3] = 1024u;
+    hfi_fake_mem = preempt_queue_mem; hfi_fake_result = 0; hfi_fake_enabled = 1;
+    unsigned preempt_sequence = 0;
+    fp6_gmu_no_preempt_mode = 1; output[0] = 0;
+    assert(fp6_gmu_hfi_configure_preemption((vm_offset_t)fp6_smmu, 0x20000u,
+        (vm_offset_t)fp6_gmu_regs, preempt_queue_mem, &preempt_sequence));
+    assert(preempt_sequence == 0 && preempt_cmd_hdr[11] == 0);
+    assert(strstr(output, "HFI preemption disabled by fp6gmunopreempt probe"));
+    fp6_gmu_no_preempt_mode = 0; output[0] = 0;
+    assert(fp6_gmu_hfi_configure_preemption((vm_offset_t)fp6_smmu, 0x20000u,
+        (vm_offset_t)fp6_gmu_regs, preempt_queue_mem, &preempt_sequence));
+    assert(preempt_sequence == 1 && preempt_cmd_hdr[11] == 4);
+    uint32_t *preempt_cmdq = preempt_table + FP6_GMU_HFI_QUEUE0 / 4;
+    assert((preempt_cmdq[0] & 0xffu) == 11u && preempt_cmdq[1] == 2u &&
+        preempt_cmdq[2] == 1u && preempt_cmdq[3] == 0xdu);
+    hfi_fake_enabled = 0;
+    puts("PASS: opt-in HFI no-preemption omits only the feature command; default A810 request remains intact");
 
     /* Exercise queue ownership/ACK parsing for GET_VALUE and Gen8's one-dword START. */
     static uint8_t hfi_queue_mem[FP6_GMU_HFI_SIZE];

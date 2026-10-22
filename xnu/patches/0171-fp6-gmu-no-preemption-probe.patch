@@ -1,0 +1,42 @@
+# Opt in to skipping the HFI preemption feature request for bounded bring-up.
+--- a/bsd/dev/sweet_gpu.c
++++ b/bsd/dev/sweet_gpu.c
+@@ -3968,6 +3968,23 @@
+ 	return (id & 0xffu) | ((dwords & 0xffu) << 8);
+ }
+ 
++/* Linux omits this HFI control when preemption is disabled. This opt-in
++ * probe checks whether firmware then skips secure CSW allocation. */
++static int
++fp6_gmu_hfi_configure_preemption(vm_offset_t smmu, uint32_t cb_off, vm_offset_t g,
++		uint8_t *mem, unsigned *sequence)
++{
++	int disable = 0;
++	if (PE_parse_boot_argn("fp6gmunopreempt", &disable, sizeof(disable)) && disable) {
++		printf("QCOM GMU: HFI preemption disabled by fp6gmunopreempt probe\n");
++		return 1;
++	}
++	uint32_t preemption[4] = { fp6_hfi_hdr(11u, 4u), 2u, 1u, 0xdu };
++	if (!fp6_gmu_hfi_send_req(smmu, cb_off, g, mem, preemption, 4u, sequence, NULL)) return 0;
++	printf("QCOM GMU: HFI preemption enabled level=1 data=0x0000000d\n");
++	return 1;
++}
++
+ static uint32_t
+ fp6_hfi_bw_word(uint32_t level_kbps, unsigned bcm_width, unsigned buswidth,
+ 	    uint32_t unit, int commit)
+@@ -4087,11 +4104,9 @@
+ 	} else {
+ 		printf("QCOM GMU: HFI context queues unavailable version=0x%08x\n", hfi_version);
+ 	}
+-	/* A810 supports preemption (level 1, GMEM save/restore and skip-save enabled).
+-	 * Its Linux feature profile has no HW_FENCE, LPAC or AQE, so keep those off. */
+-	uint32_t preemption[4] = { fp6_hfi_hdr(11u, 4u), 2u, 1u, 0xdu };
+-	if (!fp6_gmu_hfi_send_req(smmu, cb_off, g, mem, preemption, 4u, &seq, NULL)) return 0;
+-	printf("QCOM GMU: HFI preemption enabled level=1 data=0x0000000d\n");
++	/* HW_FENCE, LPAC and AQE stay off. Optionally omit the preemption
++	 * feature request to measure whether firmware still asks for secure CSW. */
++	if (!fp6_gmu_hfi_configure_preemption(smmu, cb_off, g, mem, &seq)) return 0;
+ 	uint32_t gpu_start[1] = { fp6_hfi_hdr(10u, 1u) }; /* hfi_start_cmd is one dword */
+ 	if (!fp6_gmu_hfi_send_req(smmu, cb_off, g, mem, gpu_start, 1u, &seq, NULL)) return 0;
+ 	printf("QCOM GMU: HFI START ACK; core firmware initialized\n");

@@ -1,5 +1,23 @@
 # ios-extra — current state
 
+## FP6 HFI no-preemption probe candidate 0171 (2026-10-23)
+
+- Fairphone Gen8 source review confirms `enable_preemption()` returns without
+  sending `HFI_FEATURE_PREEMPTION` when preemption is disabled. In
+  `gen8_ringbuffer_init()`, the matching no-preemption branch sets one ring and
+  returns before `gen8_preemption_init()`, so it avoids allocating secure CSW
+  records. The measured kind-5 `GFX_SECURE` request arrived after XNU enabled
+  HFI preemption. This supports testing omission of that request; it does not
+  prove the GMU will omit kind 5 or that XNU can yet start a ring.
+- Candidate patch `0171-fp6-gmu-no-preemption-probe.patch` adds opt-in boot arg
+  `fp6gmunopreempt=1`. It skips only the HFI preemption enable command; default
+  A810 behavior is unchanged. Host tests assert the opt-in emits no command and
+  the default still sends level-1 preemption data `0xD`. Focused normal and
+  ASan/UBSan tests pass, the full suite passes 13 tests with 5 dependency
+  skips, and local arm64 compilation reports `0 of 1 files failed`. CI and
+  phone validation are pending. The next phone image will still be an HFI probe;
+  GPU ring initialization/execution is a later required implementation step.
+
 ## FP6 CB0 takeover and HFI allocation boundary 0170 (2026-10-23)
 
 - Commit `54a96ca789ef424bfe2f265e480d76c7a4f206a8` passed XNU CI run

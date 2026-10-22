@@ -1869,6 +1869,18 @@ No additional phone action was taken during handoff.**
   Source inspection finds no autonomous reset path: `SweetPlatformExpert`
   does not override `haltRestart()`, and generic XNU handling here does not
   request Qualcomm PSCI reset or select a bootloader/fastboot reason.
+# FP6 no-preemption HFI probe candidate 0171 (2026-10-23)
+
+Fairphone Gen8 source review: `enable_preemption()` sends no HFI feature control
+when preemption is disabled. `gen8_ringbuffer_init()` then configures one ring
+and returns before `gen8_preemption_init()` allocates secure CSW records. The
+phone's secure kind-5 request followed the HFI preemption-enable ACK, so a
+no-preemption probe is a source-backed next experiment. Candidate patch 0171
+adds opt-in `fp6gmunopreempt=1` and skips only that HFI request; the default
+preemption behavior remains unchanged. Focused normal and ASan/UBSan tests,
+full host suite, and local arm64 compile pass. CI/phone results are pending.
+The patch does not yet start a GPU ring or prove execution.
+
 # FP6 guarded CB0 reinitialization and secure HFI allocation boundary 0170 (2026-10-23)
 
 - Commit `54a96ca789ef424bfe2f265e480d76c7a4f206a8` passed CI `39842360411`;

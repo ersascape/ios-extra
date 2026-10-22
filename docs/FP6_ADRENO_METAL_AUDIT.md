@@ -147,11 +147,15 @@ allocation and `hyp_assign_table()` to transfer pages from HLOS to
 `VMID_CP_PIXEL`. XNU currently has no matching protected-page allocator; do not
 map ordinary pages or acknowledge the secure descriptor with a normal PA.
 
-The Gen8 source has a non-preempting path: `gen8_ringbuffer_init()` creates one
-ring when the preemption feature is not set. Before using that as a bounded
-bring-up mode, verify all startup dependencies and confirm firmware omits the
-secure preemption allocation when HFI preemption is disabled. This is a test
-candidate, not a measured GPU execution path.
+The Gen8 source confirms a non-preempting path: `enable_preemption()` returns
+without sending `HFI_FEATURE_PREEMPTION` when the feature is disabled. Then
+`gen8_ringbuffer_init()` creates one ring and returns before
+`gen8_preemption_init()`, which allocates secure CSW records. Patch 0171 adds an
+opt-in `fp6gmunopreempt=1` probe that skips only that HFI command; normal A810
+preemption remains the default. Host normal/ASan tests, the full suite and local
+arm64 compilation pass. CI and phone validation are pending. The probe will
+measure whether GMU firmware still requests secure kind 5; it does not yet
+initialize a GPU ring or prove execution.
 
 ## Gen8.3 HFI-to-GPU boundary (source review, 2026-10-22)
 
