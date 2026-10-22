@@ -81,10 +81,14 @@ class GPUProbeTests(unittest.TestCase):
                                           'boolean_t ml_set_interrupts_enabled(boolean_t);\n',
                 'vm/pmap.h': 'typedef unsigned long long addr64_t;\ntypedef unsigned int ppnum_t;\n'
                              'typedef void *pmap_t;\nextern pmap_t kernel_pmap;\n'
-                             '#define ptoa_64(x) ((unsigned long long)(x) << 14)\n',
+                             '#define ptoa_64(x) ((unsigned long long)(x) << 14)\n'
+                             'extern ppnum_t pmap_find_phys(pmap_t, addr64_t);\n'
+                             'extern unsigned int pmap_cache_attributes(ppnum_t);\n'
+                             'extern void pmap_set_cache_attributes(ppnum_t, unsigned int);\n',
+                'vm/memory_types.h': '#define VM_WIMG_MASK 0xffu\n#define VM_WIMG_DEFAULT 0x2u\n#define VM_WIMG_WCOMB 0x6u\n',
                 'vm/vm_kern.h': 'typedef int kern_return_t;\ntypedef void *vm_map_t;\n'
                                 'extern vm_map_t kernel_map;\n#define KERN_SUCCESS 0\n'
-                                '#define PAGE_MASK 0x3fffUL\n#define KMA_DATA 1\n#define KMA_ZERO 2\n'
+                                '#define PAGE_SIZE 0x4000UL\n#define PAGE_MASK 0x3fffUL\n#define KMA_DATA 1\n#define KMA_ZERO 2\n'
                                 '#define KMA_PERMANENT 4\n#define VM_KERN_MEMORY_IOKIT 0\n'
                                 'kern_return_t kmem_alloc_contig(vm_map_t, vm_offset_t *, vm_size_t, '
                                 'vm_offset_t, unsigned, unsigned, unsigned, int);\n',
@@ -383,6 +387,8 @@ ppnum_t pmap_find_phys(pmap_t p, addr64_t va)
     uint64_t offset = va - (addr64_t)(uintptr_t)dma_block;
     return (ppnum_t)((fake_pa_base + offset + (phys_discontig && offset >= 0x4000 ? 0x4000 : 0)) >> 14);
 }
+unsigned int pmap_cache_attributes(ppnum_t pn) { (void)pn; return VM_WIMG_DEFAULT; }
+void pmap_set_cache_attributes(ppnum_t pn, unsigned int attr) { (void)pn; (void)attr; }
 kern_return_t kmem_alloc_contig(vm_map_t m, vm_offset_t *a, vm_size_t size, vm_offset_t mask,
     unsigned x1, unsigned x2, unsigned flags, int tag)
 {

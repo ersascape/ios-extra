@@ -92,6 +92,10 @@ bounded start and verified reset.
   message, 2 debug, 3..16 dispatch. Each queue 4 KiB (1024 dwords) at
   `0x350 + i*0x1000`; allocation 70,488 bytes noncached, GMU VA first-fit
   from 0x60000000, read/write/priv.
+- The XNU allocator uses 16 KiB CPU pages. The local HFI follow-up will set
+  WCOMB on all five CPU pages covering its 0x12000-byte allocation before the
+  queue headers are initialized. This concerns CPU cache attributes; the GMU
+  page-table granule remains the separately configured 4 KiB.
 - Other GMU buffers: log 64 KiB noncached, VRB 4 KiB (dword0 = 0x400 size,
   dword2 = trace buffer VA), trace 16 KiB; firmware preallocation blocks at
   their fixed VAs.
@@ -150,7 +154,20 @@ Patch 0150 implements the CX timer synchronization
 `cntpct`/write-latency algorithm, seeds the `cx_misc` AO counter, then adds
 readback/rate checks. SCM availability is queried and the port requests
 ALWAYS_EN|TSENSE (`0x9`); BCL and CLX are not requested. These are source and
-host-model results until a CI build and phone observation are recorded.
+host-model results until a CI build and phone observation are recorded. CI
+`39728088129` built 0150, but the phone run refused at the timer sample guard
+(`valid=0/16` at 19.2 MHz), before firmware upload. The follow-up diagnosis
+found that the original guard discarded equal read/write tick costs; 0151
+accepts zero-skew samples and records raw timing ranges. It is host-tested and
+locally cross-compiled, but not yet built by CI or phone-tested. The same local
+follow-up marks the five CPU 16 KiB pages backing the 0x12000-byte shared HFI
+allocation as `VM_WIMG_WCOMB` before queue initialization and domain publish.
+It verifies physical contiguity and only converts default-cached pages (or
+accepts pages already WCOMB), then checks every resulting attribute. This
+matches Linux's write-combined HFI mapping and avoids stale cached CPU lines
+overwriting GMU queue indices. Host tests and a system-Clang AArch64 compile
+against the exact 39728088129 XNU build tree pass; no CI build or phone result
+for this combined update exists yet.
 Minimum DDR bandwidth voting before CM3 release remains unimplemented
 (`gen8_hwsched_gmu_first_boot`). GMU interrupt
 masks do not mask the SMMU global fault interrupt. The read-only GIC inspection

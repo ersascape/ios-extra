@@ -5,6 +5,57 @@ CI runs, phone results and the reasoning at the time. The current state and the 
 action are in [NOTES.md](../NOTES.md) and [HANDOFF.md](../HANDOFF.md). Entries that say
 "not yet built/booted" were true when written; newer entries supersede them.
 
+## FP6 0150 follow-up: zero-skew timer and HFI CPU cache attributes (2026-10-22)
+
+- The latest console photo reproduces the USB log result: timer validation
+  refused `valid=0/16 CNTFRQ=19200000`; later SMMU context test remained
+  contained (`route_live=0`, bank reserved). Firmware upload, SCM CX setup,
+  CM3 release and HFI_CTRL were not attempted.
+- Local patch follow-up now accepts equal CPU/CX access costs as zero-skew
+  samples, which the 19.2 MHz timer can produce through quantization. It logs
+  read/write ranges and counts shorter/outlier samples. Host fault-injection
+  exercises a 16/16 zero-skew case and passes normally and under ASan/UBSan.
+- It also converts the five 16 KiB CPU pages backing the 0x12000-byte shared
+  HFI allocation to `VM_WIMG_WCOMB` before writing queue headers. It confirms
+  physical contiguity, only accepts pages currently DEFAULT or WCOMB, applies
+  the pmap attribute, and verifies all five pages before SMMU domain publish.
+  This is XNU's CPU cache policy; GMU translation remains 4 KiB. The pmap
+  functions are declared explicitly because the BSD-visible header config
+  omitted their prototypes.
+- `test_fp6_gmu_boot.py`, `test_gpu_probe.py`, `test_rpmh_arc.py` and
+  `test_xnu_cc.py` pass. Both C harnesses pass with ASan/UBSan. System-Clang
+  AArch64 single-file compilation against the exact 39728088129 build tree
+  reports 0/1 failed. These are local source checks only: no CI build or
+  phone test exists for this update yet. The complete patch is tracked at
+  `xnu/patches/0150-fp6-gmu-cx-timer-scm.patch` but remains uncommitted.
+
+## FP6 0150 timer preflight — CI green, phone stopped safely (2026-10-22)
+
+- Commit `c1de4a39ed6dfc2307311fc9d09115f1d3085f5a`, CI
+  [39728088129](https://github.com/ersascape/ios-extra/actions/runs/39728088129)
+  passed. Kernel SHA256SUMS verified. CI image packaging skipped because
+  `FP6_STOCK_DTB_URL` is not configured; locally packaged with the verified
+  product ADT and stock DTB. Header-v2 image `/tmp/ios-extra-run-39728088129/package/fp6-gmu-cxtimer-scm`
+  SHA256 `ff170c41e125c5f1e91431f14a281db4dfe7855d4e55c8d92274f747d489ebd8`.
+- Checked `fastboot devices`: one target. Captured USB ECM before issuing a
+  single `fastboot boot`; serial was redacted from saved command output. Phone
+  reached launchd and answered ECM ping. No partition or flash operation.
+- Phone log confirms inherited GMU clock `0x2001`, CM3 reset asserted, MX
+  floor acknowledged, GPLL0 600 MHz, GMU350/HUB200 enabled, then
+  `CX timer refused valid=0/16 CNTFRQ=19200000` and firmware upload refused.
+  SCM CX setup and CM3 release were not reached. The following SMMU context
+  test passed and contained (`route_live=0`, `bank_reserved=1`).
+- Pcap `/tmp/ios-extra-run-39728088129/logs/phone-0150-cxtimer-scm.pcap`
+  SHA256 `e7d6cc8bcaaa7c35b1923a85765e551ee93ebc1eedcf0732bdbc318575949c10`;
+  decoded text SHA256
+  `36c5f8cb4638a0a5436b49e14538160d7907f309f1c6e2a793328bc06ec74a89`.
+- The sampler had rejected `write_cost == read_cost`; zero-skew equality is
+  plausible at 19.2 MHz counter resolution. The local follow-up accepts equal
+  tick costs and records read/write ranges plus shorter/outlier counts. Normal
+  and ASan/UBSan tests cover all-zero skew; a system-Clang AArch64 syntax compile
+  against run 39728088129 buildtree passes. The update is not yet in CI or on
+  the phone.
+
 ## 0098 CI started at handoff — 2026-10-19
 
 - Implementation/checks/handoff commit `edab65c998a917d5e450b730aa4d0ff2e8e6032e` pushed.

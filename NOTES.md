@@ -44,7 +44,7 @@
 - Patches 0148/0149 add stage-specific clock diagnostics and Linux-aligned setup: MX SVS_L1 floor `0xc0` for GPU PLL calibration, enabling outputs on a compatible inherited Lucid OLE PLL without changing its rate/divider, and waiting for RCG root-on before changing CFG. Unreadable/unsupported live PLL state still refuses; the PLL FSM path remains unsupported because gpucc-volcano exports no software vote register.
 - Patch 0149 adds a 16 KiB trace buffer/header, checks firmware fault bits before success bits, and bounds even successful CM3/HFI initialization by asserting reset and verifying it. It retains DMA pages, SID/context and clock votes after the probe, including if reset readback fails, because reset alone does not show bus transactions drained.
 - Source review used Fairphone Linux kernel `9535e0f0885d3d4b91c38054541e16019d1e64bd` and modules `54c948d9b30c2ba01835e64c36b68b80692554ac`. `python3 tests/test_gpu_probe.py`, its ASan/UBSan run, and `python3 tests/test_fp6_gmu_boot.py` pass. CI verifies compilation of the patched XNU tree; it does not run these host tests.
-- The phone has now booted 0148/0149 successfully through GMU firmware initialization and HFI_CTRL_INIT; see the phone console values above. No HFI messages have been sent and no GPU work has run yet. Patch 0150 adds modeled CX timer synchronization and optional SCM CX setup; it has not been built by CI or run on the phone yet. A minimum DDR bandwidth vote remains unimplemented. Full HFI needs perf/BW tables and MEM_ALLOC request handling. GPU MMU/OOB/SQE startup and a known-value memory-write test remain. UniXNU NativeAdreno/NativeMetal contains A740-specific register and GMEM assumptions and cannot be treated as A810 support.
+- The phone booted 0148/0149 successfully through GMU firmware initialization and HFI_CTRL_INIT. The 0150 CI phone test later stopped safely before upload because CX timer validation returned 0/16 samples; the photo and USB log agree. An unbuilt local follow-up now accepts zero-skew samples and sets CPU WCOMB on the five 16 KiB pages backing the shared HFI queue allocation before publishing the domain. Host normal and ASan/UBSan probes pass; system-Clang AArch64 compile against the exact 39728088129 build tree reports 0/1 failures. No HFI messages or GPU work have run yet. Full HFI still needs the minimum DDR vote, perf/BW tables and MEM_ALLOC request handling. GPU MMU/OOB/SQE startup and a known-value memory-write test remain. UniXNU NativeAdreno/NativeMetal contains A740-specific register and GMEM assumptions and cannot be treated as A810 support.
 
 ## Patch 0145 phone log: software table walk passes (2026-10-22)
 
@@ -79,7 +79,7 @@
 
 The target is FP6 Adreno 810 Gen8.3. Patches 0148/0149 booted on the phone: the corrected GPU PLL/GMU clocks came up, 159 persistent pages were checked/uploaded, GMU firmware reported `FW_INIT_RESULT=0x100`, HFI controller initialization reported `HFI_CTRL_STATUS=1`, and CM3 reset was verified afterward. The photo records early GPU lines; the later USB capture started after that segment. GMU DMA and HFI command processing are still unproven.
 
-Next, validate patch 0150 through CI and one phone boot. Then implement the minimum DDR vote and validate it before HFI messages. Full HFI needs perf/BW tables and MEM_ALLOC request handling. After HFI runs and idles safely, bring up GPU MMU/OOB, Gen8 SQE/AQE and scheduler; prove a bounded GPU write to mapped memory and then a simple draw/readback. Finally expose allocation, mapping/cache, submission and fence operations through an IOKit ABI and adapt an A810-correct Turnip/Metal frontend and IOSurface presentation. The local NativeAdreno path carries A740 hardware assumptions. Metal rendering remains unimplemented.
+Next, build the combined timer and HFI cache-coherency follow-up once in CI, verify/package it, then use one USB-captured temporary boot to see whether timer sync passes and firmware reaches FW_INIT/HFI_CTRL. After that, inventory runtime DDR/BCM metadata and implement the minimum DDR vote before HFI messages. Full HFI needs perf/BW tables and MEM_ALLOC request handling. After HFI runs and idles safely, bring up GPU MMU/OOB, Gen8 SQE/AQE and scheduler; prove a bounded GPU write to mapped memory and then a simple draw/readback. Finally expose allocation, mapping/cache, submission and fence operations through an IOKit ABI and adapt an A810-correct Turnip/Metal frontend and IOSurface presentation. The local NativeAdreno path carries A740 hardware assumptions. Metal rendering remains unimplemented.
 
 See [FP6 GMU first boot](docs/FP6_GMU_FIRST_BOOT.md), [FP6 Adreno Metal audit](docs/FP6_ADRENO_METAL_AUDIT.md) and [FP6 SMMU power](docs/FP6_SMMU_POWER.md).
 
@@ -96,13 +96,53 @@ See [FP6 GMU first boot](docs/FP6_GMU_FIRST_BOOT.md), [FP6 Adreno Metal audit](d
   CM3 release. An unavailable SCM service is treated as optional; an available
   service returning an error aborts before the GMU is routed as an SMMU master.
 - Host-model timer/SCM fault-injection tests, normal and ASan/UBSan runs, the
-  GPU probe host harness and a local AArch64 single-file syntax compile pass.
-  The compile used system Clang against the latest CI build tree because the
-  configured Swift Clang path is absent. This is not a full CI build.
-- No phone boot has tested patch 0150. Next: finish the full host suite,
-  commit/push and check CI; only then package and run the isolated phone test.
-  Minimum DDR bandwidth/BCM voting remains unresolved, so 0150 alone is not
-  expected to enable safe HFI traffic.
+  GPU probe host harness and a local AArch64 single-file syntax compile passed.
+  The compile used system Clang because the configured Swift Clang path is
+  absent. Full unittest discovery cannot import `test_fp6_gmu_runtime.py`
+  because `/tmp/fp6-firmware/gen80300_gmu.bin` is unavailable; the directly
+  relevant tests pass.
+- CI run `39728088129` passed on `c1de4a39ed6dfc2307311fc9d09115f1d3085f5a`.
+  Kernel SHA256 `0f57862c073138ddcf74c1380f862c5bc295f3cea2849c8d781a313d15278710`
+  verified against `SHA256SUMS`. The workflow image package skipped because
+  `FP6_STOCK_DTB_URL` is unset. Local header-v2 image
+  `/tmp/ios-extra-run-39728088129/package/fp6-gmu-cxtimer-scm`
+  has SHA256 `ff170c41e125c5f1e91431f14a281db4dfe7855d4e55c8d92274f747d489ebd8`;
+  it embeds the verified stock DTB and product ADT and enables the opt-in
+  upload/first-boot path. No phone boot yet: `fastboot devices` showed zero
+  devices when the image was ready.
+- Phone test of that image reached launchd and ECM ping. It stopped before
+  firmware upload: timer reported `valid=0/16 CNTFRQ=19200000`; therefore SCM
+  CX setup, CM3 release, `FW_INIT_RESULT`, and `HFI_CTRL_STATUS` were not
+  attempted. The decoded USB capture is
+  `/tmp/ios-extra-run-39728088129/logs/phone-0150-cxtimer-scm.txt` (SHA256
+  `36c5f8cb4638a0a5436b49e14538160d7907f309f1c6e2a793328bc06ec74a89`); pcap
+  is beside it (SHA256
+  `e7d6cc8bcaaa7c35b1923a85765e551ee93ebc1eedcf0732bdbc318575949c10`). The
+  console photo corroborates the timer failure and shows the subsequent SMMU
+  context test contained with `route_live=0`.
+- Root cause is now narrowed to the sample filter: the code rejected
+  `write_cost == read_cost`, although a 19.2 MHz counter quantizes short
+  accesses to equal ticks. The next local patch accepts zero-skew samples and
+  reports raw read/write timing ranges plus shorter/outlier counts. Normal and
+  ASan/UBSan host tests cover the equal-tick case; the updated file compiles
+  against the CI build tree with system Clang. This fix is not yet built by CI
+  or phone-tested.
+- The combined local follow-up also marks all five 16 KiB CPU pages covering
+  the shared 0x12000-byte HFI allocation `VM_WIMG_WCOMB` before writing queue
+  headers or publishing the SMMU domain. It confirms physical contiguity and
+  that each page was default cached or already WCOMB, then sets and checks the
+  attributes. This mirrors Linux's write-combine HFI mapping and prevents
+  cached CPU writeback from clobbering GMU-owned queue indices. The pmap API
+  definitions are explicitly declared in the FP6 driver because they are not
+  exported by the BSD-visible header configuration.
+- The combined patch passes `test_fp6_gmu_boot.py`, `test_gpu_probe.py`,
+  `test_rpmh_arc.py`, and `test_xnu_cc.py`, normally and the two C harnesses
+  under ASan/UBSan. A system-Clang AArch64 compile of `sweet_gpu.c` against
+  the exact CI 39728088129 build tree reports 0/1 failures. This source delta
+  is local only: no CI build or phone test has been run for it yet.
+- Minimum DDR bandwidth/BCM voting remains unresolved. Do not send HFI messages
+  until shared HFI backing is mapped Normal noncached on CPU pages and runtime
+  BCM metadata is understood.
 
 ## FP6 GPU SMMU: TCR2 passes, FSR FORMAT bits (2026-10-21)
 

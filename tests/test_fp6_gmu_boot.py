@@ -13,8 +13,18 @@ HARNESS = r'''
 #include <string.h>
 #include <assert.h>
 typedef uintptr_t vm_offset_t;
+typedef size_t vm_size_t;
+typedef uintptr_t addr64_t;
 typedef int boolean_t;
+typedef uint64_t ppnum_t;
 #define FALSE 0
+#define PAGE_SIZE 0x4000u
+#define PAGE_MASK (PAGE_SIZE-1u)
+#define VM_WIMG_MASK 0xffu
+#define VM_WIMG_DEFAULT 0x2u
+#define VM_WIMG_WCOMB 0x6u
+#define kernel_pmap ((void *)1)
+#define ptoa_64(pn) ((uint64_t)(pn) << 14)
 #include "domain.h"
 static struct fp6_gmu_domain fp6_gmu_domain;
 static vm_offset_t fp6_gmu_window = 1;
@@ -28,7 +38,7 @@ static int PE_parse_boot_argn(const char *s, void *v, int n) {(void)s;(void)v;(v
 static uint64_t fake_ticks=1000000, fake_frequency=19200000, cx_seed, cx_seed_tick;
 static uint32_t cx_pending_lo;
 static int cx_map_fail, irq_enabled=1, scm_available=1, scm_status;
-static unsigned cx_rate_num=1, cx_rate_den=1, cx_writes;
+static unsigned cx_rate_num=1, cx_rate_den=1, cx_writes, cx_write_ticks=5;
 static unsigned scm_calls;
 static uint64_t scm_fid[2], scm_arginfo[2], scm_arg0[2];
 static uint64_t fp6_gmu_test_counter(void) { return fake_ticks += 20; }
@@ -60,7 +70,7 @@ static void fp6_smmu_write32(vm_offset_t b,uint32_t o,uint32_t v) {
  if (b==2) { assert(o==0x800); smr=v;route_writes++;return; }
  if (b==3) {
   cx_writes++;
-  fake_ticks+=5;if(o==0x200)cx_pending_lo=v;
+  fake_ticks+=cx_write_ticks;if(o==0x200)cx_pending_lo=v;
   if(o==0x204){cx_seed=((uint64_t)v<<32)|cx_pending_lo;cx_seed_tick=fake_ticks;}return;
  }
  if (b==4) return;
@@ -72,8 +82,22 @@ static void fp6_smmu_write32(vm_offset_t b,uint32_t o,uint32_t v) {
  if(o==0x47618) hfi_starts++;
 }
 static unsigned allocs;
+static unsigned cache_set_count;
+static struct { ppnum_t pn; unsigned attr; } cache_attrs[16];
+static ppnum_t pmap_find_phys(void *map, addr64_t va) {
+ (void)map;return (ppnum_t)(va >> 14);
+}
+static unsigned pmap_cache_attributes(ppnum_t pn) {
+ for(unsigned i=0;i<16;i++)if(cache_attrs[i].pn==pn)return cache_attrs[i].attr;
+ return VM_WIMG_DEFAULT;
+}
+static void pmap_set_cache_attributes(ppnum_t pn,unsigned attr) {
+ for(unsigned i=0;i<16;i++)if(cache_attrs[i].pn==pn){cache_attrs[i].attr=attr;cache_set_count++;return;}
+ for(unsigned i=0;i<16;i++)if(!cache_attrs[i].pn){cache_attrs[i].pn=pn;cache_attrs[i].attr=attr;cache_set_count++;return;}
+ assert(0);
+}
 static int alloc_page(void *c,uint32_t n,struct fp6_gmu_domain_page *p) {
- (void)c;p->va=aligned_alloc(4096,n);if(p->va)memset(p->va,0,n);p->pa=0x900000000ULL+(++allocs)*0x100000ULL;return !p->va;
+ (void)c;size_t bytes=(n+PAGE_MASK)&~(size_t)PAGE_MASK;p->va=aligned_alloc(PAGE_SIZE,bytes);if(p->va)memset(p->va,0,bytes);p->pa=0x900000000ULL+(++allocs)*0x100000ULL;return !p->va;
 }
 static int publish(void *c,const void *p,uint32_t n) {(void)c;(void)p;(void)n;return 0;}
 '''
@@ -93,6 +117,8 @@ int main(void) {
  static const struct fp6_gmu_domain_ops ops={alloc_page,publish};
  assert(!fp6_gmu_domain_init(&fp6_gmu_domain,&ops,0));
  assert(!fp6_gmu_boot_reserve());
+ assert(cache_set_count==5);
+ for(unsigned i=0;i<5;i++)assert(cache_attrs[i].attr==VM_WIMG_WCOMB);
  uint32_t *vrb=(uint32_t *)(void *)fp6_gmu_range_va(fp6_gmu_vrb_va);
  uint32_t *trace=(uint32_t *)(void *)fp6_gmu_range_va(vrb[2]);
  assert(trace && vrb[2]==fp6_gmu_trace_va);
@@ -100,6 +126,10 @@ int main(void) {
  assert(trace[8]==fp6_gmu_trace_va && trace[9]==0 && trace[10]==5 && trace[11]==1);
  assert(fp6_gmu_cx_timer_sync());
  assert(fp6_gmu_cx_timer_ready && irq_enabled && cx_seed != 0);
+ fp6_gmu_cx_timer_ready=0;cx_write_ticks=0;
+ assert(fp6_gmu_cx_timer_sync()); /* timer-tick quantization can make measured skew exactly zero */
+ assert(fp6_gmu_cx_timer_ready && irq_enabled);
+ cx_write_ticks=5;
  unsigned timer_writes=cx_writes;
  fp6_gmu_cx_timer_ready=0;fake_frequency=0;
  assert(!fp6_gmu_cx_timer_sync() && cx_writes==timer_writes && irq_enabled);
@@ -112,7 +142,11 @@ int main(void) {
  fp6_gmu_first_boot(2,0x1000,0x800);
  assert(route_writes==0 && release_count==0 && scm_calls==0);
  cx_rate_num=cx_rate_den=1;assert(fp6_gmu_cx_timer_sync());
+ unsigned cache_sets_before_publish=cache_set_count;
  assert(!fp6_gmu_domain_publish(&fp6_gmu_domain));
+ assert(cache_set_count==cache_sets_before_publish);
+ assert(fp6_gmu_hfi_set_wcomb(&fp6_gmu_domain,fp6_gmu_hfi_va));
+ assert(cache_set_count==cache_sets_before_publish); /* frozen domain: no cache mutation */
  run_probe(0x100,1,0); /* successful HFI still stops */
  run_probe(0x100,1,1); /* reset write rejected */
  run_probe(0x300,1,0); /* success bits plus firmware assert must fail */
