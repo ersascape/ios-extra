@@ -1,5 +1,28 @@
 # ios-extra — current state
 
+## FP6 Gen8.3 HFI-to-GPU source boundary (2026-10-22)
+
+- Source inspection only; no build or phone observation. Fairphone's
+  `gen8_hwsched_hfi_start()` continues after `CORE_FW_START` by enabling the
+  context queue and hardware-fence client, sending HW_FENCE control, setting
+  preemption/LPAC/AQE controls, and then sending `START`. During `START`, the
+  GMU may interleave F2H `MEM_ALLOC` and `GMU_CNTR_REGISTER` requests. Linux
+  backs/maps `MEM_ALLOC`; it can answer counter-allocation failure with zero
+  offsets. XNU patch 0160 currently assumes each queue-1 packet is a final ACK,
+  so it cannot complete this event exchange. Its frozen GMU domain also does
+  not map arbitrary GPU-accessible allocations. Next implementation must
+  service real request types and map their required memory before claiming HFI
+  startup.
+- After HFI, Linux starts the GPU MMU, acquires GPU OOB, applies `gen8_start()`,
+  enables GPU IRQs, installs SQE/AQE instruction bases, and boots the hwsched
+  ring. Gen8 `CP_ME_INIT` is a seven-payload packet with a GPU power-up register
+  list. A local A642L XNU reference demonstrates the later acceptance shape—
+  command-processor memory write/readback followed by 2D clear/readback—but its
+  A6xx packet/setup sequence is not transferable as A810 evidence. Details are
+  in `docs/FP6_ADRENO_METAL_AUDIT.md`.
+- The FP6 0160 CI image remains untested on the phone while the user is using
+  Android. No device command was run for this source review.
+
 ## FP6 Gen8 HFI prerequisite draft (0160, 2026-10-22)
 
 - Patch 0160 extends the failed 0159 `CORE_FW_START` probe with the Linux Gen8

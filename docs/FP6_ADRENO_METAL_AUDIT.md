@@ -113,6 +113,41 @@ The immediate SMMU/GMU work remains necessary whichever userspace frontend is
 chosen. Turnip meaningfully reduces the later compiler/rendering implementation;
 it does not remove the current hardware startup task.
 
+## Gen8.3 HFI-to-GPU boundary (source review, 2026-10-22)
+
+The current XNU candidate 0160 stops after its `START` HFI transaction. The
+Fairphone Gen8.3 source shows the required cold-boot path continues through
+`gen8_hwsched_hfi_start()` (`adreno_gen8_hwsched_hfi.c:2138`): after
+`CORE_FW_START`, query/enable the context queue and register the hardware-fence
+client, send HW_FENCE control, initialize preemption and LPAC, enable AQE when
+the core supports it, then send `START`. While waiting for that `START` ACK,
+the GMU can interleave F2H `MEM_ALLOC` and `GMU_CNTR_REGISTER` requests. Linux
+creates and maps backing for the former; counter registration failure is
+allowed and answered with zero offsets. The XNU probe currently treats every
+queue-1 packet as a final ACK, so it cannot complete this exchange. The first
+required runtime extension is an event-aware HFI dispatcher plus correctly
+mapped memory for the actual allocation descriptors; a pre-mapped GMU-only
+arena cannot satisfy descriptors requiring GPU access.
+
+Once HFI startup completes, the reference calls `gen8_hwsched_gpu_boot()`
+(`adreno_gen8_hwsched.c:755`): start the GPU MMU, acquire GMU GPU OOB, run
+`gen8_start()`, enable GPU IRQs, program SQE/AQE instruction bases, and boot
+the scheduler. Gen8 ring startup (`adreno_gen8.c:1430`) sets ring and scratch
+addresses, starts SQE, sends CP initialization, authenticates ZAP, and leaves
+secure mode. The Gen8 `CP_ME_INIT` packet has seven payload dwords and a
+power-up register-list address; it differs from the eight-payload A6xx example
+below. The next GPU test therefore must be built from the FP6 Gen8 source and
+firmware, not copied from an older Adreno command sequence.
+
+The local Hackintosh A642L reference (`redwood_adreno.c:2808-2945`) does show a
+useful *proof shape*: after its own SMMU/SQE setup, it issues a known-value
+`CP_MEM_WRITE`, flushes CPU visibility, and checks the word; then it submits a
+2D clear with cache-flush events, reads pixels back, and presents them. This is
+measured A642L work, not A810 evidence. It gives us the order of acceptance
+checks for the eventual execution milestone while the actual FP6 packet,
+memory, scheduling and synchronization details remain governed by the Gen8.3
+Linux source.
+
 Additional concrete AirNir boundary: `kits/AirNir/MesaBackend.c:29` refuses any
 `fd_dev_gen(&id) != 7`; `scripts/build-air-nir-host.py:22` fixes the tested chip
 at `0x43050a01`. The backend accepts vertex/fragment only and requires
