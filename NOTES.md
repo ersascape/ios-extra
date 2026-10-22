@@ -9,11 +9,19 @@
   fixtures verify default read-only/unprivileged and explicit privileged/RW
   requests, plus GPU-access refusal. Normal and ASan/UBSan protocol/domain tests
   pass; `test_gpu_probe.py` passes; the changed source compiles against the
-  39787950216 CI buildtree (`0 of 1 files failed`). CI `39792609801` stopped
-  before compilation because the edited 0133 patch had a stale added-file line
-  count; the count is corrected and both focused tests pass again. One retry CI
-  is pending. No phone result exists. The firmware's actual descriptor is still
+  39787950216 CI buildtree (`0 of 1 files failed`). First CI `39792609801`
+  stopped before compilation because the edited 0133 patch had a stale
+  added-file line count. After correcting it, CI `39793471917` passed the XNU
+  build and FP6 workflow. The built kernel SHA-256 is
+  `e4dbf5cb1acfd17f19273cf1bdd0baf53f790e88a856bd37127c2a54abcdbd2c`.
+  Extracted CI source contains the permission-aware allocator and updated PTE
+  logic. No phone result exists. The firmware's actual descriptor is still
   unknown, and the user is testing Android.
+- Repackaged that CI kernel with the verified product ADT and stock Volcano
+  DTB; header-v2 round-trip passed. Image
+  `/tmp/ios-extra-run-39793471917/package/fp6-gmu-hfi-memalloc-permissions.img`,
+  SHA-256 `897b67af46ec1b0da14dc927a5a3234ed462abed90be3874500a391093f18e22`.
+  The image is not phone-tested.
 
 - Candidate patch 0162 answers non-secure, non-GPU-access `MEM_ALLOC` requests
   using permanent kernel backing and a live append to the GMU SMMU page tables.
@@ -46,8 +54,8 @@
   `/tmp/ios-extra-run-39787950216/package/fp6-gmu-hfi-memalloc-0162.img`,
   SHA-256 `30fc97daccfa67230e2f2bedac463591b2f310e285b9ac0c2d1fbc1730ed502d`.
   It has `fp6gmuload=1 fp6gmuboot=1` arguments and is not phone-tested.
-- Next: wait for the user's Android work to finish, then use this exact image for
-  one bounded phone observation and capture the actual MEM_ALLOC descriptor.
+- Next: wait for the user's Android work to finish, then use the permissions
+  image above for one bounded phone observation and capture the actual MEM_ALLOC descriptor.
   The synthetic kind-2 request is not evidence that hardware will request or
   accept this mapping. GPU command execution remains unproven.
 

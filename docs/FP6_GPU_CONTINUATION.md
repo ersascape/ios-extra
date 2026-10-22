@@ -57,6 +57,15 @@ GMU DMA, GPU command, rendering or Metal work has succeeded yet.
   and passed header-v2 round-trip. The actual phone descriptor and firmware
   acceptance are unknown; no phone test exists. User is testing Android, so
   defer device commands.
+- The permission correction maps GMU S1 pages read-only/unprivileged by default
+  and applies `GMU_WRITEABLE`/`GMU_PRIV` flags to the page-table AP bits. CI
+  `39792609801` stopped on a stale patch hunk count; corrected commit `42e746f`
+  passed CI `39793471917`. Kernel SHA-256 is
+  `e4dbf5cb1acfd17f19273cf1bdd0baf53f790e88a856bd37127c2a54abcdbd2c`. The
+  locally packaged image
+  `/tmp/ios-extra-run-39793471917/package/fp6-gmu-hfi-memalloc-permissions.img`
+  SHA-256 is `897b67af46ec1b0da14dc927a5a3234ed462abed90be3874500a391093f18e22`;
+  it is not phone-tested.
 - Patch 0159 adds a bounded HFI `CORE_FW_START` request/ACK exchange based on
   Fairphone Linux Gen8. CI `39766804611` passed and the packaged image booted
   once. The phone reported `irq=0x4 fw=0x900` after the request; bit 2 is DBGQ

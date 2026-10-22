@@ -66,14 +66,17 @@ locally packaged with the verified product ADT/stock DTB as
 round-trip passed. No 0162 phone test exists. The user is testing Android, so
 defer all device commands. No GPU execution has been demonstrated.
 
-The current unbuilt follow-up aligns GMU allocation PTE access bits with Linux:
-always readable, writable only with `GMU_WRITEABLE`, and privileged-only only
-with `GMU_PRIV`, plus nG/AF/outer-shareable attributes. Normal and sanitizer
-HFI/domain tests pass, broad GPU probe tests pass, and the changed source
-cross-compiles against buildtree `39787950216` (`0 of 1 files failed`). CI
-`39792609801` stopped before compilation because the modified 0133 patch had a
-stale new-file line count. The count is corrected and focused tests pass again;
-one retry build remains. Firmware descriptor and phone acceptance are still
+The permission-aware 0162 follow-up maps GMU allocation pages read-only by
+default; `GMU_WRITEABLE` enables writes and `GMU_PRIV` selects privileged-only
+access. It also sets nG/AF/outer-shareable attributes. Normal/sanitizer host
+tests and broad GPU probe tests pass. CI `39792609801` stopped before
+compilation on a stale patch hunk count; corrected commit `42e746f` passed CI
+`39793471917`. Kernel SHA-256 is
+`e4dbf5cb1acfd17f19273cf1bdd0baf53f790e88a856bd37127c2a54abcdbd2c`. Locally
+packaged image
+`/tmp/ios-extra-run-39793471917/package/fp6-gmu-hfi-memalloc-permissions.img`
+SHA-256 `897b67af46ec1b0da14dc927a5a3234ed462abed90be3874500a391093f18e22`
+passed header-v2 round-trip. No phone test exists and the actual descriptor is
 unknown. The user is testing Android; run no device commands until they say they
 are done.
 

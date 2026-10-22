@@ -17,9 +17,16 @@
   ASan/UBSan tests pass; broad GPU probe tests pass; `sweet_gpu.c` cross-compiles
   against CI buildtree `39787950216` (`0 of 1 files failed`). CI `39792609801`
   stopped before compilation because the edited 0133 patch's added-file line
-  count was stale. The count is corrected and focused tests pass again; one
-  retry is pending. No phone test exists, and the actual firmware descriptor is
-  unknown. Device commands remain deferred while the user tests Android.
+  count was stale. Corrected commit `42e746f` passed CI `39793471917` (XNU build
+  and FP6 workflow). Kernel SHA256 is
+  `e4dbf5cb1acfd17f19273cf1bdd0baf53f790e88a856bd37127c2a54abcdbd2c`; the
+  extracted build source contains the updated permission-aware mapping. Locally
+  packaged image
+  `/tmp/ios-extra-run-39793471917/package/fp6-gmu-hfi-memalloc-permissions.img`
+  SHA256 `897b67af46ec1b0da14dc927a5a3234ed462abed90be3874500a391093f18e22`
+  passed header-v2 round-trip. It is not phone-tested. Firmware's actual
+  descriptor remains unknown; device commands are deferred while the user tests
+  Android.
 
 ## FP6 patch 0162 GMU-only HFI allocation candidate — 2026-10-22
 
