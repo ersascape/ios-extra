@@ -12,7 +12,9 @@
   so it cannot complete this event exchange. Its frozen GMU domain also does
   not map arbitrary GPU-accessible allocations. Next implementation must
   service real request types and map their required memory before claiming HFI
-  startup.
+  startup. These events need ACKs with their own IDs (20/110) and the event
+  header echoed; generic H2F command ACKs use ID 126. Linux's six-dword counter
+  reply permits zero offsets and resumes waiting for START.
 - After HFI, Linux starts the GPU MMU, acquires GPU OOB, applies `gen8_start()`,
   enables GPU IRQs, installs SQE/AQE instruction bases, and boots the hwsched
   ring. Gen8 `CP_ME_INIT` is a seven-payload packet with a GPU power-up register

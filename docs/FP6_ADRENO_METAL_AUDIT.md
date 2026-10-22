@@ -127,7 +127,12 @@ allowed and answered with zero offsets. The XNU probe currently treats every
 queue-1 packet as a final ACK, so it cannot complete this exchange. The first
 required runtime extension is an event-aware HFI dispatcher plus correctly
 mapped memory for the actual allocation descriptors; a pre-mapped GMU-only
-arena cannot satisfy descriptors requiring GPU access.
+arena cannot satisfy descriptors requiring GPU access. These are distinct wire
+replies: a generic H2F command completes with F2H ACK id 126, while a service
+reply uses ACK type and the original event ID (20 for MEM_ALLOC, 110 for
+GMU_CNTR_REGISTER), with the request header echoed. The counter response is
+six dwords; Linux explicitly sends zero low/high offsets when it cannot reserve
+a counter, then continues waiting for the START ACK.
 
 Once HFI startup completes, the reference calls `gen8_hwsched_gpu_boot()`
 (`adreno_gen8_hwsched.c:755`): start the GPU MMU, acquire GMU GPU OOB, run
