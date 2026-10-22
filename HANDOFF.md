@@ -72,18 +72,24 @@ One phone test reached `FW_INIT_RESULT=0x100` and `HFI_CTRL_STATUS=1`, then
 returned TABLE response header `0x0001030f` (ID 15, ACK type, 3 dwords). The
 driver only recognized generic ACK ID 126 and stopped; CM3 reset was verified.
 Patch 0166 now accepts request-ID ACKs with the same echoed-header/status
-validation. The decoded log and pcap are under
+validation. Commit `af030f8aabc5eeff3f1e0da673b0579ab70976f3` passed CI run
+`39821513140`. Image
+`/tmp/ios-extra-run-39821513140/package/fp6-gmu-hfi-ack-0166.img`, SHA-256
+`4d06ee27cd0c25778841923c04c2e61e5aaddb0421cd0e5de794e2cfb2d33ee7`, uses the
+verified DTB, ADT and the bounded HFI probe args. Its follow-up test helper
+timed out at the one `pkexec` USB-capture authorization and refused to boot;
+there is no 0166 phone log. Do not rerun it until the user can complete the
+authorization prompt. The decoded 0165 log and pcap are under
 `/tmp/ios-extra-run-39814973566/logs/phone-0165-gmu-hfi-start-resume.*`.
-Host probe checks, including ASan/UBSan, and the bounded GMU boot test pass.
 The user explicitly requested flashing the Tegu rootfs from
 `/home/ersa/Dev/ios-extra/research/fp6-rootfs-tegu-20261021/` to the existing
 `userdata` partition. That sparse image (SHA256
 `a1c6f7da616520841c4d56ac2a147940c5c93a0b4406cb1c9ae6832d64338f7c`) was
 written successfully in 16 fastboot chunks; transcript is
 `/tmp/fastboot-flash-fp6-rootfs-20261022.log`. This overwrote prior userdata.
-Do not repeat the flash. For the next phone test, rebuild once with patch 0166,
-package the resulting kernel with the known ADT/DTB and RAM-disk init, then use
-the USB helper. Do not touch other partitions or use `fastboot getvar`.
+Do not repeat the flash. For the next phone test, use the already packaged 0166
+image and USB helper after the user can complete the `pkexec` authorization.
+Do not touch other partitions or use `fastboot getvar`.
 
 Earlier phone evidence remains: patch 0159's CORE_FW_START path asserted with
 `irq=0x4 fw=0x900` and the bounded path verified CM3 reset. The 0165 phone test

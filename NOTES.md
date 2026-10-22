@@ -47,7 +47,12 @@
   labeled with the acknowledged request ID while retaining sequence/echo/status
   validation. GPU probe plus ASan/UBSan tests and the GMU bounded-boot test pass
   with that host implementation. It still needs one phone test to verify TABLE
-  ACK payload handling and continue the HFI exchange.
+  ACK payload handling and continue the HFI exchange. Commit `af030f8` passed
+  CI run `39821513140` (build and FP6 packaging jobs succeeded). The new
+  header-v2 image is `/tmp/ios-extra-run-39821513140/package/fp6-gmu-hfi-ack-0166.img`,
+  SHA-256 `4d06ee27cd0c25778841923c04c2e61e5aaddb0421cd0e5de794e2cfb2d33ee7`.
+  Its USB capture authorization timed out; the test helper refused to issue
+  `fastboot boot`, so patch 0166 has no phone result yet.
 
 ## GMU cacheability source check (2026-10-22)
 

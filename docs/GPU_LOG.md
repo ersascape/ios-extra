@@ -1,3 +1,21 @@
+## FP6 request-ID HFI ACK follow-up 0166 (2026-10-22)
+
+- Patch 0166 accepts HFI ACK type responses identified by either the original
+  request ID or generic ID 126. It keeps the echoed request header and zero
+  status checks. The host peer models the measured 3-dword TABLE response
+  (`id=15`, type 1) and generic-ID responses for the other requests. GPU probe
+  tests pass normally and under ASan/UBSan; `tests/test_fp6_gmu_boot.py` passes.
+- Commit `af030f8aabc5eeff3f1e0da673b0579ab70976f3` passed CI run
+  `39821513140`; build and FP6 packaging jobs succeeded. The local bounded
+  RAM-disk image uses the same ADT, verified Volcano DTB and command line as
+  0165: `/tmp/ios-extra-run-39821513140/package/fp6-gmu-hfi-ack-0166.img`,
+  SHA-256 `4d06ee27cd0c25778841923c04c2e61e5aaddb0421cd0e5de794e2cfb2d33ee7`.
+- The follow-up phone boot did not occur. `gpu-phone-test.py` timed out waiting
+  for the one `pkexec` USB capture authorization and explicitly refused to run
+  `fastboot boot`. Therefore 0166's real ACK payload validation is unmeasured;
+  the 0165 log remains the latest phone evidence. No GPU command, DMA readback,
+  draw, or Metal result is available.
+
 ## FP6 post-CORE_FW_START HFI candidate 0165 (2026-10-22)
 
 - User-requested rootfs write: verified Tegu sparse image from
