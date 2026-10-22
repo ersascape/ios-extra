@@ -1,5 +1,52 @@
 # ios-extra — current state
 
+## Powered FP6 SMMU baseline measured (2026-10-23)
+
+- Commit `9eeb38e3657ba8bfd259c240155a97868b4db118` passed CI run
+  `39831380821` (conclusion `success`). The build workflow skipped its hosted
+  image because `FP6_STOCK_DTB_URL` is unset. The verified kernel SHA-256 is
+  `34436f1dd7469a83658ba5d4b1ab4f63cea44510374f4b3e5e26c1bac5b3ae24`.
+- Packaged that kernel with its CI ADT, the previously verified Volcano DTB,
+  and the bounded RAM-disk init as header-v2 image
+  `/tmp/ios-extra-run-39831380821/package/fp6-smmu-powered-baseline-0168.img`
+  (SHA-256 `b0ce427af518fd6e76a1cf69c5ea45b834ebde227221eb251993e3b331548b97`).
+  The ADT lacks `/product` artwork traits, so packaging used
+  `--allow-no-product`; this image is for kernel/SMMU diagnostics, not a full
+  SpringBoard validation. The image was unpacked and kernel/DTB/RAM-disk
+  round-trip checks passed. Boot args enabled `fp6smmu=2 fp6smmupower=1` and
+  deliberately omitted GMU firmware boot.
+- One authorized temporary `fastboot boot` succeeded; the phone answered ping.
+  USB log `/tmp/ios-extra-run-39831380821/logs/phone-0168-powered-smmu-baseline.txt`
+  SHA-256 `85a5ae74b441b77bb051d301ef0ba9e474a1b0f724be6afc6471a6c61e6d0ef7`.
+  It recorded `IDR0=0x4c017e18`, `IDR1=0x40000016`, 24 stream groups, 22 CBs,
+  4 KiB pages and `CB0 +0x20000`. Immediately after CX/SMMU clock power and
+  before the CB2 diagnostic, every stream group was invalid and fault-routed.
+  Powered CB0 read `CBAR=0`, `CBA2R=0`, `SCTLR=0x2ff5c314`,
+  `TCR=0x7d0e6f8c`, `TCR2=0x00038065`, `TTBR0=0x19b143770fcb6d7b`,
+  `TTBR1=0xdc20c8e1af8db9f4`, `MAIR0=0x079fae8a`, `MAIR1=0x8899bf1f`,
+  `FSR=0`. `SCTLR.M` is clear, so this is disabled, nonzero state. This shows
+  the earlier `0/22` scan was taken before power and cannot establish a clean
+  powered bank. Do not zero or overwrite these unexplained CB0 values.
+- The CB2 test completed its software page-table walk (`IOVA=0x60000000`
+  translated to expected `PA=0x904623000`) and left the tested route/bank
+  disabled and reserved. This is not hardware ATOS (`ATOSNS` is set), nor proof
+  of GPU DMA. With no GMU boot requested, there is no firmware/HFI result from
+  this run. The earlier post-HFI CB0 snapshot (0167) differs in SCTLR/TCR2 and
+  TTBR values; they are separate boots, so this does not locate a transition.
+- Next useful hardware image should take read-only CB0 snapshots at staged
+  boundaries in one GMU/HFI boot: after CB2-test cleanup, immediately before
+  CM3 release, and at the first `GFX_ACC` allocation/refusal. That will locate
+  when the powered CB0 image changes without touching the bank. This phone has
+  now left fastboot and is running the temporary XNU image; no autonomous
+  return-to-fastboot path has been established, so do not reboot it unattended.
+  No GPU DMA, command execution, draw, or native Metal progress was measured.
+- Read-only XNU source inspection explains the missing return path: the SWEET
+  platform expert does not override `haltRestart()`. Inherited generic XNU
+  handling has no Qualcomm PSCI reset or bootloader-reason operation here.
+  After a one-shot fastboot boot, the host cannot use fastboot to reset the
+  running phone back into fastboot. Any such mechanism needs a known FP6
+  bootloader reason and a separately validated restart implementation.
+
 ## FP6 post-CORE_FW_START HFI candidate 0165 (2026-10-22)
 
 - Added the source-matched post-CORE_FW_START exchange: read the measured DTCM

@@ -103,6 +103,27 @@ written successfully in 16 fastboot chunks; transcript is
 `/tmp/fastboot-flash-fp6-rootfs-20261022.log`. This overwrote prior userdata.
 Do not repeat the flash. Do not touch other partitions or use `fastboot getvar`.
 
+The powered baseline is now captured by patch 0168 and supersedes the pending
+baseline action above. CI run `39831380821` succeeded for commit
+`9eeb38e3657ba8bfd259c240155a97868b4db118`; the diagnostic image and decoded
+log are under `/tmp/ios-extra-run-39831380821/`. Before the CB2 diagnostic,
+powered CB0 had `CBAR=CBA2R=0`, `SCTLR=0x2ff5c314` (`M=0`),
+`TCR=0x7d0e6f8c`, `TCR2=0x00038065`, nonzero TTBR/MAIR values, and `FSR=0`.
+All 24 groups were invalid/fault-routed. Thus `0/22` from the unpowered
+inventory did not describe the powered bank. Do not write CB0. The CB2 software
+walk passed; `ATOSNS` means there was no hardware ATOS, and this run omitted GMU
+boot. The device is currently running this temporary XNU image; there is no
+tested autonomous route back to fastboot. The next useful image should snapshot
+CB0 after CB2-test cleanup, before CM3 release, and at the first GFX_ACC
+allocation/refusal within one GMU/HFI boot, without changing CB0.
+Read-only XNU source review confirms why unattended cycling is unavailable:
+the SWEET platform expert does not override `haltRestart()`, and the inherited
+generic implementation only handles panic-sync/hang before returning; there is
+no Qualcomm PSCI reboot or bootloader-reason path in this port. The current
+fastboot protocol also disappears after the one-shot boot. Do not try a reset
+until a device-specific fastboot-return reason is implemented and independently
+validated.
+
 Earlier phone evidence remains: patch 0159's CORE_FW_START path asserted with
 `irq=0x4 fw=0x900` and the bounded path verified CM3 reset. The 0165 phone test
 proves initial firmware execution and HFI controller readiness, but not

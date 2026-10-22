@@ -1834,3 +1834,38 @@ No additional phone action was taken during handoff.**
   iOS renderer selection,
   power-up, firmware, SMMU and submission remain future milestones.
   No GPU command execution or upstream integration yet.
+# FP6 powered SMMU baseline 0168 (2026-10-23)
+
+- Source commit `9eeb38e3657ba8bfd259c240155a97868b4db118`, CI run
+  `39831380821` (success); kernel SHA-256
+  `34436f1dd7469a83658ba5d4b1ab4f63cea44510374f4b3e5e26c1bac5b3ae24`.
+  The workflow skipped hosted packaging because `FP6_STOCK_DTB_URL` is unset.
+- Local header-v2 image:
+  `/tmp/ios-extra-run-39831380821/package/fp6-smmu-powered-baseline-0168.img`,
+  SHA-256 `b0ce427af518fd6e76a1cf69c5ea45b834ebde227221eb251993e3b331548b97`.
+  It uses the CI ADT (no `/product` artwork; diagnostic image only), the
+  previously verified Volcano DTB and minimal RAM disk. Round-trip checks
+  passed. Args: `rd=md0 fp6usb=2 fp6smmu=2 fp6smmupower=1`; GMU firmware boot
+  was omitted.
+- One temporary fastboot boot succeeded; USB ECM answered ping. Decoded log:
+  `/tmp/ios-extra-run-39831380821/logs/phone-0168-powered-smmu-baseline.txt`,
+  SHA-256 `85a5ae74b441b77bb051d301ef0ba9e474a1b0f724be6afc6471a6c61e6d0ef7`.
+- Powered pre-test state: IDR0 `0x4c017e18`, IDR1 `0x40000016`, stream match,
+  24 groups, 22 context banks, 4 KiB granule, CB window `+0x20000`. All stream
+  groups were invalid with `S2CR=0x00020000` (fault). CB0 was disabled
+  (`SCTLR.M=0`) but not zero: CBAR `0`, CBA2R `0`, SCTLR `0x2ff5c314`, TCR
+  `0x7d0e6f8c`, TCR2 `0x00038065`, TTBR0 `0x19b143770fcb6d7b`, TTBR1
+  `0xdc20c8e1af8db9f4`, MAIR0 `0x079fae8a`, MAIR1 `0x8899bf1f`, FSR `0`.
+  Therefore the earlier `0/22` scan before CX/SMMU power does not show the
+  powered CB0 contents. Preserve these values; no CB0 write was made.
+- CB2 software walk passed IOVA `0x60000000` -> PA `0x904623000`; `ATOSNS`
+  means this was not a hardware ATOS transaction. This run did not boot GMU
+  firmware. The differences between this pre-test snapshot and 0167's
+  post-HFI CB0 values are cross-boot only; they do not identify when state
+  changes. Next diagnostic should log CB0 after CB2 cleanup, before CM3
+  release, and at the first GFX_ACC refusal in one GMU/HFI boot. The device is
+  now running the temporary XNU image; no safe autonomous fastboot-return path
+  is established. No DMA/GPU command/draw/Metal result.
+  Source inspection finds no autonomous reset path: `SweetPlatformExpert`
+  does not override `haltRestart()`, and generic XNU handling here does not
+  request Qualcomm PSCI reset or select a bootloader/fastboot reason.
