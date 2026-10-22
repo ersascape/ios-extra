@@ -1,0 +1,131 @@
+diff --git a/bsd/dev/sweet_gpu.c b/bsd/dev/sweet_gpu.c
+--- a/bsd/dev/sweet_gpu.c
++++ b/bsd/dev/sweet_gpu.c
+@@ -3595,8 +3595,24 @@
+ }
+ 
+ static int
++fp6_gmu_hfi_ack_status_result(const uint32_t *ack, unsigned size, uint32_t *result)
++{
++	if (!ack || !result) return 0;
++	if (size == 3u) {
++		*result = 0;
++		return ack[2] == 0;
++	}
++	if (size == 4u) {
++		*result = ack[2];
++		return ack[3] == 0; /* GMU_SUCCESS in the v5 inline-ACK format */
++	}
++	return 0;
++}
++
++static int
+ fp6_gmu_hfi_send_req(vm_offset_t smmu, uint32_t cb_off, vm_offset_t g,
+-	    uint8_t *mem, uint32_t *msg, unsigned dwords, unsigned *sequence)
++	    uint8_t *mem, uint32_t *msg, unsigned dwords, unsigned *sequence,
++	    uint32_t *result)
+ {
+ 	volatile uint32_t *t = (volatile uint32_t *)(void *)mem;
+ 	volatile uint32_t *cmd_hdr = t + 6;
+@@ -3605,7 +3621,8 @@
+ 	uint32_t irq = 0, sent;
+ 	unsigned id = msg[0] & 0xffu;
+ 	unsigned seq;
+-	if (dwords < 2 || dwords > 240 || ((dwords + 3u) & ~3u) >= 1024u) return 0;
++	if (result) *result = 0;
++	if (!dwords || dwords > 240 || ((dwords + 3u) & ~3u) >= 1024u) return 0;
+ 	if (cmd_hdr[0] != 1 || msg_hdr[0] != 1 || cmd_hdr[3] != 1024 ||
+ 	    msg_hdr[3] != 1024 || cmd_hdr[10] >= 1024 || cmd_hdr[11] >= 1024 ||
+ 	    msg_hdr[10] >= 1024 || msg_hdr[11] >= 1024 ||
+@@ -3691,13 +3708,16 @@
+ 			}
+ 			if (type == 1u && msg_id == 126u && size >= 3u && size <= 4u) {
+ 				uint32_t ack[4] = { reply[0], reply[1], reply[2], size >= 4u ? reply[3] : 0u };
++				uint32_t value = 0;
+ 				msg_hdr[10] = (ri + padded) % 1024u;
+-				if (((ack[1] ^ sent) & ~(1u << 19)) || ack[2]) {
+-					printf("QCOM GMU: HFI request id=%u bad ACK hdr=0x%08x req=0x%08x status=0x%08x size=%u\n",
+-					    id, ack[0], ack[1], ack[2], size);
++				if (((ack[1] ^ sent) & ~(1u << 19)) ||
++				    !fp6_gmu_hfi_ack_status_result(ack, size, &value)) {
++					printf("QCOM GMU: HFI request id=%u bad ACK hdr=0x%08x req=0x%08x value=0x%08x status=0x%08x size=%u\n",
++					    id, ack[0], ack[1], ack[2], size >= 4u ? ack[3] : ack[2], size);
+ 					return 0;
+ 				}
+-				printf("QCOM GMU: HFI request id=%u ACK seq=%u status=0x%08x size=%u\n", id, seq, ack[2], size);
++				if (result) *result = value;
++				printf("QCOM GMU: HFI request id=%u ACK seq=%u result=0x%08x size=%u\n", id, seq, value, size);
+ 				return 1;
+ 			}
+ 			if (msg_id == 100u) printf("QCOM GMU: HFI firmware error size=%u code=0x%08x\n",
+@@ -3882,7 +3902,7 @@
+ 
+ static int
+ fp6_gmu_hfi_start_sequence(vm_offset_t smmu, uint32_t cb_off, vm_offset_t g,
+-		uint8_t *mem)
++		uint32_t hfi_version, uint8_t *mem)
+ {
+ 	static const uint32_t ddr_levels[] = { 0, 0x000bebc2u, 0x00209a8eu };
+ 	static const uint32_t cnoc_levels[] = { 0, 0x64u };
+@@ -3930,7 +3950,7 @@
+ 	perf[13] = 0; perf[14] = 0;
+ 	perf[15] = cx_vote[1]; perf[16] = gmu_freq_khz[1];
+ 	perf[17] = cx_vote[2]; perf[18] = gmu_freq_khz[2];
+-	if (!fp6_gmu_hfi_send_req(smmu, cb_off, g, mem, perf, perf_dw, &seq)) return 0;
++	if (!fp6_gmu_hfi_send_req(smmu, cb_off, g, mem, perf, perf_dw, &seq, NULL)) return 0;
+ 	printf("QCOM GMU: HFI GPU perf table ACK gfx=%uMHz ARC=0x%08x GMU=%u/%uMHz\n",
+ 	    gpu_freq_khz / 1000u, gx_vote, gmu_freq_khz[1] / 1000u, gmu_freq_khz[2] / 1000u);
+ 	/* H2F_MSG_BW_VOTE_TBL. First three DDR levels are identical for DDR7/DDR8. */
+@@ -3962,15 +3982,36 @@
+ 			bw[32u + i * 8u + j] = data;
+ 		}
+ 	}
+-	if (!fp6_gmu_hfi_send_req(smmu, cb_off, g, mem, bw, 160u, &seq)) return 0;
++	if (!fp6_gmu_hfi_send_req(smmu, cb_off, g, mem, bw, 160u, &seq, NULL)) return 0;
+ 	printf("QCOM GMU: HFI DDR/CNOC table ACK levels=%u/%u BCM=%08x/%08x/%08x/%08x\n",
+ 	    3u, 2u, bcm[0].addr, bcm[1].addr, bcm[2].addr, bcm[3].addr);
+ 	uint32_t feature[4] = { fp6_hfi_hdr(11u, 4u), 1u, 1u, 0u };
+-	if (!fp6_gmu_hfi_send_req(smmu, cb_off, g, mem, feature, 4u, &seq)) return 0;
++	if (!fp6_gmu_hfi_send_req(smmu, cb_off, g, mem, feature, 4u, &seq, NULL)) return 0;
+ 	feature[0] = fp6_hfi_hdr(11u, 4u); feature[1] = 16u;
+-	if (!fp6_gmu_hfi_send_req(smmu, cb_off, g, mem, feature, 4u, &seq)) return 0;
++	if (!fp6_gmu_hfi_send_req(smmu, cb_off, g, mem, feature, 4u, &seq, NULL)) return 0;
+ 	uint32_t start[2] = { fp6_hfi_hdr(14u, 2u), 0u };
+-	return fp6_gmu_hfi_send_req(smmu, cb_off, g, mem, start, 2u, &seq);
++	if (!fp6_gmu_hfi_send_req(smmu, cb_off, g, mem, start, 2u, &seq, NULL)) return 0;
++	uint32_t context_queues = 0;
++	if (((hfi_version >> 16) & 0xfffu) >= 3u) {
++		uint32_t get_context_queue[3] = { fp6_hfi_hdr(12u, 3u), 121u, 0u };
++		if (!fp6_gmu_hfi_send_req(smmu, cb_off, g, mem, get_context_queue, 3u,
++		    &seq, &context_queues) || context_queues > 1u) {
++			printf("QCOM GMU: HFI context-queue query refused result=%u\n", context_queues);
++			return 0;
++		}
++		printf("QCOM GMU: HFI context queues=%u\n", context_queues);
++	} else {
++		printf("QCOM GMU: HFI context queues unavailable version=0x%08x\n", hfi_version);
++	}
++	/* A810 supports preemption (level 1, GMEM save/restore and skip-save enabled).
++	 * Its Linux feature profile has no HW_FENCE, LPAC or AQE, so keep those off. */
++	uint32_t preemption[4] = { fp6_hfi_hdr(11u, 4u), 2u, 1u, 0xdu };
++	if (!fp6_gmu_hfi_send_req(smmu, cb_off, g, mem, preemption, 4u, &seq, NULL)) return 0;
++	printf("QCOM GMU: HFI preemption enabled level=1 data=0x0000000d\n");
++	uint32_t gpu_start[1] = { fp6_hfi_hdr(10u, 1u) }; /* hfi_start_cmd is one dword */
++	if (!fp6_gmu_hfi_send_req(smmu, cb_off, g, mem, gpu_start, 1u, &seq, NULL)) return 0;
++	printf("QCOM GMU: HFI START ACK; core firmware initialized\n");
++	return 1;
+ }
+ 
+ /* Linux gen8_gmu_device_start() submits this peak-only vote before CM3 start.
+@@ -4161,8 +4202,9 @@
+ 		    v, hfi ? "(HFI initialized)" : "(HFI init timeout)");
+ 		if (hfi) {
+ 			uint8_t *hfi_mem = fp6_gmu_range_va(fp6_gmu_hfi_va);
+-			if (!hfi_mem || !fp6_gmu_hfi_start_sequence(smmu, cb_off, g, hfi_mem))
+-				printf("QCOM GMU: HFI sequence stopped; GMU will be reset\n");
++			if (!hfi_mem || !fp6_gmu_hfi_start_sequence(smmu, cb_off, g,
++			    fp6_smmu_read32(g, 0x3dfecu), hfi_mem))
++				printf("QCOM GMU: HFI startup sequence stopped; GMU will be reset\n");
+ 		}
+ 	}
+ 	/* No HFI command service exists yet. Stop on success as well as failure.

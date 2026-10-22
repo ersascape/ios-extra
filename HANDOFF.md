@@ -11,11 +11,13 @@ file top to bottom, `NOTES.md` (state), then `docs/GPU_GMU_BOOT.md`
 
 ## Goal and ground rules
 
-Goal: a real Adreno 618 GPU driver for the user's iOS/XNU port, on a phone they own.
-The work so far is a ladder of small, opt-in, fully rolled-back kernel experiments
-(`sweetgpu=N`), each built by CI, booted once with a temporary `fastboot boot`, and
-read from a UDP log. Keep that discipline: **one question per boot, measured result,
-then the next question.** The user prefers slow and careful over fast and clever.
+Goal: bring up the Fairphone 6 Adreno 810 (Gen8.3) from authenticated firmware
+through GMU/HFI, GPU memory and command execution (write/readback and draw/readback),
+then an A810-compatible Metal rendering path. Work in `/home/ersa/Dev/ios-extra-main`
+on `main`, remote `ersascape/ios-extra`; use the user's current goal as authoritative.
+Use one temporary `fastboot boot` per measured hardware question, capture USB logs,
+and distinguish source, host, CI and phone evidence. Do not treat a software model as
+device proof.
 
 - Never flash, never touch partitions, never `fastboot getvar`. Boot images only via
   `fastboot boot`, only when the user has put the phone in fastboot (`fastboot
@@ -36,49 +38,37 @@ then the next question.** The user prefers slow and careful over fast and clever
 
 ## Active FP6 GPU state (2026-10-22)
 
-Patch 0159 remains the latest built and phone-tested source: CI `39766804611`
-passed and its packaged image booted once. The phone reported
-`HFI CORE_FW_START timeout/fault irq=0x4 fw=0x900`; Linux identifies bit 2 as
-DBGQ and FW_INIT_RESULT mask `0xe00` as a firmware assertion. The bounded probe
-verified CM3 reset. The debug queue payload was not captured. Source inspection
-found Linux sends scratch, perf/BW tables and optional feature/log controls
-before CORE_FW_START, while patch 0159 sent that command immediately after HFI
-controller initialization.
+Patch 0165 is the current source candidate; it extends the 0164 GPU-access
+allocation path through post-`CORE_FW_START` HFI startup. Patch 0164 commit
+`cacda42725fd0945a6a8df96bf28e27b8d8a2868` passed CI run `39807392802`. Kernel SHA256
+`34e4835aa437df8ecd101fe0b98aba7b18e5a80094ab71ad860976dec0cc7539`.
+A local header-v2 image with the workflow RAM-disk init, matching CI ADT and
+verified stock Volcano DTB is
+`/tmp/ios-extra-run-39807392802/package/fp6-gmu-hfi-gfx-0164.img`, SHA256
+`125860c6c4aa898cb40b5039558d146408d5f5c468fef12c96a979bb6c63b4cc`.
+CI skipped its image because `FP6_STOCK_DTB_URL` is unset; buildtree download
+returned HTTP 503 due to the account egress limit.
 
-Patches 0160 and 0161 passed CI and were packaged; neither has a phone result.
-Patch 0161 dispatches GMU counter and MEM_ALLOC events but refuses allocation.
-The local 0162 candidate services only non-secure GMU-only MEM_ALLOC: permanent
-kernel backing, live page-table append, cache clean, context TLBIALL/TLBSYNC,
-and a Linux-shaped HFI ACK. GPU-access, secure, fence, fixed-MMIO and unsupported
-large-alignment requests still reset CM3 safely. Normal and ASan/UBSan host
-protocol tests pass, including one successful synthetic GMU-only request and a
-GPU-access refusal; the changed source compiles to an arm64 object against CI
-buildtree `39775328855` (`0 of 1 files failed`). This does not reveal the phone's
-actual descriptor or prove firmware acceptance. CI run `39786196862` failed on
-Apple Clang's rejection of a declaration immediately after a C label. The
-response buffer is now declared before the label. Corrected commit `4a14fe7`
-passed CI `39787950216`; verified kernel SHA256 is
-`6d35acc9772c0b0cc740d409505016fd23c5267d230a923a830ca15561678934`. Automatic
-image packaging skipped because `FP6_STOCK_DTB_URL` is unset, so the kernel was
-locally packaged with the verified product ADT/stock DTB as
-`/tmp/ios-extra-run-39787950216/package/fp6-gmu-hfi-memalloc-0162.img`, SHA256
-`30fc97daccfa67230e2f2bedac463591b2f310e285b9ac0c2d1fbc1730ed502d`. Header-v2
-round-trip passed. No 0162 phone test exists. The user is testing Android, so
-defer all device commands. No GPU execution has been demonstrated.
+The 0164 candidate connects GPU-access HFI `MEM_ALLOC` to permanent backing,
+the 20 MiB TTBR1 aperture and GPU SID0/CB0; if `GMU_ACC` is also set, it maps
+the same backing into the live GMU domain. Host tests cover context setup with
+the measured TBI/ASIDPNE readbacks and a synthetic GFX_ACC request through the
+ACK and page-table walk. Normal, ASan/UBSan, and local arm64 object checks pass.
+These results do not prove the phone's actual descriptor, firmware acceptance,
+or any device DMA. The unbuilt 0165 patch adds Gen8 v5 ACK result decoding,
+context-queue capability query, A810 preemption feature control, and the
+one-dword HFI `START` request. It follows the Fairphone module source at
+`54c948d9b30c2ba01835e64c36b68b80692554ac`; HW_FENCE remains off because XNU
+does not provide its required service. Normal and ASan/UBSan host probes pass,
+and local arm64 compilation reports `0 of 1 files failed`. No CI build or phone
+test exists for 0165, so this is not yet evidence of firmware acceptance.
+The last device check returned zero; a one-shot RAM-disk boot and USB log are
+pending. Do not flash or use `fastboot getvar`.
 
-The permission-aware 0162 follow-up maps GMU allocation pages read-only by
-default; `GMU_WRITEABLE` enables writes and `GMU_PRIV` selects privileged-only
-access. It also sets nG/AF/outer-shareable attributes. Normal/sanitizer host
-tests and broad GPU probe tests pass. CI `39792609801` stopped before
-compilation on a stale patch hunk count; corrected commit `42e746f` passed CI
-`39793471917`. Kernel SHA-256 is
-`e4dbf5cb1acfd17f19273cf1bdd0baf53f790e88a856bd37127c2a54abcdbd2c`. Locally
-packaged image
-`/tmp/ios-extra-run-39793471917/package/fp6-gmu-hfi-memalloc-permissions.img`
-SHA-256 `897b67af46ec1b0da14dc927a5a3234ed462abed90be3874500a391093f18e22`
-passed header-v2 round-trip. No phone test exists and the actual descriptor is
-unknown. The user is testing Android; run no device commands until they say they
-are done.
+Earlier phone evidence remains: patch 0159's CORE_FW_START path asserted with
+`irq=0x4 fw=0x900` and the bounded path verified CM3 reset. Patches 0160–0165
+have no phone result. No GPU command execution, GPU write/readback, draw/readback,
+or Metal rendering has been demonstrated.
 
 - Work in this checkout on `main`; remote is `ersascape/ios-extra`. The goal is
   FP6 Adreno 810 GMU firmware/HFI, then bounded GPU execution and an A810 Metal

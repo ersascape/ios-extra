@@ -140,6 +140,7 @@ class GPUProbeTests(unittest.TestCase):
             self.assertIn('PASS: GMU buffers 29 ATOS checks', result.stdout)
             self.assertIn('PASS: GPU SID0 TTBR1 setup accepts measured TBI/ASIDPNE readbacks', result.stdout)
             self.assertIn('PASS: HFI GFX_ACC allocation returns a live GPU TTBR1 mapping', result.stdout)
+            self.assertIn('PASS: HFI GET_VALUE and one-dword START share the bounded queue dispatcher', result.stdout)
             self.assertIn('PASS: 14 clock/cache cases, 30 ARC cases + 512 mutations, 61 CX experiment cases', result.stdout)
             self.assertIn('PASS: FP6 GPUCC inventory is opt-in, read-only, and bounded', result.stdout)
             self.assertIn('PASS: FP6 Qualcomm SCM PAS query is opt-in and never authenticates firmware', result.stdout)
@@ -177,6 +178,9 @@ static uint32_t fp6_smmu[0x40000 / 4];
 static uint32_t fp6_gicd[0x10000 / 4];
 static uint32_t fp6_gcc_gpu[0x1000 / 4];
 static uint32_t fp6_gmu_regs[0x68000/4], fp6_gcc_pll[0x1000/4], fp6_gcc_votes[0x1000/4];
+static uint8_t *hfi_fake_mem;
+static uint32_t hfi_fake_result;
+static int hfi_fake_enabled;
 static int fp6_gmu_clock_model, fp6_root_stuck, fp6_fail_pll_map;
 static int fp6_clock_refuse = -1;
 static int fp6_power_mode;
@@ -228,6 +232,26 @@ static int smmu_sticky; /* hardware that refuses to take the ABL default back in
 static void test_store32(vm_offset_t base, uint32_t off, uint32_t value)
 {
     all_mmio_writes++;
+    if (hfi_fake_enabled && base == (vm_offset_t)fp6_gmu_regs && off == 0x47650u) {
+        uint32_t *table = (uint32_t *)(void *)hfi_fake_mem;
+        uint32_t *cmd_hdr = table + 6, *msg_hdr = table + 18;
+        uint32_t *cmdq = table + FP6_GMU_HFI_QUEUE0 / 4;
+        uint32_t *msgq = table + (FP6_GMU_HFI_QUEUE0 + 0x1000u) / 4;
+        uint32_t request = cmdq[cmd_hdr[10]];
+        cmd_hdr[10] = cmd_hdr[11]; /* GMU consumed the command. */
+        unsigned wi = msg_hdr[11];
+        msgq[(wi + 0u) % 1024u] = (1u << 16) | (4u << 8) | 126u;
+        msgq[(wi + 1u) % 1024u] = request;
+        msgq[(wi + 2u) % 1024u] = hfi_fake_result;
+        msgq[(wi + 3u) % 1024u] = 0; /* GMU_SUCCESS */
+        msg_hdr[11] = (wi + 4u) % 1024u;
+        fp6_gmu_regs[0x47648u / 4u] = 1u;
+        return;
+    }
+    if (hfi_fake_enabled && base == (vm_offset_t)fp6_gmu_regs && off == 0x47644u) {
+        fp6_gmu_regs[0x47648u / 4u] &= ~value;
+        return;
+    }
     if (fp6_gmu_clock_model && base == (vm_offset_t)fp6_gpucc) {
         if (off == 0x931c || off == 0x93f0)
             assert(!(fp6_gpucc[(off-4)/4] & (1u << 31))); /* root before CFG */
@@ -747,6 +771,42 @@ static void irq_defaults(void)
 
 int main(void)
 {
+    /* Gen8 HFI v5 GET_VALUE returns data in ACK[2], status in ACK[3]. */
+    uint32_t hfi_result = 0xffffffffu;
+    uint32_t hfi_ack_v5[] = {0, 0, 1, 0};
+    assert(fp6_gmu_hfi_ack_status_result(hfi_ack_v5, 4, &hfi_result) && hfi_result == 1);
+    hfi_ack_v5[3] = 4; hfi_result = 0xffffffffu;
+    assert(!fp6_gmu_hfi_ack_status_result(hfi_ack_v5, 4, &hfi_result) && hfi_result == 1);
+    uint32_t hfi_ack_legacy[] = {0, 0, 0}; hfi_result = 0xffffffffu;
+    assert(fp6_gmu_hfi_ack_status_result(hfi_ack_legacy, 3, &hfi_result) && hfi_result == 0);
+    hfi_ack_legacy[2] = 1;
+    assert(!fp6_gmu_hfi_ack_status_result(hfi_ack_legacy, 3, &hfi_result));
+    assert(!fp6_gmu_hfi_ack_status_result(hfi_ack_legacy, 2, &hfi_result));
+
+    /* Exercise queue ownership/ACK parsing for GET_VALUE and Gen8's one-dword START. */
+    static uint8_t hfi_queue_mem[FP6_GMU_HFI_SIZE];
+    memset(hfi_queue_mem, 0, sizeof(hfi_queue_mem));
+    uint32_t *hfi_table = (uint32_t *)(void *)hfi_queue_mem;
+    uint32_t *hfi_cmd_hdr = hfi_table + 6, *hfi_msg_hdr = hfi_table + 18;
+    hfi_cmd_hdr[0] = hfi_msg_hdr[0] = 1u;
+    hfi_cmd_hdr[1] = fp6_gmu_hfi_va + FP6_GMU_HFI_QUEUE0;
+    hfi_msg_hdr[1] = fp6_gmu_hfi_va + FP6_GMU_HFI_QUEUE0 + 0x1000u;
+    hfi_cmd_hdr[3] = hfi_msg_hdr[3] = 1024u;
+    hfi_fake_mem = hfi_queue_mem; hfi_fake_result = 1; hfi_fake_enabled = 1;
+    unsigned hfi_sequence = 0; uint32_t hfi_value = 0;
+    uint32_t get_context_queue[3] = { fp6_hfi_hdr(12u, 3u), 121u, 0u };
+    assert(fp6_gmu_hfi_send_req((vm_offset_t)fp6_smmu, 0x20000u,
+        (vm_offset_t)fp6_gmu_regs, hfi_queue_mem, get_context_queue, 3u,
+        &hfi_sequence, &hfi_value));
+    assert(hfi_value == 1u && hfi_sequence == 1u);
+    uint32_t gpu_start[1] = { fp6_hfi_hdr(10u, 1u) };
+    assert(fp6_gmu_hfi_send_req((vm_offset_t)fp6_smmu, 0x20000u,
+        (vm_offset_t)fp6_gmu_regs, hfi_queue_mem, gpu_start, 1u,
+        &hfi_sequence, NULL));
+    assert(hfi_sequence == 2u);
+    hfi_fake_enabled = 0;
+    puts("PASS: HFI GET_VALUE and one-dword START share the bounded queue dispatcher");
+
     /* Match the measured SMMU IDs and its TBI/ASIDPNE readback quirks while
      * enabling the isolated GPU TTBR1 context. The refused preflight must not write. */
     memset(fp6_smmu, 0, sizeof(fp6_smmu));

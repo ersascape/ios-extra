@@ -1,3 +1,24 @@
+## FP6 post-CORE_FW_START HFI candidate 0165 (2026-10-22)
+
+- Source review of Fairphone SM7635 graphics-kernel commit
+  `54c948d9b30c2ba01835e64c36b68b80692554ac` confirms Gen8 HFI version minor
+  7 uses the inline ACK layout: result at dword 2 and GMU status at dword 3.
+  The measured firmware version `0x20070001` therefore needs that parser. The
+  A810 `gen8_3_0` profile advertises preemption level 1 and does not advertise
+  LPAC or AQE. Linux queries context-queue support for HFI minor >= 3, sends
+  preemption feature 2 with data `0xD`, and sends `H2F_MSG_START` as one dword.
+- Patch 0165 implements those steps after `CORE_FW_START`, while preserving
+  HFI event handling for MEM_ALLOC and counter-registration requests. It leaves
+  HW_FENCE disabled because Linux obtains that backing from a separate hardware
+  fence service that XNU does not implement. It does not yet start GX or submit
+  GPU commands.
+- Host HFI queue peer and ACK-format checks pass, as do the GMU domain, GPU
+  global-domain, and normal plus ASan/UBSan GPU probe tests. Local arm64 compile
+  of `sweet_gpu.c` against CI buildtree `39793471917` reports `0 of 1 files
+  failed`. Source/host/compiler results only: no CI build or 0165 phone test
+  exists yet. The 0164 package remains the most recent image; no GPU execution,
+  readback, draw or Metal result is established.
+
 ## FP6 GPU global HFI allocation candidate 0164 (2026-10-22)
 
 - Commit `cacda42725fd0945a6a8df96bf28e27b8d8a2868` passed CI run

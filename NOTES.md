@@ -1,5 +1,28 @@
 # ios-extra — current state
 
+## FP6 post-CORE_FW_START HFI candidate 0165 (2026-10-22)
+
+- Added the source-matched post-CORE_FW_START exchange: read the measured DTCM
+  HFI version and query `HFI_VALUE_CONTEXT_QUEUE` only for minor version >= 3;
+  decode Gen8 v5 ACK data from dword 2 and status from dword 3; send preemption
+  feature control with Linux A810 profile data `0xD` (level 1, GMEM save,
+  skip save/restore); then send the one-dword `H2F_MSG_START`. Fairphone's
+  `adreno_gpu_core_gen8_3_0` profile has preemption but not HW_FENCE, LPAC or
+  AQE, so those feature controls are not enabled. Existing event dispatch stays
+  active while waiting for each ACK and can map MEM_ALLOC requests before reply.
+- The A810 firmware HFI version `0x20070001` is measured in the 0159 phone log
+  (`/tmp/ios-extra-run-39766804611/logs/phone-0159-gmu-hfi-core-start.txt`), so
+  the context-queue query is enabled for this device. The 0165 source candidate
+  is exercised by a host HFI queue peer: GET_VALUE returns 1 in the v5 ACK, the
+  next request is exactly one dword, and both ACKs are validated. GMU domain,
+  GPU global-domain and GPU probe tests pass. `tools/xnu-cc.py` compiles
+  `sweet_gpu.c` against CI buildtree `39793471917` (`0 of 1 files failed`).
+- No CI build or phone test exists for 0165 yet. The 0164 image remains the
+  latest package; `fastboot devices` returned zero. The next gate is one CI build
+  for 0165, then package that exact kernel and run the existing temporary-boot
+  test when the FP6 is in fastboot. Firmware acceptance and GPU execution remain
+  unproven.
+
 ## GMU cacheability source check (2026-10-22)
 
 - Read-only Fairphone Gen8.3 source review corrected a possible false alarm in

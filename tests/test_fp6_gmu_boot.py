@@ -392,7 +392,12 @@ int main(void) {
 '''
 with tempfile.TemporaryDirectory(prefix='fp6-gmu-boot-') as td:
     work=Path(td)
+    # This harness models the standalone GMU-only MEM_ALLOC boundary. GPU-global
+    # allocations are exercised by test_fp6_gpu_global_domain.py and the GPU
+    # probe harness, which provide the required GPU domain peer.
     for patch in sorted((ROOT/'xnu/patches').glob('*.patch')):
+        if int(patch.name[:4]) > 162:
+            continue
         if b'+++ b/bsd/dev/sweet_gpu.c\n' in patch.read_bytes():
             subprocess.run(['git','apply','--include=bsd/dev/sweet_gpu.c',str(patch)],cwd=work,check=True)
     source=(work/'bsd/dev/sweet_gpu.c').read_text()
