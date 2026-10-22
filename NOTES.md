@@ -1,5 +1,20 @@
 # ios-extra — current state
 
+## FP6 GPU global-memory source audit (2026-10-22)
+
+- Read-only Fairphone SM7635 kernel review confirms GPU SID 0 uses the
+  `qcom,adreno-smmu` path with split TTBR0/TTBR1 and QCOM ARM64 LPAE S1.
+  Linux reserves CB0/CB1 for GPU SID 0 and starts non-GPU client allocation at
+  CB2. The measured SMMU reports 48-bit VA / 36-bit PA. KGSL's global GPU VA
+  starts at `0x0001ff8000000000` in a 20 MiB aperture; SMMU mapping
+  sign-extends it for TTBR1 and maps system-memory scatterlists.
+  Its HFI GPU-access allocation is therefore not satisfied by the current
+  32-bit GMU-only domain. The XNU GPU path needs an independent SID 0 TTBR1
+  domain, GPU VA/global-buffer mapping and matching cache ownership. Exact
+  hardware allocation flags still need to be checked against the phone log.
+- Source-only finding recorded in `docs/FP6_ADRENO_METAL_AUDIT.md`. No code
+  change, build, or phone observation in this pass; Android remains in use.
+
 ## FP6 GMU-only HFI allocation follow-up (0162, 2026-10-22)
 
 - Source-review correction to 0162: GMU S1 PTE permissions now follow the

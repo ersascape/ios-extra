@@ -198,3 +198,35 @@ uses `NativeAdrenoGpuPublished`; its system-plugin route defaults to
 sandbox integration choices need review for the FP6 OS build. They do not
 replace the kernel functionality behind the ABI or prove compatibility with
 all Apple's accelerator contracts.
+
+## GPU global memory and split SMMU translation (source review, 2026-10-22)
+
+Fairphone's SM7635 kernel confirms the FP6 GPU uses the `qcom,adreno-smmu`
+path. `kgsl_iommu_check_config()` enables `KGSL_MMU_IOPGTABLE` for that
+compatible. `qcom_adreno_smmu_init_context()` enables split TTBR0/TTBR1 only
+for the GPU device (SID 0), and the regular ARM SMMU setup selects
+`QCOM_ARM_64_LPAE_S1` using the SMMU's VA/PA widths and supported page sizes.
+The implementation allocates GPU contexts from CB0/CB1; non-GPU clients start
+at CB2. The measured FP6 SMMU reports UBS=48-bit VA and OAS=36-bit PA. This
+differs from the 32-bit, TTBR0-only GMU domain in XNU patch 0162, which uses a
+client context at CB2 or above.
+
+KGSL's global page table uses `KGSL_IOMMU_SPLIT_TABLE_BASE`
+(`0x0001ff8000000000`) when the Adreno SMMU I/O page-table path is active.
+Global allocations occupy a 20 MiB aperture there. For SMMU mapping, KGSL
+sign-extends the high VA into the TTBR1 canonical range, then maps backing
+scatterlist pages into the GPU user context (and LPAC context when present).
+`kgsl_allocate_global()` requests system memory; it is not inherently one
+physically contiguous allocation. The HFI response retains the GPU address.
+
+The Linux S1 permissions are `READ|WRITE|NOEXEC` by default, with write
+removed for `GPUREADONLY`, privileged access added for `GFX_PRIV`, and cache
+attributes selected by KGSL flags. The QCOM LPAE walker emits nG, AP and
+shareability attributes from those flags. XNU's current 0162 mapping only
+supports the GMU's 32-bit `0x60000000..0x7fffffff` aperture and does not create
+a GPU SID 0 mapping. A GPU-access HFI reply therefore needs a separate GPU
+TTBR1-capable page-table/domain on a GPU-reserved bank (CB0 or CB1), plus
+matching cache ownership; adding only another GMU mapping or reusing its
+32-bit table would return an unusable GPU address.
+
+This is source inspection only. No code, build, or phone result is claimed.
