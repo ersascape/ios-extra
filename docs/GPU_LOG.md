@@ -1,3 +1,22 @@
+## FP6 GPU global HFI allocation candidate 0164 (2026-10-22)
+
+- Commit `cacda42725fd0945a6a8df96bf28e27b8d8a2868` passed CI run
+  `39807392802`; XNU build and FP6 workflow passed. Kernel SHA-256
+  `34e4835aa437df8ecd101fe0b98aba7b18e5a80094ab71ad860976dec0cc7539`.
+  The workflow skipped its temporary image because `FP6_STOCK_DTB_URL` is not
+  configured. Downloading the `xnu-buildtree` artifact separately returned
+  HTTP 503 because of the GitHub account egress limit.
+- Locally packaged with the CI ADT, verified stock Volcano DTB and minimal
+  RAM-disk init. Header-v2 round-trip passed. Image
+  `/tmp/ios-extra-run-39807392802/package/fp6-gmu-hfi-gfx-0164.img`, SHA-256
+  `125860c6c4aa898cb40b5039558d146408d5f5c468fef12c96a979bb6c63b4cc`.
+  It uses `rd=md0` and enables the SMMU/GMU HFI path with USB logging. No flash
+  is involved. `fastboot devices` returned no device, so there is no phone
+  observation yet.
+- Host tests exercise a synthetic `GFX_ACC` allocation and verify the ACK's
+  GPU VA against its published TTBR1 page-table walk. Hardware request values,
+  firmware acceptance, GPU execution and Metal are still unverified.
+
 # GPU bring-up log (chronological, newest first)
 
 ## FP6 HFI GMU allocation permissions review (2026-10-22)

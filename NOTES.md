@@ -21,11 +21,25 @@
   pass. `sweet_gpu.c` cross-compiles to arm64 against CI buildtree
   `39793471917` (`0 of 1 files failed`), and the patch series applies in the host
   harness. This is source/host/compiler evidence only.
-- CI has not yet built this candidate. No phone has tested it; the
-  phone's next real `MEM_ALLOC` descriptor, GMU acceptance, SID0 route, GPU
-  execution and Metal are unverified. The CI build and temporary image are the
-  next review point; do not treat the modeled ACK or software walk as proof of
-  device DMA.
+- Commit `cacda42725fd0945a6a8df96bf28e27b8d8a2868` passed CI run
+  `39807392802`; both the XNU build and FP6 workflow completed successfully.
+  CI kernel SHA-256 is
+  `34e4835aa437df8ecd101fe0b98aba7b18e5a80094ab71ad860976dec0cc7539` and
+  SHA256SUMS passed. CI skipped its image because `FP6_STOCK_DTB_URL` is unset.
+  The `xnu-buildtree` artifact download returned HTTP 503 (account egress limit),
+  so no extracted CI tree comparison was possible; CI itself built the pushed
+  source successfully.
+- Locally packaged the verified CI kernel and matching CI ADT with the verified
+  stock Volcano DTB, plus the workflow's minimal RAM-disk init. Header-v2
+  unpack/round-trip passed. Image
+  `/tmp/ios-extra-run-39807392802/package/fp6-gmu-hfi-gfx-0164.img`, SHA-256
+  `125860c6c4aa898cb40b5039558d146408d5f5c468fef12c96a979bb6c63b4cc`.
+  It boots `rd=md0` with `fp6smmu=2 fp6smmupower=1 fp6gmuload=1 fp6gmuboot=1`
+  and USB logging enabled. No partitions are written. `fastboot devices` showed
+  no device, so the temporary boot and phone result are pending.
+- The phone's next real `MEM_ALLOC` descriptor, GMU acceptance, SID0 route,
+  GPU execution and Metal remain unverified. Do not treat the modeled ACK or
+  software walk as proof of device DMA.
 
 ## FP6 GPU global-memory source audit (2026-10-22)
 
