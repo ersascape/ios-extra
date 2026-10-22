@@ -1,0 +1,44 @@
+# Capture powered SMMU state before the CB2 ATOS diagnostic mutates any route
+# or context. This is read-only telemetry for the CB0 global-map refusal.
+diff --git a/bsd/dev/sweet_gpu.c b/bsd/dev/sweet_gpu.c
+index dbee929..e4f2a61 100644
+--- a/bsd/dev/sweet_gpu.c
++++ b/bsd/dev/sweet_gpu.c
+@@ -2733,6 +2733,37 @@ fp6_smmu_clocks_get(struct fp6_smmu_clocks *clocks)
+ 			if (poll == 1000) goto fail;
+ 		}
+ 	}
++	/* Snapshot the context window after CX/clock power, before the CB2
++	 * translation diagnostic or GMU firmware can touch SMMU state. */
++	vm_offset_t smmu = ml_io_map(FP6_GPU_SMMU_PA, FP6_GPU_SMMU_SIZE);
++	if (smmu) {
++		uint32_t id0 = fp6_smmu_read32(smmu, FP6_SMMU_IDR0);
++		uint32_t id1 = fp6_smmu_read32(smmu, FP6_SMMU_IDR1);
++		unsigned groups = id0 & FP6_SMMU_ID0_NUMSMRG;
++		unsigned shift = (id1 & FP6_SMMU_ID1_PAGESIZE) ? 16u : 12u;
++		unsigned pages = 1u << (((id1 >> 28) & 7u) + 1u);
++		uint32_t cb = (uint32_t)((uint64_t)pages << shift);
++		uint32_t gr1 = 1u << shift;
++		printf("QCOM SMMU: powered baseline CB0 CBAR=0x%08x CBA2R=0x%08x SCTLR=0x%08x TCR=0x%08x TCR2=0x%08x\n",
++		    fp6_smmu_read32(smmu, gr1), fp6_smmu_read32(smmu, gr1 + 0x800u),
++		    fp6_smmu_read32(smmu, cb + FP6_SMMU_CB_SCTLR),
++		    fp6_smmu_read32(smmu, cb + FP6_SMMU_CB_TCR),
++		    fp6_smmu_read32(smmu, cb + FP6_SMMU_CB_TCR2));
++		printf("QCOM SMMU: powered baseline CB0 TTBR0=0x%016llx TTBR1=0x%016llx MAIR0=0x%08x MAIR1=0x%08x FSR=0x%08x\n",
++		    (unsigned long long)fp6_smmu_read64(smmu, cb + FP6_SMMU_CB_TTBR0),
++		    (unsigned long long)fp6_smmu_read64(smmu, cb + FP6_SMMU_CB_TTBR1),
++		    fp6_smmu_read32(smmu, cb + FP6_SMMU_CB_MAIR0),
++		    fp6_smmu_read32(smmu, cb + FP6_SMMU_CB_MAIR1),
++		    fp6_smmu_read32(smmu, cb + FP6_SMMU_CB_FSR));
++		for (unsigned i = 0; i < groups; i++) {
++			uint32_t smr = fp6_smmu_read32(smmu, FP6_SMMU_SMR(i));
++			uint32_t s2cr = fp6_smmu_read32(smmu, FP6_SMMU_S2CR(i));
++			if (i < 2 || smr || s2cr != 0x00020000u)
++				printf("QCOM SMMU: powered baseline group=%u SMR=0x%08x S2CR=0x%08x\n", i, smr, s2cr);
++		}
++	} else {
++		printf("QCOM SMMU: powered baseline map failed; no context writes\n");
++	}
+ 	return 1;
+ fail:
+ 	printf("QCOM SMMU: prerequisite clock failed index=%u; no context writes\n", clocks->acquired ? clocks->acquired - 1 : 0);
