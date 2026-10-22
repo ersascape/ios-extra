@@ -1,0 +1,34 @@
+diff --git a/bsd/dev/sweet_gpu.c b/bsd/dev/sweet_gpu.c
+index 0000000..0000000 100644
+@@ -3009,7 +3009,10 @@
+ 	(void)ml_set_interrupts_enabled(irq_was_enabled);
+ 
+ 	uint64_t cx_before, cpu_before, cx_after, cpu_after;
+-	if (!fp6_gmu_cx_counter_read(cx, &cx_before)) return 0;
++	if (!fp6_gmu_cx_counter_read(cx, &cx_before)) {
++		printf("QCOM GMU: CX timer seed counter read failed\n");
++		return 0;
++	}
+ 	cpu_before = fp6_gmu_test_counter();
+ 	uint64_t initial_error = cx_before > cpu_before ? cx_before - cpu_before : cpu_before - cx_before;
+ 	if (initial_error > frequency / 1000u) {
+@@ -3019,9 +3022,17 @@
+ 		return 0;
+ 	}
+ 	delay(1000);
+-	if (!fp6_gmu_cx_counter_read(cx, &cx_after)) return 0;
++	if (!fp6_gmu_cx_counter_read(cx, &cx_after)) {
++		printf("QCOM GMU: CX timer delayed counter read failed\n");
++		return 0;
++	}
+ 	cpu_after = fp6_gmu_test_counter();
+-	if (cpu_after <= cpu_before || cx_after <= cx_before) return 0;
++	if (cpu_after <= cpu_before || cx_after <= cx_before) {
++		printf("QCOM GMU: CX timer did not advance CPU=0x%llx->0x%llx CX=0x%llx->0x%llx\n",
++		    (unsigned long long)cpu_before, (unsigned long long)cpu_after,
++		    (unsigned long long)cx_before, (unsigned long long)cx_after);
++		return 0;
++	}
+ 	uint64_t cpu_delta = cpu_after - cpu_before;
+ 	uint64_t cx_delta = cx_after - cx_before;
+ 	uint64_t delta_error = cpu_delta > cx_delta ? cpu_delta - cx_delta : cx_delta - cpu_delta;

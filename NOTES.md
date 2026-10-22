@@ -75,6 +75,18 @@
 - Replaced the persistent-table physical-address scan (up to 2,048 candidate L3 entries on every page walk) with direct L1/L2/L3 selection from the IOVA, while retaining physical-address checks. Corrected the patch hunk count; `git apply --numstat` parses it. Host coverage now checks the ATOSNS path issues no ATS write and returns the expected PA, and checks direct persistent table lookup at all three levels.
 - `python3 tests/test_gpu_probe.py` passes. Full host suite: 12 tests pass normally and with ASan/UBSan (`ASAN_OPTIONS=detect_leaks=0`). The phone report passes the software walk; no screen confirmation is recorded.
 
+## Timer failure diagnostics follow-up (2026-10-22)
+
+- The latest `ml_get_hwclock()` image reached `upload refused: CX timer
+  synchronization failed`; no USB capture was produced, so the exact failing
+  branch is unknown. Source review found silent returns if either CX counter
+  read fails or if CPU/CX counters do not advance during the bounded 1 ms
+  check.
+- Added patch 0151 to print which counter read failed, or both before/after
+  values when the counters do not advance. Verified it applies to the exact
+  source tree from CI run `39732507544`. This is source-level verification
+  only; CI and phone results are pending.
+
 ## Current FP6 GPU path
 
 The target is FP6 Adreno 810 Gen8.3. Patches 0148/0149 booted on the phone: the corrected GPU PLL/GMU clocks came up, 159 persistent pages were checked/uploaded, GMU firmware reported `FW_INIT_RESULT=0x100`, HFI controller initialization reported `HFI_CTRL_STATUS=1`, and CM3 reset was verified afterward. The photo records early GPU lines; the later USB capture started after that segment. GMU DMA and HFI command processing are still unproven.
