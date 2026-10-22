@@ -24,56 +24,54 @@ GMU DMA, GPU command, rendering or Metal work has succeeded yet.
 
 ## Current source state
 
-- HEAD `8462f999359f501ec523daaf1852693e3f384db6` includes patch 0155, which
-  fixes patch 0154's post-lookup slave-ID check. It passes CI `39755620038` and
-  the targeted `tests/test_fp6_gmu_boot.py` ASan/UBSan host harness.
-- Patch 0154 implements a Linux-equivalent bootstrap DDR BCM vote before CM3
-  release. It reads the cmd-db at `0x81c60000`, requests the stock FP6 minimum
-  peak DDR rate (`0x209a8e` kB/s = 2,136,718 kB/s), and sends SH0/MC0/fixed ACV
-  via one idle ACTIVE RSC TCS. It bounds completion and keeps CM3 reset if any
-  precondition or acknowledgment is uncertain.
-- The first 0154 image used the wrong cmd-db slave ID 3 (ARC). ID 5 is BCM per
-  Fairphone `include/soc/qcom/cmd-db.h` (`ARC=3, VRM=4, BCM=5`). The second
-  phone log does **not** say metadata missing; it only has the generic vote
-  refusal. Source review found the stale check `(addr >> 16) == 3` after the
-  lookup, and the host fixture also modeled addresses as `0x300xx`. Patch 0155
-  changes address validation to BCM ID 5 and the fixture to `0x500xx`. This is
-  the likely reason for the ID-5 boot refusal, but it remains unverified on
-  hardware. No BCM write has succeeded.
+- Baseline HEAD `8462f999359f501ec523daaf1852693e3f384db6` (patch 0155) passed
+  CI `39755620038`; targeted `tests/test_fp6_gmu_boot.py` passes with
+  ASan/UBSan. CI kernel SHA256:
+  `72a9a9d0166fd390caf96beeec39d4e08671f3285e18acadbbb58b0229cd5683`.
+- Patch 0154 adds the Linux-path minimum DDR vote before CM3 release: peak
+  bandwidth `0x209a8e` kB/s, SH0/MC0 plus fixed ACV, with bounded RSC TCS
+  completion and fail-closed reset behavior. Patch 0155 corrects the BCM address
+  ID check. On hardware, SH0/MC0 metadata passes but ACV is not found. No vote
+  command was issued in that run.
+- Candidate patch 0156 mirrors Linux `cmd_db_get_header()` by scanning populated
+  slave headers in order and tracking the selected header ID. It requires SH0/MC0
+  to resolve as BCM ID 5 and validates address/header consistency and auxiliary
+  data. Host fixture places ACV in the following ARC header. ASan/UBSan passes;
+  patch dry-run passes against the exact CI 39755620038 buildtree. Patch 0156 is
+  not built or phone-tested yet.
 
 ## Latest build and phone evidence
 
-- CI `39752494051`, commit `4f68fcb...`, passed. Kernel SHA256
-  `1d67f88580dffa942cbc54e1b8b68c5d6f360de31dac6c16d8c3512b56eff9e8`.
-- Header-v2 image (includes `fp6usb=2` for ECM):
-  `/tmp/ios-extra-run-39752494051/package/fp6-gmu-bootstrap-ddr-vote-cmdb5.img`
-  SHA256 `fe97c9fadae1388605b37124550677f596201c3f51bdc151afd6e80d4f835494`.
-  It contains the verified local FP6 ADT and Volcano DTB; package round-trip
-  passed. Full manifest is beside the image.
-- One authorized temporary boot reached ping and captured 96 UDP packets,
-  19,232 decoded log bytes. Decoded log:
-  `/tmp/ios-extra-run-39752494051/logs/phone-0154b-bootstrap-ddr-vote.txt`,
-  SHA256 `dc1eb8596dfaee7c70f0c8a40f056468c235fbf2b9f513361d10cd68aae2f602`.
-  Pcap SHA256 `c94751cca1fbba39e8129d11d3e3da7ae9ff5bb782498d522cd0a652f918b4d9`.
-- Observed before the refusal: SMMU software page-table walk passes, MX/CX
-  floors and GMU clocks succeed, CX timer seeds, 159 persistent pages are
-  checked, firmware upload returns 0, firmware version words are readable.
-  The optional SCM `GPU_INIT_CX_REGS` service is unavailable as on previous
-  boots. The code then refuses before CM3 release because SH0 metadata lookup
-  fails. Thus this boot did not execute GMU firmware or test HFI/GPU DMA.
+- CI `39755620038`, commit `8462f999359f501ec523daaf1852693e3f384db6`, passed
+  the XNU build and FP6 boot job. CI packaging was skipped because
+  `FP6_STOCK_DTB_URL` is unset. Kernel SHA256 is recorded above.
+- Locally packaged with verified product ADT and stock Volcano DTB. Header-v2
+  round-trip passed. Image:
+  `/tmp/ios-extra-run-39755620038/package/fp6-gmu-bcm-address-id.img`, SHA256
+  `0d4ff5ab9ee7aef5a1139841bcf6a909ed20d0be7ac73c65b43cf7899bbbf24a`.
+- One temporary boot reached USB ECM and captured 93 UDP packets. Decoded log
+  `/tmp/ios-extra-run-39755620038/logs/phone-0155-bcm-address-id.txt`, SHA256
+  `6a7bb87ec85d75558f95e9b1e81e6ec5d75e13657054ce097c0ed47a56e7ca0e`; pcap
+  SHA256 `d437f9b66424434075057c7951f4fa7a40967c6f57f2f1e9e78d3d99b72b2ea7`.
+- SMMU walk, floors, clocks, timer, persistent-page checks, and firmware upload
+  succeeded as in prior runs. The log then reports missing ACV metadata and
+  stops before CM3 release. Thus this boot did not execute GMU firmware or test
+  HFI/GPU DMA. The optional SCM `GPU_INIT_CX_REGS` service remains unavailable.
 
 ## Next debugging step
 
 Patch 0155 corrected post-lookup address validation; the phone shows SH0/MC0
-pass and ACV missing. Linux `cmd_db_get_header()` searches all populated slave
-headers, but our parser currently filters to ID 5. Inspect cmd-db ordering and
-ACV metadata semantics, then reproduce Linux name lookup while retaining explicit
-validation of each address and aux record. Do not relax fail-closed behavior or
-send a guessed TCS vote.
+pass and ACV missing. Linux `cmd_db_get_header()` searches populated slave
+headers in order, but the old parser filtered to ID 5. Candidate patch 0156 now
+mirrors Linux name lookup, records the selected header ID, requires SH0/MC0 to
+be BCM ID 5, and validates address/header consistency and aux data. Its host
+fixture places ACV in ARC header 3; ASan/UBSan passes and the patch dry-runs on
+CI buildtree `39755620038`. Patch 0156 is not yet built or phone-tested. Do not
+relax fail-closed behavior or send a guessed TCS vote.
 
-After the lookup behavior is validated against Linux and host fixtures, run the
-targeted host test and compile, commit/push one focused patch, wait for CI, package
-with the known local ADT/DTB, then perform one temporary boot. After an acknowledged vote, the next source
+Patch 0156 has passed host/source checks. Commit and push this focused candidate,
+wait for CI, package with the known local ADT/DTB, then perform one temporary boot
+to learn whether the live ACV lookup and bus vote are accepted. After an acknowledged vote, the next source
 milestone is HFI table/start-message exchange with pre-mapped MEM_ALLOC handling
 and explicit cache ownership. Only then implement a tiny GPU memory write and
 readback. Rendering/Metal is later; no display change is expected from the

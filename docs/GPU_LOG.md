@@ -14,10 +14,13 @@
   Full files are in `/tmp/ios-extra-run-39755620038/logs/`.
 - 0155 fixed the BCM slave-ID check: it passes SH0 and MC0, then reports
   `bootstrap BCM metadata missing name=ACV`. No TCS vote was sent and CM3 stayed
-  reset. The Linux cmd-db resolver scans all populated slave headers, while this
-  parser only scans ID 5. Next determine ACV's live header/aux format and match
-  Linux name-resolution semantics without weakening address and metadata checks.
-  No firmware execution, HFI exchange, GPU command or render was tested.
+  reset. Linux `cmd_db_get_header()` scans populated slave headers in order,
+  while the old parser only scanned ID 5. Candidate patch 0156 mirrors that
+  lookup and tracks the selected header ID; SH0/MC0 must remain BCM ID 5, and
+  address/header plus aux data are checked. Its ASan/UBSan fixture places ACV in
+  the next ARC header and passes; it dry-runs against CI buildtree 39755620038.
+  CI and phone validation are pending. No firmware execution, HFI exchange, GPU
+  command or render was tested.
 
 
 ## FP6 patch 0154: Linux-matched bootstrap DDR vote (source + host only)

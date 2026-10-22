@@ -75,10 +75,10 @@ release because the BCM lookup incorrectly used ARC cmd-db ID 3. Commit
 (SHA256 `fe97c9fadae1388605b37124550677f596201c3f51bdc151afd6e80d4f835494`).
 Patch 0155 passed CI `39755620038` and a temporary phone boot. SH0/MC0 BCM ID 5
 validation succeeds, then the cmd-db parser reports missing ACV. It sends no vote
-and keeps CM3 reset. Linux `cmd_db_get_header()` searches all populated slave IDs,
-but the current parser searches ID 5 only; inspect ACV header and aux data before
-changing lookup behavior. Exact image/log evidence is in `NOTES.md` and
-`docs/GPU_LOG.md`. Do not assume fastboot. This is not GPU
+and keeps CM3 reset. Linux `cmd_db_get_header()` searches all populated slave IDs;
+candidate patch 0156 mirrors that ordered lookup and passes its expanded host
+fixture, but still needs CI and phone validation. Exact image/log evidence is in
+`NOTES.md` and `docs/GPU_LOG.md`. Do not assume fastboot. This is not GPU
 execution: HFI traffic, GMU DMA, GPU command execution and Metal remain
 unimplemented.
 

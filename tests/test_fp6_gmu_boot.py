@@ -108,17 +108,19 @@ static int fp6_power_poll(vm_offset_t b,uint32_t o,uint32_t mask,uint32_t want,u
 }
 static void make_cmd_db(void) {
  fp6_cmd_db[1]=0x0c0330dbu;
- /* One RPMh resource header, three BCM entries at byte offset 256. */
- fp6_cmd_db[2]=(112u<<16)|5u; /* BCM slave ID, distinct from ARC ID 3 */
- fp6_cmd_db[3]=(3u<<16)|880u;
+ /* Linux cmd_db_get_header() scans all populated slave headers in order. */
+ fp6_cmd_db[2]=(112u<<16)|5u; /* SH0/MC0 in BCM slave header */
+ fp6_cmd_db[3]=(2u<<16)|880u;
+ fp6_cmd_db[6]=(160u<<16)|3u; /* ACV in following ARC header */
+ fp6_cmd_db[7]=(1u<<16)|920u;
  const uint32_t names[3]={0x00304853u,0x0030434du,0x00564341u};
- const uint32_t addrs[3]={0x50020u,0x50030u,0x50040u};
+ const uint32_t addrs[3]={0x50020u,0x50030u,0x30040u};
  const uint32_t widths[3]={16u,4u,4u};
  for(unsigned i=0;i<3;i++) {
   unsigned e=(256u+24u*i)/4u;
   fp6_cmd_db[e]=names[i];fp6_cmd_db[e+4]=addrs[i];
-  fp6_cmd_db[e+5]=((8u*i)<<16)|8u;
-  unsigned aux=(144u+880u+8u*i)/4u;
+  fp6_cmd_db[e+5]=((i<2?8u*i:0u)<<16)|8u;
+  unsigned aux=(144u+(i<2?880u:920u)+8u*(i<2?i:0))/4u;
   fp6_cmd_db[aux]=1000000u;fp6_cmd_db[aux+1]=widths[i];
  }
  fp6_rsc[0]=3u<<16;
@@ -182,7 +184,7 @@ int main(void) {
  assert(fp6_rsc[(0xd00u+0x3cu)/4]==0x20000858u); /* 2,136,718 kB/s -> 2,136 votes */
  assert(fp6_rsc[(0xd00u+0x38u+24u)/4]==0x50030u);
  assert(fp6_rsc[(0xd00u+0x3cu+24u)/4]==0x20000858u);
- assert(fp6_rsc[(0xd00u+0x38u+48u)/4]==0x50040u);
+ assert(fp6_rsc[(0xd00u+0x38u+48u)/4]==0x30040u);
  assert(fp6_rsc[(0xd00u+0x3cu+48u)/4]==0x60000000u);
  unsigned published_before=publish_count;
  assert(!fp6_gmu_domain_publish(&fp6_gmu_domain));

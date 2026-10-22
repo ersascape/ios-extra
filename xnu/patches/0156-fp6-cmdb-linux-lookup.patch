@@ -1,0 +1,47 @@
+# FP6 cmd-db name resolution follows Linux header order (0156)
+diff --git a/bsd/dev/sweet_gpu.c b/bsd/dev/sweet_gpu.c
+--- a/bsd/dev/sweet_gpu.c
++++ b/bsd/dev/sweet_gpu.c
+@@ -3123,7 +3123,7 @@
+ struct fp6_bcm_meta {
+ 	uint32_t addr, unit;
+ 	uint16_t width;
+-	uint8_t vcd;
++	uint8_t vcd, slave_id;
+ };
+ 
+ static int
+@@ -3132,8 +3132,9 @@
+ 	if (fp6_smmu_read32(db, 4) != 0x0c0330dbu) return 0;
+ 	for (unsigned h = 8; h < 136; h += 16) {
+ 		uint32_t a = fp6_smmu_read32(db, h);
+-		/* cmd-db IDs: ARC=3, VRM=4, BCM=5 (qcom/cmd-db.h). */
+-		if ((a & 0xffffu) != 5u) continue;
++		unsigned slave_id = a & 0xffffu;
++		/* Match Linux cmd_db_get_header(): scan populated headers in order. */
++		if (!slave_id) break;
+ 		uint32_t b = fp6_smmu_read32(db, h + 4);
+ 		unsigned entries = 144u + (a >> 16);
+ 		unsigned aux = 144u + (b & 0xffffu);
+@@ -3149,6 +3150,7 @@
+ 			unsigned off = aux + (tail >> 16);
+ 			if (len < 8 || off > 0x20000u || len > 0x20000u - off) return 0;
+ 			meta->addr = fp6_smmu_read32(db, e + 16);
++			meta->slave_id = (uint8_t)slave_id;
+ 			meta->unit = fp6_smmu_read32(db, off);
+ 			uint32_t fields = fp6_smmu_read32(db, off + 4);
+ 			meta->width = fields & 0xffffu;
+@@ -3188,9 +3190,10 @@
+ 			printf("QCOM GMU: bootstrap BCM metadata missing name=%s\n", req[i].name);
+ 			return 0;
+ 		}
+-		if (((m[i].addr >> 16) & 0xfu) != 5u) {
+-			printf("QCOM GMU: bootstrap BCM address has wrong slave ID name=%s addr=0x%08x\n",
+-			    req[i].name, m[i].addr);
++		if (((m[i].addr >> 16) & 0xfu) != m[i].slave_id ||
++		    (i < 2 && m[i].slave_id != 5u)) {
++			printf("QCOM GMU: bootstrap BCM address/header mismatch name=%s header=%u addr=0x%08x\n",
++			    req[i].name, m[i].slave_id, m[i].addr);
+ 			return 0;
+ 		}
+ 		for (unsigned j = 0; j < i; j++) if (m[i].addr == m[j].addr) return 0;
