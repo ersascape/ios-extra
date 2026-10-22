@@ -1872,17 +1872,37 @@ No additional phone action was taken during handoff.**
 # FP6 CB0 transition diagnostics 0169 (2026-10-23)
 
 - Added read-only CB0/SID-group snapshots after CB2-test cleanup, just before
-  CM3 release, and after GMU firmware init. The existing first-GFX_ACC refusal
-  snapshot supplies the HFI endpoint. No CB0 writes or policy changes.
-- `git apply --check` passes against the CI `39831380821` buildtree;
-  `tools/xnu-cc.py` compiles `bsd/dev/sweet_gpu.c` with 0/1 failures. Commit
-  `8ec6a73e7b2bdf920b52977909a625e81d3d954d` passed full CI run `39835047101`;
+  CM3 release, and after GMU firmware init. `git apply --check` passes against
+  the CI `39831380821` buildtree; `tools/xnu-cc.py` compiles
+  `bsd/dev/sweet_gpu.c` with 0/1 failures. Commit
+  `8ec6a73e7b2bdf920b52977909a625e81d3d954d` passed CI run `39835047101`;
   kernel SHA-256 `6c9a6cedc6998253c9425706e789d02ad88c50664f6f741675467c0d0e62c126`.
-  The compiled kernel contains all three stage strings.
 - Packaged header-v2 image:
   `/tmp/ios-extra-run-39835047101/package/fp6-cb0-stages-0169.img`, SHA-256
   `4c9ac2171e8603bb7d8b2bb8aa9cd7c1c622467c9e4b6bcfffb94edced84cf89`.
   The CI ADT lacks `/product` artwork; this diagnostic image is not for
-  SpringBoard validation. The phone was not in fastboot and no boot was
-  attempted. Next test should distinguish CB2 diagnostic, GMU setup, firmware
-  and HFI as the stage associated with CB0 readback changes.
+  SpringBoard validation.
+- One bounded `fastboot boot` reached USB ECM and the phone pinged. Capture:
+  `/tmp/ios-extra-run-39835047101/logs/phone-0169-cb0-stages.txt` and raw
+  `/tmp/ios-extra-run-39835047101/logs/phone-0169-cb0-stages.udp`, both SHA-256
+  `a466761c1ca5c5f662e77c99473530482419386951163adad7392d821f51f097`; 99 UDP
+  packets. The fastboot transcript is in the matching `-fastboot.txt` file.
+  No EDL command, flash or partition write was issued. User returned the phone
+  to fastboot after the bounded XNU run.
+- In this same boot, powered baseline, post-CB2, pre-CM3, post-firmware and
+  first-GFX_ACC refusal snapshots all show the same disabled CB0 values:
+  CBAR/CBA2R=0, SCTLR `0x2ff54314` (`M=0`), TCR `0x710e6fcc`, TCR2
+  `0x00030065`, TTBR0 `0x19b3d3770fc36d7b`, TTBR1 `0xdc20c4a9af8db9f4`, MAIR0
+  `0x069faeaa`, MAIR1 `0x8c99bf1f`, FSR=0. The GMU did not change CB0. The
+  contained SID5 software walk assigned group 0 to CB2; group 1 remained
+  invalid/fault-routed (`SMR=0`, `S2CR=0x00020000`) for SID0. GMU firmware
+  reached `FW_INIT_RESULT=0x100`; HFI reached `HFI_CTRL_STATUS=1`, ACKed six
+  startup requests and acknowledged DDR bootstrap voting. The first GPU-global
+  allocation then stopped at the all-registers-zero CB0 refusal before any
+  CB0 write; CM3 reset was verified and votes/pages retained.
+- Patch 0170 narrows takeover to this measured disabled/unrouted case: it
+  requires zero CBAR/CBA2R, SCTLR.M clear, FSR clear, idle TLB, no valid live
+  stream route to CB0, and an exactly empty/fault-routed candidate group. It
+  configures CB0 while SID0 remains fault-routed, verifies context/TLBI state,
+  and installs SID0 last. This is the first planned CB0 write and still needs
+  CI and phone validation; the HFI/software models are not DMA evidence.

@@ -1,0 +1,49 @@
+# Allow CB0 replacement only for the measured disabled, unrouted FP6 state.
+--- a/bsd/dev/sweet_gpu.c
++++ b/bsd/dev/sweet_gpu.c
+@@ -2944,8 +2944,13 @@
+ 			printf("QCOM GPU SMMU: SID0 already matched group=%u; refusing takeover\n", i);
+ 			return 0;
+ 		}
+-		if (!(smr & FP6_SMMU_SMR_VALID) &&
+-		    (s2cr & FP6_SMMU_S2CR_TYPE_MASK) == FP6_SMMU_S2CR_FAULT &&
++		/* Never repurpose CB0 while any live stream group can reach it. */
++		if ((smr & FP6_SMMU_SMR_VALID) &&
++		    !(s2cr & FP6_SMMU_S2CR_TYPE_MASK) && !(s2cr & 0xffu)) {
++			printf("QCOM GPU SMMU: CB0 already routed by group=%u SID=0x%x; refusing takeover\n", i, sid);
++			return 0;
++		}
++		if (!smr && s2cr == FP6_SMMU_S2CR_FAULT &&
+ 		    group == FP6_SMMU_MAX_STREAMS)
+ 			group = i;
+ 	}
+@@ -2962,16 +2967,21 @@
+ 	uint32_t fsr0 = fp6_smmu_read32(smmu, cb_off + FP6_SMMU_CB_FSR);
+ 	uint32_t group_smr = group < groups ? fp6_smmu_read32(smmu, FP6_SMMU_SMR(group)) : 0xffffffffu;
+ 	uint32_t group_s2cr = group < groups ? fp6_smmu_read32(smmu, FP6_SMMU_S2CR(group)) : 0xffffffffu;
+-	if (group == FP6_SMMU_MAX_STREAMS || cbar0 || cba2r0 || sctlr0 || tcr0 ||
+-	    ttbr00 || ttbr10 || (tcr20 & ~0x60u) || mair00 || mair10 || fsr0) {
+-		printf("QCOM GPU SMMU: SID0 clean check failed group=%u/%u SMR=0x%08x S2CR=0x%08x\n",
+-		    group, groups, group_smr, group_s2cr);
+-		printf("QCOM GPU SMMU: CB0 CBAR=0x%08x CBA2R=0x%08x SCTLR=0x%08x TCR=0x%08x TCR2=0x%08x\n",
+-		    cbar0, cba2r0, sctlr0, tcr0, tcr20);
+-		printf("QCOM GPU SMMU: CB0 TTBR0=0x%016llx TTBR1=0x%016llx MAIR0=0x%08x MAIR1=0x%08x FSR=0x%08x\n",
+-		    (unsigned long long)ttbr00, (unsigned long long)ttbr10, mair00, mair10, fsr0);
++	if (group == FP6_SMMU_MAX_STREAMS || cbar0 || cba2r0 ||
++	    (sctlr0 & 1u) || fsr0 ||
++	    (fp6_smmu_read32(smmu, cb_off + FP6_SMMU_CB_TLBSTATUS) & 1u)) {
++		printf("QCOM GPU SMMU: CB0 takeover refused group=%u/%u SMR=0x%08x S2CR=0x%08x CBAR=0x%08x CBA2R=0x%08x SCTLR=0x%08x FSR=0x%08x\n",
++		    group, groups, group_smr, group_s2cr, cbar0, cba2r0, sctlr0, fsr0);
++		printf("QCOM GPU SMMU: refusing CB0 replacement unless CBAR/CBA2R are zero, SCTLR.M=0, FSR=0, and TLB idle\n");
+ 		return 0;
+ 	}
++	/* Measured FP6 CB0 has no owner route and translation is disabled. Its
++	 * residual TTBR/TCR/MAIR bits are inert; replace them only under the guards
++	 * above, leaving the candidate SID0 group fault-routed until readback. */
++	if (sctlr0 || tcr0 || ttbr00 || ttbr10 || (tcr20 & ~0x60u) || mair00 || mair10)
++		printf("QCOM GPU SMMU: replacing stale disabled CB0 TTBR0=0x%016llx TTBR1=0x%016llx SCTLR=0x%08x TCR=0x%08x TCR2=0x%08x MAIR0=0x%08x MAIR1=0x%08x\n",
++		    (unsigned long long)ttbr00, (unsigned long long)ttbr10,
++		    sctlr0, tcr0, tcr20, mair00, mair10);
+ 	/* Linux TTBR1: T1SZ=16, SH1=Outer, TG1=4K, EPD0=1, A1=0. */
+ 	fp6_smmu_write32(smmu, FP6_SMMU_CBA2R(0), 1u);
+ 	fp6_smmu_write32(smmu, FP6_SMMU_CBAR(0), 0x0001f300u);

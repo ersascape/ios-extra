@@ -40,140 +40,49 @@ device proof.
 
 ## Active FP6 GPU state (2026-10-23)
 
-Patch 0168 is the latest diagnostic image tested on the phone; patch 0169 is
-the latest diagnostic image built, and its read-only CB0 stage snapshot has
-host-test coverage but no phone result. Patch 0167 remains the latest phone run
-that exercised the GMU/HFI allocation path. The 0164 GPU-access path extends through
-post-`CORE_FW_START` HFI startup and accepts both request-ID and generic-ID
-ACKs. Patch 0164 commit
-`cacda42725fd0945a6a8df96bf28e27b8d8a2868` passed CI run `39807392802`. Kernel SHA256
-`34e4835aa437df8ecd101fe0b98aba7b18e5a80094ab71ad860976dec0cc7539`.
-A local header-v2 image with the workflow RAM-disk init, matching CI ADT and
-verified stock Volcano DTB is
-`/tmp/ios-extra-run-39807392802/package/fp6-gmu-hfi-gfx-0164.img`, SHA256
-`125860c6c4aa898cb40b5039558d146408d5f5c468fef12c96a979bb6c63b4cc`.
-CI skipped its image because `FP6_STOCK_DTB_URL` is unset; buildtree download
-returned HTTP 503 due to the account egress limit.
+Patch 0169 is the latest phone run. It reached `FW_INIT_RESULT=0x100`,
+`HFI_CTRL_STATUS=1`, six successful HFI ACKs and an acknowledged bootstrap DDR
+vote. The first GPU-global `MEM_ALLOC` was refused by our conservative
+all-registers-zero CB0 guard. This refusal happened before any CB0 write; CM3
+reset was verified and context/clock votes were retained. No GMU DMA, GPU
+command execution, write/readback, draw or Metal rendering has been proven.
 
-The 0164 candidate connects GPU-access HFI `MEM_ALLOC` to permanent backing,
-the 20 MiB TTBR1 aperture and GPU SID0/CB0; if `GMU_ACC` is also set, it maps
-the same backing into the live GMU domain. Host tests cover context setup with
-the measured TBI/ASIDPNE readbacks and a synthetic GFX_ACC request through the
-ACK and page-table walk. Normal, ASan/UBSan, and local arm64 object checks pass.
-These results do not prove the phone's actual descriptor, firmware acceptance,
-or any device DMA. The 0165 patch adds Gen8 v5 ACK result decoding,
-context-queue capability query, A810 preemption feature control, and the
-one-dword HFI `START` request. It follows the Fairphone module source at
-`54c948d9b30c2ba01835e64c36b68b80692554ac`; HW_FENCE remains off because XNU
-does not provide its required service. Normal and ASan/UBSan host probes pass,
-and local arm64 compilation reports `0 of 1 files failed`. Commit
-`b96b41b2ea432f65a9164f279a7ab5e61cc8b014` passed CI run `39814973566`; verified
-kernel SHA256 is `916d0e406f6425d1681b3522c6e2403ca2b4c16342ac8dbc1355efa5da7891a8`.
-The locally packaged header-v2 RAM-disk image is
-`/tmp/ios-extra-run-39814973566/package/fp6-gmu-hfi-start-0165.img`, SHA256
-`1f1575412a97639396691ccfbc7898022937818b6bba4f5097d54fe25733de4f`.
-One phone test reached `FW_INIT_RESULT=0x100` and `HFI_CTRL_STATUS=1`, then
-returned TABLE response header `0x0001030f` (ID 15, ACK type, 3 dwords). The
-driver only recognized generic ACK ID 126 and stopped; CM3 reset was verified.
-Patch 0166 now accepts request-ID ACKs with the same echoed-header/status
-validation. Commit `af030f8aabc5eeff3f1e0da673b0579ab70976f3` passed CI run
-`39821513140`. Image
-`/tmp/ios-extra-run-39821513140/package/fp6-gmu-hfi-ack-0166.img`, SHA-256
-`4d06ee27cd0c25778841923c04c2e61e5aaddb0421cd0e5de794e2cfb2d33ee7`, uses the
-verified DTB, ADT and the bounded HFI probe args. The user-mode USB listener
-captured one 0166 boot at
-`/tmp/ios-extra-run-39821513140/logs/phone-0166-hfi-request-id-ack-usercap2.txt`
-(SHA-256 `e8b772c189f5815f5cb1c42d95afc49411870ca600956e3355b9688e2886bc91`).
-It measured successful ACKs for GPU perf TABLE, DDR/CNOC TABLE, configuration,
-and preemption, plus an acknowledged DDR bootstrap vote. FW_INIT_RESULT remained
-`0x100` and HFI_CTRL_STATUS was `1`. The first GPU global allocation request
-arrived, but the CB0 cleanliness check refused mapping; firmware was reset
-cleanly. Candidate 0167 logs CB0 and the selected SID0 group without changing
-MMIO state. Phone evidence shows CBAR/CBA2R/FSR zero but nonzero
-SCTLR/TCR/TTBR/MAIR fields. The packaged stock DTB declares a `0x40000` SMMU
-register aperture, and Linux's NUMPAGENDXB formula agrees with the `+0x20000`
-CB0 window. The earlier `0/22` scan occurred before explicit SMMU power-up and
-does not establish that powered CB0 is empty. Next: capture powered CB0 and all
-SMR/S2CR groups before any SMMU test changes state, then compare against the
-post-HFI values. No DMA, GPU command, draw or Metal result. Do not clear or
-overwrite the unexplained CB0 fields. The decoded 0165 log and pcap are under
-`/tmp/ios-extra-run-39814973566/logs/phone-0165-gmu-hfi-start-resume.*`.
-The user explicitly requested flashing the Tegu rootfs from
-`/home/ersa/Dev/ios-extra/research/fp6-rootfs-tegu-20261021/` to the existing
-`userdata` partition. That sparse image (SHA256
-`a1c6f7da616520841c4d56ac2a147940c5c93a0b4406cb1c9ae6832d64338f7c`) was
-written successfully in 16 fastboot chunks; transcript is
-`/tmp/fastboot-flash-fp6-rootfs-20261022.log`. This overwrote prior userdata.
-Do not repeat the flash. Do not touch other partitions or use `fastboot getvar`.
+The 0169 USB capture is under `/tmp/ios-extra-run-39835047101/logs/`:
+`phone-0169-cb0-stages.txt` and `.udp`, each SHA-256
+`a466761c1ca5c5f662e77c99473530482419386951163adad7392d821f51f097` (99 UDP
+packets). The one temporary `fastboot boot` succeeded; no flash or EDL command
+was issued. The user returned the phone to fastboot after the run. The powered
+CB0 state remained identical after the CB2 test, before CM3 release, after
+firmware init and at the allocation refusal: `CBAR=CBA2R=0`, `SCTLR=0x2ff54314`
+(`M=0`), `TCR=0x710e6fcc`, `TCR2=0x00030065`, `TTBR0=0x19b3d3770fc36d7b`,
+`TTBR1=0xdc20c4a9af8db9f4`, `MAIR0=0x069faeaa`, `MAIR1=0x8c99bf1f`, `FSR=0`.
+Group 0 was SID5->CB2 for the contained GMU walk; group 1 remained empty and
+fault-routed for SID0. Firmware did not change CB0.
 
-The powered baseline is now captured by patch 0168 and supersedes the pending
-baseline action above. CI run `39831380821` succeeded for commit
-`9eeb38e3657ba8bfd259c240155a97868b4db118`; the diagnostic image and decoded
-log are under `/tmp/ios-extra-run-39831380821/`. Before the CB2 diagnostic,
-powered CB0 had `CBAR=CBA2R=0`, `SCTLR=0x2ff5c314` (`M=0`),
-`TCR=0x7d0e6f8c`, `TCR2=0x00038065`, nonzero TTBR/MAIR values, and `FSR=0`.
-All 24 groups were invalid/fault-routed. Thus `0/22` from the unpowered
-inventory did not describe the powered bank. Do not write CB0. The CB2 software
-walk passed; `ATOSNS` means there was no hardware ATOS, and this run omitted GMU
-boot. The device is currently running this temporary XNU image; there is no
-tested autonomous route back to fastboot. The next useful image should snapshot
-CB0 after CB2-test cleanup, before CM3 release, and at the first GFX_ACC
-allocation/refusal within one GMU/HFI boot, without changing CB0.
-Read-only XNU source review confirms why unattended cycling is unavailable:
-the SWEET platform expert does not override `haltRestart()`, and the inherited
-generic implementation only handles panic-sync/hang before returning; there is
-no Qualcomm PSCI reboot or bootloader-reason path in this port. The current
-fastboot protocol also disappears after the one-shot boot. Do not try a reset
-until a device-specific fastboot-return reason is implemented and independently
-validated.
+Patch `0170-fp6-smmu-cb0-disabled-reinit.patch` allows a narrowly guarded
+replacement of this stale context: zero CBAR/CBA2R, SCTLR.M clear, FSR clear,
+TLB idle, no valid stream route to CB0, and an exactly empty/fault-routed stream
+group. It configures and verifies CB0 while SID0 is still fault-routed, then
+installs SID0 last, preserving the SID5->CB2 route. Host tests (normal and
+ASan/UBSan), the full Python suite (13 tests, 5 dependency skips), and local
+arm64 compilation pass. CI and phone validation are pending. This is the next
+bounded hardware question; even a successful mapping ACK will not alone prove
+GPU-master DMA.
 
-Patch 0169 adds read-only CB0 snapshots after CB2-test cleanup, before CM3
-release, and after firmware init. Its local CI-buildtree cross-compile passed;
-commit `8ec6a73e7b2bdf920b52977909a625e81d3d954d` passed CI `39835047101`.
-Image `/tmp/ios-extra-run-39835047101/package/fp6-cb0-stages-0169.img` has
-SHA-256 `4c9ac2171e8603bb7d8b2bb8aa9cd7c1c622467c9e4b6bcfffb94edced84cf89`;
-header-v2 round-trip passed. It uses the verified DTB and diagnostic RAM disk;
-the CI ADT has no `/product` artwork. The phone was not in fastboot, so this
-image has not been booted. The next test should enable
-`fp6smmu=2 fp6smmupower=1 fp6gmuload=1 fp6gmuboot=1` and capture USB logs.
-Commit `6e0ca76` adds host coverage proving the stage snapshots do not write
-SMMU state. The focused harness passed normally and with ASan/UBSan; the full
-Python suite passed 13 tests with 5 dependency skips. This did not create a new
-kernel build or add phone evidence.
+Before the next phone run, finish reviewing the 0170 diff and handoff/docs,
+commit and push once to `main`, and use `gh -R ersascape/ios-extra` to verify its
+single CI build. Package one temporary diagnostic image from that CI kernel.
+Immediately before invoking `tools/gpu-phone-test.py`, check that exactly one
+device is in fastboot; helper rechecks before its single `fastboot boot`. Capture
+the USB log under `/tmp`. Never flash, run `fastboot getvar`, reboot the phone
+unannounced, or issue any EDL command. If exactly one device is not present,
+stop and ask the user to put it in fastboot.
 
-Earlier phone evidence remains: patch 0159's CORE_FW_START path asserted with
-`irq=0x4 fw=0x900` and the bounded path verified CM3 reset. The 0165 phone test
-proves initial firmware execution and HFI controller readiness, but not
-completion of the HFI startup sequence. No GPU command execution, GPU
-write/readback, draw/readback, or Metal rendering has been demonstrated.
-
-- Work in this checkout on `main`; remote is `ersascape/ios-extra`. The goal is
-  FP6 Adreno 810 GMU firmware/HFI, then bounded GPU execution and an A810 Metal
-  path. `NOTES.md` and `docs/GPU_LOG.md` contain the full state and evidence.
-- Commit `6c248dda7cc4b1fc7dae519898e41ef730de0282` passed CI run
-  `39730474027`. Kernel SHA256 is
-  `1dccb4fb5992417c37b73c28fc74d49e30c2f7dc8b3e2050fd5b8cfd08a02228`.
-  Its temporary image was
-  `/tmp/ios-extra-run-39730474027/package/fp6-gmu-timer-wcomb.img`, SHA256
-  `f2b92b5fcfeb6af4e86a953dae8202b12abda5c1f700e8a9c59cd51d69137845`.
-- Phone result: CX timer still refused `valid=0/16`, with `read=0..0` and
-  `write=0..0`; all samples were discarded as backward. Firmware upload,
-  SCM, CM3 release and HFI did not run. SMMU context test passed and remained
-  contained. The matching pcap/text hashes and exact path are in `NOTES.md`.
-- The current uncommitted follow-up (check `git status`) switches the timer
-  sample source from raw CNTPCT to XNU's nonspeculative `ml_get_hwclock()`
-  (CNTVCT) and records backward counts/raw samples. Host and sanitizer probes
-  pass; system-Clang AArch64 compile against build 39730474027 reports 0/1
-  failures. No CI or phone result exists for this follow-up yet.
-- The USB test helper has also been changed to make one bounded `pkexec`
-  authorization cover ECM setup, capture and cleanup; setup failures abort
-  without retrying authorization. The previous root tcpdump may still be
-  running. Pass its exact pcap path with `--stop-pcap` on the next test; the
-  helper will stop only a tcpdump whose command line names that file.
-- Next: run focused checks, commit/push the combined follow-up once, verify its
-  single CI build and package a temporary image. Check `fastboot devices`
-  immediately before the phone test; the prior boot means fastboot state is
-  not assumed. Do not flash or use `fastboot getvar`.
+Historical patch-by-patch evidence and earlier image identities are in
+`NOTES.md` and `docs/GPU_LOG.md`; do not treat older status paragraphs below as
+current. The Linux bring-up ordering/source audit is in
+`docs/FP6_ADRENO_METAL_AUDIT.md`. The A618-specific `GPU_GMU_BOOT.md` is not the
+FP6 hardware reference.
 
 ## FP6 continuation update (2026-10-22)
 

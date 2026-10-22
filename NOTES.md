@@ -20,12 +20,38 @@
   `/tmp/ios-extra-run-39835047101/package/fp6-cb0-stages-0169.img`, SHA-256
   `4c9ac2171e8603bb7d8b2bb8aa9cd7c1c622467c9e4b6bcfffb94edced84cf89`.
   The CI ADT lacks `/product` artwork; packaging used `--allow-no-product`,
-  so this image is for diagnostic kernel output only. The phone was not in
-  fastboot and no additional boot was attempted. Next test args include
-  `fp6smmu=2 fp6smmupower=1 fp6gmuload=1 fp6gmuboot=1` with USB logging.
-- This diagnostic does not change the GPU driver’s refusal policy and cannot
-  establish SMMU ownership by itself. Do not change CB0 until the checkpoints
-  identify an understood owner/state transition.
+  so this image is for diagnostic kernel output only. One temporary
+  `fastboot boot` succeeded (no flash or EDL command); USB ECM answered ping.
+  Raw UDP and decoded log are
+  `/tmp/ios-extra-run-39835047101/logs/phone-0169-cb0-stages.udp` and
+  `/tmp/ios-extra-run-39835047101/logs/phone-0169-cb0-stages.txt`, each SHA-256
+  `a466761c1ca5c5f662e77c99473530482419386951163adad7392d821f51f097` (99
+  packets). User returned the phone to fastboot after this bounded boot.
+- Same-boot snapshots show the powered CB0 image unchanged after the CB2 test,
+  before CM3 release, after GMU firmware initialization, and at the first GPU
+  allocation refusal: `CBAR=CBA2R=0`, `SCTLR=0x2ff54314` (`M=0`),
+  `TCR=0x710e6fcc`, `TCR2=0x00030065`, `TTBR0=0x19b3d3770fc36d7b`,
+  `TTBR1=0xdc20c4a9af8db9f4`, `MAIR0=0x069faeaa`, `MAIR1=0x8c99bf1f`, `FSR=0`.
+  Pre-CM3 and post-firmware snapshots show group 0 assigned to SID5/CB2 by the
+  contained GMU walk; group 1 remains invalid with fault route
+  (`SMR=0`, `S2CR=0x00020000`). The GMU did not alter CB0. The first HFI
+  allocation still stopped at our all-registers-must-be-zero refusal before
+  any CB0 write.
+- The same boot reached `FW_INIT_RESULT=0x100`, `HFI_CTRL_STATUS=1`, six
+  successful HFI ACKs (GPU perf, DDR/CNOC, configuration and preemption), and
+  an acknowledged bootstrap DDR vote. Firmware reset was verified after the
+  CB0 refusal; SID/context/clock votes were retained. This validates the
+  staged readouts and continues to prove GMU/HFI exchange, not GMU DMA, GPU
+  execution or rendering.
+- Follow-up patch `0170-fp6-smmu-cb0-disabled-reinit.patch` replaces the blanket
+  zero-register test with measured-state guards: CBAR/CBA2R must be zero,
+  SCTLR.M clear, FSR clear, CB0 TLB idle, no live route may target CB0, and the
+  candidate must be an exactly empty/fault-routed stream group. Only then does
+  it replace stale CB0 TTBR/TCR/MAIR values while SID0 remains fault-routed,
+  verify context/TLBI state, and install SID0 last. The existing SID5->CB2
+  route is preserved. Normal, ASan/UBSan, full host suite, and local arm64
+  compile pass; CI and phone validation of 0170 remain pending. This is the
+  first planned CB0 write; do not claim GPU DMA until the phone confirms it.
 
 ## Powered FP6 SMMU baseline measured (2026-10-23)
 
@@ -773,20 +799,17 @@
 
 ## Current FP6 GPU path
 
-The target is FP6 Adreno 810 Gen8.3. Patches 0148/0149 booted on the phone: the corrected GPU PLL/GMU clocks came up, 159 persistent pages were checked/uploaded, GMU firmware reported `FW_INIT_RESULT=0x100`, HFI controller initialization reported `HFI_CTRL_STATUS=1`, and CM3 reset was verified afterward. The photo records early GPU lines; the later USB capture started after that segment. GMU DMA and HFI command processing are still unproven.
-
-The focused 0153 follow-up removes the new HFI WIMG rewrite that is the only
-new path to `pmap_set_cache_attributes()` in this boot; the established
-allocator and clean-before-publish sequence already ran in the earlier HFI
-controller boot. Patch 0153 passes the GMU host probe normally and under
-ASan/UBSan, and `sweet_gpu.c` compiles against CI run `39739290127`'s buildtree
-with system Clang. CI and a phone result are pending. Keep HFI controller init
-bounded; add explicit cache ownership transitions before HFI message traffic.
-After the phone confirms the panic is gone, resume with the minimum
-Linux-matching DDR vote, full HFI tables and MEM_ALLOC handling, safe idle, GPU
-MMU/OOB and Gen8 SQE/AQE execution, a bounded GPU memory write, draw/readback,
-then an IOKit allocation/submission/fence ABI and an A810-compatible Metal
-frontend and IOSurface presentation.
+The active target is FP6 Adreno 810 Gen8.3. On the latest 0169 phone boot,
+GMU firmware ran (`FW_INIT_RESULT=0x100`), HFI controller init succeeded
+(`HFI_CTRL_STATUS=1`), and the device ACKed the required startup tables and
+preemption. The first GPU-global HFI allocation was refused only because
+powered CB0 contained stale nonzero values while translation was disabled and
+no stream routed to it. Patch 0170 now permits takeover only under those
+measured disabled/unrouted conditions; it has host and compiler validation but
+needs one CI build and a phone test before proceeding to GPU core startup.
+GMU DMA, GPU command write/readback, draw/readback and Metal are still
+unverified. Follow the 0169/0170 current-state sections above; subsequent
+entries are historical bring-up records.
 
 See [FP6 GMU first boot](docs/FP6_GMU_FIRST_BOOT.md), [FP6 Adreno Metal audit](docs/FP6_ADRENO_METAL_AUDIT.md) and [FP6 SMMU power](docs/FP6_SMMU_POWER.md).
 

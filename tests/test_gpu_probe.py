@@ -138,7 +138,7 @@ class GPUProbeTests(unittest.TestCase):
             self.assertIn('PASS: RSC wake/stop', result.stdout)
             self.assertIn('PASS: 29 pre-boot registers', result.stdout)
             self.assertIn('PASS: GMU buffers 29 ATOS checks', result.stdout)
-            self.assertIn('PASS: GPU SID0 TTBR1 setup accepts measured TBI/ASIDPNE readbacks', result.stdout)
+            self.assertIn('PASS: GPU SID0 TTBR1 setup replaces only stale disabled CB0', result.stdout)
             self.assertIn('PASS: HFI GFX_ACC allocation returns a live GPU TTBR1 mapping', result.stdout)
             self.assertIn('PASS: HFI GET_VALUE and one-dword START share the bounded queue dispatcher', result.stdout)
             self.assertIn('PASS: 14 clock/cache cases, 30 ARC cases + 512 mutations, 61 CX experiment cases', result.stdout)
@@ -820,19 +820,46 @@ int main(void)
     fp6_smmu[0x1000/4] = 1; all_mmio_writes = 0;
     output[0] = 0;
     assert(!fp6_gpu_global_context_enable((vm_offset_t)fp6_smmu) && all_mmio_writes == 0);
-    assert(strstr(output, "SID0 clean check failed group=0/24 SMR=0x00000000 S2CR=0x00020000"));
-    assert(strstr(output, "CB0 CBAR=0x00000001"));
-    fp6_smmu[0x1000/4] = 0; fp6_gpu_smmu_model = 1;
+    assert(strstr(output, "CB0 takeover refused group=0/24"));
+    assert(strstr(output, "CBAR=0x00000001"));
+    fp6_smmu[0x1000/4] = 0;
+
+    /* A live stream routed to CB0 must prevent takeover even when it is not SID0. */
+    fp6_smmu[0x808/4] = 0x80000007u; fp6_smmu[0xc08/4] = 0u;
+    all_mmio_writes = 0; output[0] = 0;
+    assert(!fp6_gpu_global_context_enable((vm_offset_t)fp6_smmu) && all_mmio_writes == 0);
+    assert(strstr(output, "CB0 already routed by group=2 SID=0x7"));
+    fp6_smmu[0x808/4] = 0; fp6_smmu[0xc08/4] = 0x20000u;
+
+    /* A powered CB0 with translation enabled is still never overwritten. */
+    fp6_smmu[0x20000/4] = 0x2ff54315u;
+    all_mmio_writes = 0; output[0] = 0;
+    assert(!fp6_gpu_global_context_enable((vm_offset_t)fp6_smmu) && all_mmio_writes == 0);
+    assert(strstr(output, "SCTLR=0x2ff54315"));
+
+    /* The phone's measured stale TTBR/TCR/MAIR image is replaceable only
+     * because CBAR/CBA2R are zero, SCTLR.M is clear, FSR is clear and routes
+     * to CB0 are absent. Model the CB2 SID5 route and SID0's free group. */
+    fp6_smmu[0x20000/4] = 0x2ff54314u;
+    fp6_smmu[0x20030/4] = 0x710e6fccu;
+    fp6_smmu[0x20010/4] = 0x00030065u;
+    fp6_smmu[0x20020/4] = 0x0fc36d7bu; fp6_smmu[0x20024/4] = 0x19b3d377u;
+    fp6_smmu[0x20028/4] = 0xaf8db9f4u; fp6_smmu[0x2002c/4] = 0xdc20c4a9u;
+    fp6_smmu[0x20038/4] = 0x069faeaau; fp6_smmu[0x2003c/4] = 0x8c99bf1fu;
+    fp6_smmu[0x800/4] = 0x80000005u; fp6_smmu[0xc00/4] = 2u;
+    fp6_gpu_smmu_model = 1; all_mmio_writes = 0; output[0] = 0;
     assert(fp6_gpu_global_context_enable((vm_offset_t)fp6_smmu));
+    assert(strstr(output, "replacing stale disabled CB0"));
     assert(fp6_smmu[0x20000/4] == 0x167u);
     assert(fp6_smmu[0x20010/4] == 0x38071u);
     assert(((uint64_t)fp6_smmu[0x20028/4] | ((uint64_t)fp6_smmu[0x2002c/4] << 32)) == 0x900000000ULL);
-    assert(fp6_smmu[0xc00/4] == 0u && fp6_smmu[0x800/4] == 0x80000000u);
+    assert(fp6_smmu[0xc00/4] == 2u && fp6_smmu[0x800/4] == 0x80000005u);
+    assert(fp6_smmu[0xc04/4] == 0u && fp6_smmu[0x804/4] == 0x80000000u);
     int context_writes = all_mmio_writes;
     assert(fp6_gpu_global_context_enable((vm_offset_t)fp6_smmu) && all_mmio_writes == context_writes);
     fp6_gpu_smmu_model = 0; fp6_gpu_global_domain = (struct fp6_gpu_global_domain){0};
     fp6_gpu_smmu_base = 0; fp6_gpu_smmu_live = 0;
-    puts("PASS: GPU SID0 TTBR1 setup accepts measured TBI/ASIDPNE readbacks, is idempotent, and refuses dirty CB0 without writes");
+    puts("PASS: GPU SID0 TTBR1 setup replaces only stale disabled CB0, protects live routes, and accepts measured TBI/ASIDPNE readbacks");
 
     /* Run the actual GFX_ACC MEM_ALLOC path with distinct contiguous host pages,
      * then verify the HFI ACK VA, published leaf and live TTBR1 route. */
