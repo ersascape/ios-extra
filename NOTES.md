@@ -1,5 +1,27 @@
 # ios-extra — current state
 
+## FP6 HFI service-message follow-up (0161, 2026-10-22)
+
+- Patch 0161 extends the 0160 HFI waiter to dispatch interleaved firmware
+  messages. It answers `GMU_CNTR_REGISTER` (ID 110) with Linux's permitted
+  zero-offset response, then continues waiting for the command ACK. Generic
+  ACK validation now follows Linux's echoed request-header/status comparison.
+  It decodes and logs the complete `MEM_ALLOC` descriptor (ID 20), then
+  deliberately fails closed and resets CM3: no GPU/GMU page backing or mapping
+  exists yet, so the requested addresses cannot safely be fabricated.
+- The host protocol peer covers the counter-event/START-ACK sequence and a
+  bounded MEM_ALLOC refusal/reset. Normal and ASan/UBSan runs pass. The changed
+  `sweet_gpu.c` cross-compiles against CI buildtree `39775328855` with system
+  Clang (`0 of 1 files failed`). The focused patch applies in the host suite;
+  `git diff --check` is clean. This is local source validation only: no CI build
+  or phone observation for 0161 yet. The user is testing Android, so no device
+  commands were run.
+- The decisive next evidence is a later phone log containing the exact
+  `MEM_ALLOC` descriptor, after which the allocation kind, size, address and
+  mapping requirements can be matched to the Gen8.3 Linux source before
+  implementing any backing. This patch does not complete HFI startup or GPU
+  execution.
+
 ## FP6 Gen8.3 HFI-to-GPU source boundary (2026-10-22)
 
 - Source inspection only; no build or phone observation. Fairphone's

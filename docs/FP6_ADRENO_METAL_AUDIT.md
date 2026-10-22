@@ -115,8 +115,21 @@ it does not remove the current hardware startup task.
 
 ## Gen8.3 HFI-to-GPU boundary (source review, 2026-10-22)
 
-The current XNU candidate 0160 stops after its `START` HFI transaction. The
-Fairphone Gen8.3 source shows the required cold-boot path continues through
+The 0160 XNU candidate stopped after its `START` HFI transaction. Patch 0161
+adds an event-aware waiter: it answers `GMU_CNTR_REGISTER` with Linux's
+supported zero-offset response, then waits for the original command ACK. It
+validates generic ACKs against the echoed request header and success status,
+matching the Linux service path.
+
+The firmware can also request `MEM_ALLOC` while `START` is pending. Patch 0161
+decodes and logs that descriptor, then resets CM3 without replying. This is
+intentional containment: XNU does not yet have the GPU-visible allocator and
+SMMU mapping path needed to back the firmware's request. A real descriptor
+from the next authorized phone observation is needed before that allocator is
+designed. The host peer exercises both the counter exchange and the refusal
+path; it does not establish firmware acceptance or HFI startup on hardware.
+
+The Fairphone Gen8.3 source shows the required cold-boot path continues through
 `gen8_hwsched_hfi_start()` (`adreno_gen8_hwsched_hfi.c:2138`): after
 `CORE_FW_START`, query/enable the context queue and register the hardware-fence
 client, send HW_FENCE control, initialize preemption and LPAC, enable AQE when

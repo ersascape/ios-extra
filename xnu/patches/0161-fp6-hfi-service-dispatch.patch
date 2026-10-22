@@ -1,0 +1,232 @@
+diff --git a/bsd/dev/sweet_gpu.c b/bsd/dev/sweet_gpu.c
+--- a/bsd/dev/sweet_gpu.c
++++ b/bsd/dev/sweet_gpu.c
+@@ -3120,7 +3120,7 @@
+ 	return 0;
+ }
+ 
+-/* Linux adreno_gen8_hwsched_hfi.c HFI_CMD_ID queue write/inline ACK path.
++/* Linux adreno_gen8_hwsched_hfi.c bounded command and F2H service exchange.
+  * The HFI buffer is cached in XNU, so transfer ownership explicitly: clean
+  * and invalidate before ringing GMU; do not touch it while firmware runs;
+  * invalidate again after the GMU-to-host interrupt before reading its reply.
+@@ -3148,18 +3148,47 @@
+ }
+ 
+ static int
++fp6_gmu_hfi_enqueue(vm_offset_t g, uint8_t *mem, uint32_t *msg,
++	    unsigned dwords, unsigned *sequence)
++{
++	volatile uint32_t *t = (volatile uint32_t *)(void *)mem;
++	volatile uint32_t *cmd_hdr = t + 6;
++	volatile uint32_t *cmdq;
++	unsigned rounded = (dwords + 3u) & ~3u;
++	if (!dwords || dwords > 240u || rounded >= 1024u ||
++	    cmd_hdr[0] != 1u || cmd_hdr[3] != 1024u ||
++	    cmd_hdr[10] >= 1024u || cmd_hdr[11] >= 1024u ||
++	    (cmd_hdr[10] & 3u) || (cmd_hdr[11] & 3u) ||
++	    cmd_hdr[1] != fp6_gmu_hfi_va + FP6_GMU_HFI_QUEUE0 ||
++	    cmd_hdr[10] != cmd_hdr[11])
++		return 0;
++	cmdq = (volatile uint32_t *)(void *)(mem + FP6_GMU_HFI_QUEUE0);
++	unsigned seq = (*sequence + 1u) & 0xfffu;
++	if (!seq) seq = 1u;
++	*sequence = seq;
++	msg[0] = (msg[0] & 0x000f00ffu) | (seq << 20) | (dwords << 8);
++	unsigned wi = cmd_hdr[11];
++	for (unsigned j = 0; j < dwords; j++) cmdq[(wi + j) % 1024u] = msg[j];
++	for (unsigned j = dwords; j < rounded; j++) cmdq[(wi + j) % 1024u] = 0xfafafafau;
++	cmd_hdr[11] = (wi + rounded) % 1024u;
++	flush_dcache64((addr64_t)(uintptr_t)mem, FP6_GMU_HFI_SIZE, FALSE);
++	__asm__ volatile("dsb sy" ::: "memory");
++	fp6_smmu_write32(g, 0x47650u, 1u); /* HOST2GMU_INTR_SET: MSGQ */
++	return 1;
++}
++
++static int
+ fp6_gmu_hfi_send_req(vm_offset_t g, uint8_t *mem, uint32_t *msg, unsigned dwords,
+ 	    unsigned *sequence)
+ {
+ 	volatile uint32_t *t = (volatile uint32_t *)(void *)mem;
+ 	volatile uint32_t *cmd_hdr = t + 6;
+ 	volatile uint32_t *msg_hdr = t + 18;
+-	volatile uint32_t *cmdq, *msgq;
++	volatile uint32_t *msgq;
+ 	uint32_t irq = 0, sent;
+ 	unsigned id = msg[0] & 0xffu;
+-	unsigned seq = ++*sequence;
+-	unsigned rounded = (dwords + 3u) & ~3u;
+-	if (dwords < 2 || dwords > 240 || rounded >= 1024u) return 0;
++	unsigned seq;
++	if (dwords < 2 || dwords > 240 || ((dwords + 3u) & ~3u) >= 1024u) return 0;
+ 	if (cmd_hdr[0] != 1 || msg_hdr[0] != 1 || cmd_hdr[3] != 1024 ||
+ 	    msg_hdr[3] != 1024 || cmd_hdr[10] >= 1024 || cmd_hdr[11] >= 1024 ||
+ 	    msg_hdr[10] >= 1024 || msg_hdr[11] >= 1024 ||
+@@ -3174,21 +3203,12 @@
+ 		    fp6_gmu_hfi_va + FP6_GMU_HFI_QUEUE0 + 0x1000u);
+ 		return 0;
+ 	}
+-	cmdq = (volatile uint32_t *)(void *)(mem + FP6_GMU_HFI_QUEUE0);
+ 	msgq = (volatile uint32_t *)(void *)(mem + FP6_GMU_HFI_QUEUE0 + 0x1000u);
+-	if (cmd_hdr[10] != cmd_hdr[11]) return 0;
+-	uint32_t wi = cmd_hdr[11];
+-	msg[0] = (msg[0] & 0xff0fffffu) | (seq << 20) | (dwords << 8);
++	if (!fp6_gmu_hfi_enqueue(g, mem, msg, dwords, sequence)) return 0;
++	seq = *sequence;
+ 	sent = msg[0];
+-	for (unsigned j = 0; j < dwords; j++) cmdq[(wi + j) % 1024u] = msg[j];
+-	for (unsigned j = dwords; j < rounded; j++) cmdq[(wi + j) % 1024u] = 0xfafafafau;
+-	cmd_hdr[11] = (wi + rounded) % 1024u;
+-	flush_dcache64((addr64_t)(uintptr_t)mem, FP6_GMU_HFI_SIZE, FALSE);
+-	__asm__ volatile("dsb sy" ::: "memory");
+-	fp6_smmu_write32(g, 0x47650u, 1u); /* HOST2GMU_INTR_SET: MSGQ */
+-	for (unsigned i = 0; i < 10000; i++) { /* 1 s bound, 100 us interval */
++	for (unsigned i = 0; i < 10000; i++) { /* 1 s total bound, 100 us interval */
+ 		irq = fp6_smmu_read32(g, 0x47648u); /* GMU2HOST_INTR_INFO */
+-		if (irq & 1u) break;
+ 		uint32_t fw = fp6_smmu_read32(g, 0x47070u);
+ 		if ((irq & 0x0eu) || (fw & 0xe00u)) {
+ 			flush_dcache64((addr64_t)(uintptr_t)mem, FP6_GMU_HFI_SIZE, FALSE);
+@@ -3196,49 +3216,93 @@
+ 			printf("QCOM GMU: HFI request id=%u assert queue2 status=%u ri=%u wi=%u\n",
+ 			    id, t[30], t[40], t[41]);
+ 			(void)fp6_gmu_hfi_debug_dump(mem);
+-			break;
++			printf("QCOM GMU: HFI request id=%u timeout/fault irq=0x%08x fw=0x%08x\n",
++			    id, irq, fw);
++			return 0;
++		}
++		if (irq & 1u) fp6_smmu_write32(g, 0x47644u, 1u);
++		flush_dcache64((addr64_t)(uintptr_t)mem, FP6_GMU_HFI_SIZE, FALSE);
++		__asm__ volatile("dsb sy" ::: "memory");
++		uint32_t ri = msg_hdr[10], end = msg_hdr[11];
++		if (msg_hdr[0] != 1u || msg_hdr[3] != 1024u || ri >= 1024u || end >= 1024u ||
++		    (ri & 3u) || (end & 3u) || msg_hdr[1] != fp6_gmu_hfi_va + FP6_GMU_HFI_QUEUE0 + 0x1000u) {
++			printf("QCOM GMU: HFI request id=%u corrupt response queue ri=%u wi=%u\n", id, ri, end);
++			return 0;
++		}
++		if (ri != end) {
++			uint32_t header = msgq[ri];
++			unsigned size = (header >> 8) & 0xffu;
++			unsigned type = (header >> 16) & 0xfu;
++			unsigned msg_id = header & 0xffu;
++			unsigned available = (end - ri) & 1023u;
++			unsigned padded = (size + 3u) & ~3u;
++			if (!size || size > 240u || padded > available) {
++				printf("QCOM GMU: HFI request id=%u malformed response hdr=0x%08x available=%u\n",
++				    id, header, available);
++				return 0;
++			}
++			uint32_t reply[11] = {0};
++			unsigned copy = size < 11u ? size : 11u;
++			for (unsigned j = 0; j < copy; j++) reply[j] = msgq[(ri + j) % 1024u];
++			if (msg_id == 110u && size == 3u && type == 0u) {
++				/* Linux allows counter allocation failure: zero byte offsets mean unavailable. */
++				uint32_t req = reply[0];
++				uint32_t event_reply[6] = {
++					(1u << 16) | 110u, req, reply[1], reply[2], 0u, 0u
++				};
++				msg_hdr[10] = (ri + padded) % 1024u;
++				if (!fp6_gmu_hfi_enqueue(g, mem, event_reply, 6u, sequence)) {
++					printf("QCOM GMU: HFI counter reply refused group=%u countable=%u\n",
++					    reply[1], reply[2]);
++					return 0;
++				}
++				printf("QCOM GMU: HFI GMU_CNTR_REGISTER group=%u countable=%u reply=unavailable\n",
++				    reply[1], reply[2]);
++				continue;
++			}
++			if (msg_id == 20u) {
++				uint32_t version = size >= 2u ? reply[1] : 0xffffffffu;
++				unsigned off = 2u; /* legacy padding and v1 version both precede desc */
++				if (type != 0u || size != (version ? 11u : 10u)) {
++					printf("QCOM GMU: HFI MEM_ALLOC malformed version=%u size=%u type=%u; resetting CM3\n",
++					    version, size, type);
++					return 0;
++				}
++				uint64_t gpu = size >= off + 2u ? reply[off] | ((uint64_t)reply[off + 1u] << 32) : 0;
++				uint32_t flags = size > off + 2u ? reply[off + 2u] : 0;
++				uint32_t kind = size > off + 3u ? reply[off + 3u] : 0xffffffffu;
++				uint32_t host_handle = reply[off + 4u];
++				uint32_t gmu_handle = reply[off + 5u];
++				uint32_t gmu_addr = reply[off + 6u];
++				uint32_t bytes = size > off + 7u ? reply[off + 7u] : 0;
++				uint32_t align = size > off + 8u ? reply[off + 8u] : 0;
++				printf("QCOM GMU: HFI MEM_ALLOC unsupported version=%u size=%u gpu=0x%llx flags=0x%x kind=%u host=%u gmu_handle=%u gmu=0x%x bytes=%u align=0x%x; no reply, resetting CM3\n",
++				    version, size, (unsigned long long)gpu, flags, kind, host_handle,
++				    gmu_handle, gmu_addr, bytes, align);
++				return 0;
++			}
++			if (type == 1u && msg_id == 126u && size >= 3u && size <= 4u) {
++				uint32_t ack[4] = { reply[0], reply[1], reply[2], size >= 4u ? reply[3] : 0u };
++				msg_hdr[10] = (ri + padded) % 1024u;
++				if (((ack[1] ^ sent) & ~(1u << 19)) || ack[2]) {
++					printf("QCOM GMU: HFI request id=%u bad ACK hdr=0x%08x req=0x%08x status=0x%08x size=%u\n",
++					    id, ack[0], ack[1], ack[2], size);
++					return 0;
++				}
++				printf("QCOM GMU: HFI request id=%u ACK seq=%u status=0x%08x size=%u\n", id, seq, ack[2], size);
++				return 1;
++			}
++			if (msg_id == 100u) printf("QCOM GMU: HFI firmware error size=%u code=0x%08x\n",
++			    size, size > 1u ? reply[1] : 0u);
++			else printf("QCOM GMU: HFI unexpected response id=%u type=%u size=%u hdr=0x%08x\n",
++			    msg_id, type, size, header);
++			return 0;
+ 		}
+ 		delay(100);
+ 	}
+-	uint32_t fw = fp6_smmu_read32(g, 0x47070u);
+-	if (!(irq & 1u) || (irq & 0x0eu) || (fw & 0xe00u)) {
+-		printf("QCOM GMU: HFI request id=%u timeout/fault irq=0x%08x fw=0x%08x\n",
+-		    id, irq, fw);
+-		if ((irq & 4u) || (fw & 0xe00u)) {
+-			flush_dcache64((addr64_t)(uintptr_t)mem, FP6_GMU_HFI_SIZE, FALSE);
+-			__asm__ volatile("dsb sy" ::: "memory");
+-			(void)fp6_gmu_hfi_debug_dump(mem);
+-		}
+-		return 0;
+-	}
+-	fp6_smmu_write32(g, 0x47644u, 1u); /* GMU2HOST_INTR_CLR: MSGQ */
+-	flush_dcache64((addr64_t)(uintptr_t)mem, FP6_GMU_HFI_SIZE, FALSE);
+-	__asm__ volatile("dsb sy" ::: "memory");
+-	uint32_t ri = msg_hdr[10], end = msg_hdr[11];
+-	if (ri >= 1024 || end >= 1024 || ri == end ||
+-	    msg_hdr[1] < fp6_gmu_hfi_va ||
+-	    msg_hdr[1] - fp6_gmu_hfi_va != FP6_GMU_HFI_QUEUE0 + 0x1000u) {
+-		printf("QCOM GMU: HFI request id=%u empty/corrupt reply ri=%u wi=%u\n", id, ri, end);
+-		return 0;
+-	}
+-	uint32_t ack[4] = {0};
+-	ack[0] = msgq[ri];
+-	unsigned size = (ack[0] >> 8) & 0xffu;
+-	if (size < 3u || size > 4u) {
+-		printf("QCOM GMU: HFI request id=%u malformed ACK size=%u\n", id, size);
+-		return 0;
+-	}
+-	for (unsigned i = 1; i < size; i++) ack[i] = msgq[(ri + i) % 1024u];
+-	msg_hdr[10] = (ri + ((size + 3u) & ~3u)) % 1024u;
+-	if (((ack[0] >> 16) & 0xfu) != 1u || (ack[0] & 0xffu) != 126u ||
+-	    ((ack[0] >> 20) & 0xffu) != seq || ack[1] != sent ||
+-	    ack[2] != 0u || (size >= 4u && ack[3] != 0u)) {
+-		printf("QCOM GMU: HFI request id=%u bad ACK hdr=0x%08x req=0x%08x status=0x%08x size=%u\n",
+-		    id, ack[0], ack[1], ack[2], size);
+-		return 0;
+-	}
+-	printf("QCOM GMU: HFI request id=%u ACK seq=%u status=0x%08x size=%u\n", id, seq, ack[2], size);
+-	return 1;
++	printf("QCOM GMU: HFI request id=%u timeout/fault irq=0x%08x fw=0x%08x\n",
++	    id, irq, fp6_smmu_read32(g, 0x47070u));
++	return 0;
+ }
+ 
+ struct fp6_bcm_meta {
+@@ -3689,7 +3753,7 @@
+ 		if (hfi) {
+ 			uint8_t *hfi_mem = fp6_gmu_range_va(fp6_gmu_hfi_va);
+ 			if (!hfi_mem || !fp6_gmu_hfi_start_sequence(g, hfi_mem))
+-				printf("QCOM GMU: HFI pre-start sequence stopped; GMU will be reset\n");
++				printf("QCOM GMU: HFI sequence stopped; GMU will be reset\n");
+ 		}
+ 	}
+ 	/* No HFI command service exists yet. Stop on success as well as failure.
