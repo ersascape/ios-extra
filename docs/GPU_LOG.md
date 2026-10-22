@@ -1,15 +1,30 @@
 # GPU bring-up log (chronological, newest first)
 
-## FP6 patch 0159 bounded HFI CORE_FW_START source/model result
+## FP6 patch 0159 CORE_FW_START firmware fault (2026-10-22)
 
 - Patch 0159 mirrors Linux Gen8 queue 0 submission: `H2F_MSG_CORE_FW_START`,
   sequence 1, 2-dword request, 4-dword queue alignment, host-to-GMU message
   doorbell, and message-queue ACK validation. The HFI buffer transitions through
   clean/invalidate before GMU ownership and invalidate after its interrupt.
-- The host fault-injection harness verifies packet contents, an ACK with
-  matching request header and zero status, and the reset containment paths.
-  Normal and ASan/UBSan runs pass. This does not simulate actual firmware
-  behavior. CI and device validation are pending.
+- Commit `78ce55ec29dd66de6ffdb93eb5c487436de77303` passed CI
+  `39766804611`; kernel SHA256
+  `3f3aa08c6fc98403b768a2887e7703934afdca26d683f229062c30c6f8801aa0`.
+  Packaged image SHA256
+  `d68b056515ffc18677842c0dea5bcc51f1dd4a8f11b069ba9341fa4af29c7b08`.
+- One temporary boot captured 101 UDP packets. Decoded log SHA256
+  `ff9b450dc47e29d15f87cabc192b1862198892b543810de72bf99203412b220c`; pcap
+  SHA256 `c828b23c0d2c4be46919d8b00cd9cea3b6bf0b9c9a61a5ce68f5608de6db9008`.
+- Phone: `HFI_CTRL_STATUS=1`, then
+  `HFI CORE_FW_START timeout/fault irq=0x00000004 fw=0x00000900`; bounded stop
+  verified CM3 reset. Linux identifies GMU2HOST bit 2 as DBGQ; FW_INIT_RESULT
+  bits `0xe00` indicate firmware assertion. The debug queue payload was not
+  captured, so the assertion reason is still unknown.
+- Source inspection found Linux `gen8_hwsched_hfi_start()` submits warmboot
+  scratch, GPU performance and BW tables, optional feature controls and log
+  settings before CORE_FW_START. Patch 0159 tried CORE_FW_START immediately
+  after controller initialization. Next, inspect the FP6 table data and the
+  driver's debug queue/fault snapshot path before another build; do not guess
+  resource descriptors or table values.
 - If firmware returns `F2H_MSG_MEM_ALLOC` instead of the expected ACK, the code
   logs the unexpected message and resets GMU. Linux dynamically allocates/maps
   those descriptors; the phone response must establish the required allocation

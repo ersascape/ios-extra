@@ -1,6 +1,6 @@
 # ios-extra — current state
 
-## FP6 first Gen8 HFI command source milestone (2026-10-22)
+## FP6 first Gen8 HFI command phone result (2026-10-22)
 
 - Patch 0159 adds the Linux Gen8 HFI `CORE_FW_START` queue request after HFI
   controller init. It uses the existing 17-queue hwsched table, writes a
@@ -10,10 +10,28 @@
   returned to the GMU before the doorbell; the CPU does not touch the buffer
   while firmware owns it. An unexpected response fails closed and the existing
   bounded path resets CM3.
-- `python3 tests/test_fp6_gmu_boot.py` and the same harness under
-  `-fsanitize=address,undefined` pass, including a simulated ACK and reset
-  failure handling. These are host-model results only. CI and phone validation
-  for patch 0159 remain pending.
+- Commit `78ce55ec29dd66de6ffdb93eb5c487436de77303` passed CI
+  `39766804611`; XNU build and FP6 boot job passed. Kernel SHA256
+  `3f3aa08c6fc98403b768a2887e7703934afdca26d683f229062c30c6f8801aa0`.
+  Packaged image
+  `/tmp/ios-extra-run-39766804611/package/fp6-gmu-hfi-core-start.img/fp6-gmu-hfi-core-start`,
+  SHA256 `d68b056515ffc18677842c0dea5bcc51f1dd4a8f11b069ba9341fa4af29c7b08`.
+- One temporary `fastboot boot` captured 101 UDP packets. Decoded log
+  `/tmp/ios-extra-run-39766804611/logs/phone-0159-gmu-hfi-core-start.txt`,
+  SHA256 `ff9b450dc47e29d15f87cabc192b1862198892b543810de72bf99203412b220c`;
+  pcap SHA256 `c828b23c0d2c4be46919d8b00cd9cea3b6bf0b9c9a61a5ce68f5608de6db9008`.
+- Phone confirms the `CORE_FW_START` exchange does not succeed. After CM3
+  release and `HFI_CTRL_STATUS=1`, the request ends with
+  `HFI CORE_FW_START timeout/fault irq=0x4 fw=0x900`; the bounded path verifies
+  CM3 reset. Linux defines GMU2HOST bit 2 as DBGQ and FW_INIT_RESULT mask
+  `0xe00` as firmware assertion. This is a firmware-side fault, not an ACK
+  timeout alone; the debug queue contents were not captured by this patch.
+- Linux `gen8_hwsched_hfi_start()` sends warmboot scratch, performance and BW
+  tables, optional feature controls and log settings before `CORE_FW_START`.
+  Patch 0159 sent CORE_FW_START directly after HFI controller init, so it did
+  not reproduce Linux's pre-start sequence. Inspect FP6-relevant table inputs
+  and debug/fault data before choosing the next bounded probe. Do not add
+  guessed table values or MEM_ALLOC mappings.
 - Linux `adreno_gen8_hwsched_hfi.c` allocates/maps F2H `MEM_ALLOC` requests
   dynamically. The next response must first identify any request the GMU makes;
   XNU must not invent handles or addresses that are absent from the persistent

@@ -36,19 +36,16 @@ then the next question.** The user prefers slow and careful over fast and clever
 
 ## Active FP6 GPU state (2026-10-22)
 
-The active state below has advanced through patch 0158, with patch 0159 now
-submitted for CI. Patch 0159 adds a bounded Linux Gen8 `CORE_FW_START`
-request/ACK over the existing HFI queues and explicit cache ownership. The host
-fault-injection model and ASan/UBSan pass; the actual phone exchange is not yet
-tested. Commit
-`548673a33b397ef80cdbc701cd503903ab63118a` passed CI `39762347940`, and its
-locally packaged image passed one temporary phone boot. The SH0/MC0 and fixed
-ACV (width zero) DDR votes were accepted; TCS acknowledged the vote. CM3 ran
-firmware (`FW_INIT_RESULT=0x100`) and reported `HFI_CTRL_STATUS=1`. The bounded
-probe verified CM3 reset afterward. This confirms firmware startup and HFI
-controller initialization, not HFI message exchange or GPU work. Latest details
-and log hashes are at the top of `NOTES.md` and `docs/GPU_LOG.md`. Continue with
-bounded HFI start/MEM_ALLOC exchange, then GPU memory write/readback.
+The active state has advanced through patch 0159. CI `39766804611` passed and
+its packaged image booted once. The phone reported
+`HFI CORE_FW_START timeout/fault irq=0x4 fw=0x900`; Linux identifies bit 2 as
+DBGQ and FW_INIT_RESULT mask `0xe00` as a firmware assertion. The bounded probe
+verified CM3 reset. The debug queue payload was not captured. Source inspection
+found Linux sends scratch, perf/BW tables and optional feature/log controls
+before CORE_FW_START, while patch 0159 sent that command immediately after HFI
+controller initialization. Review actual FP6 Linux inputs and the debug/fault
+snapshot path before another build. No GPU execution has been demonstrated.
+Latest package and log hashes are in `NOTES.md` and `docs/GPU_LOG.md`.
 
 - Work in this checkout on `main`; remote is `ersascape/ios-extra`. The goal is
   FP6 Adreno 810 GMU firmware/HFI, then bounded GPU execution and an A810 Metal

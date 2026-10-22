@@ -25,10 +25,14 @@ GMU DMA, GPU command, rendering or Metal work has succeeded yet.
 ## Current source state
 
 - Patch 0159 adds a bounded HFI `CORE_FW_START` request/ACK exchange based on
-  Fairphone Linux Gen8. The existing host harness checks the packet, simulated
-  ACK, cache transitions, and containment; normal and ASan/UBSan runs pass.
-  CI and phone results do not exist yet. An unexpected `MEM_ALLOC` response is
-  reported and causes reset, pending exact runtime descriptor evidence.
+  Fairphone Linux Gen8. CI `39766804611` passed and the packaged image booted
+  once. The phone reported `irq=0x4 fw=0x900` after the request; bit 2 is DBGQ
+  and `0xe00` is the firmware assertion mask. The bounded path reset CM3. The
+  debug queue payload was not captured, so the assertion cause remains unknown.
+- Linux sends warmboot scratch, perf/BW tables and optional feature/log
+  controls before CORE_FW_START; patch 0159 did not. Compare the actual Linux
+  FP6 inputs and GMU fault/debug snapshot path before the next build. The host
+  harness's simulated ACK is not evidence of device firmware acceptance.
 
 - Current source is commit `548673a33b397ef80cdbc701cd503903ab63118a` (patch
   0158), CI `39762347940` passed. The kernel was verified and packaged locally
