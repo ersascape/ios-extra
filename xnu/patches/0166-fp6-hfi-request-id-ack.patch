@@ -1,0 +1,9 @@
+diff --git a/bsd/dev/sweet_gpu.c b/bsd/dev/sweet_gpu.c
+index 0000000..0000000 100644
+--- a/bsd/dev/sweet_gpu.c
++++ b/bsd/dev/sweet_gpu.c
+@@ -3709,2 +3709,3 @@ fp6_gmu_hfi_send_req(vm_offset_t smmu, uint32_t cb_off, vm_offset_t g,
+-			if (type == 1u && msg_id == 126u && size >= 3u && size <= 4u) {
++			/* Gen8 can label an ACK with the acknowledged command ID. */
++			if (type == 1u && (msg_id == id || msg_id == 126u) && size >= 3u && size <= 4u) {
+ 				uint32_t ack[4] = { reply[0], reply[1], reply[2], size >= 4u ? reply[3] : 0u };

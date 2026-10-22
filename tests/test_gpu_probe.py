@@ -240,7 +240,10 @@ static void test_store32(vm_offset_t base, uint32_t off, uint32_t value)
         uint32_t request = cmdq[cmd_hdr[10]];
         cmd_hdr[10] = cmd_hdr[11]; /* GMU consumed the command. */
         unsigned wi = msg_hdr[11];
-        msgq[(wi + 0u) % 1024u] = (1u << 16) | (4u << 8) | 126u;
+        /* Measured Gen8 TABLE ACKs retain ID 15 and use a 3-dword payload. */
+        unsigned req_id = request & 0xffu;
+        msgq[(wi + 0u) % 1024u] = (1u << 16) |
+            ((req_id == 15u ? 3u : 4u) << 8) | (req_id == 15u ? req_id : 126u);
         msgq[(wi + 1u) % 1024u] = request;
         msgq[(wi + 2u) % 1024u] = hfi_fake_result;
         msgq[(wi + 3u) % 1024u] = 0; /* GMU_SUCCESS */

@@ -34,9 +34,20 @@
   `a1c6f7da616520841c4d56ac2a147940c5c93a0b4406cb1c9ae6832d64338f7c`; all 16
   fastboot sparse chunks completed `OKAY`. Redacted transcript:
   `/tmp/fastboot-flash-fp6-rootfs-20261022.log`. This overwrote prior userdata.
-  The follow-up 0165 RAM-disk boot was not issued: the single `pkexec` capture
-  authorization timed out, and the helper refused to boot. No 0165 phone log
-  exists yet. Firmware acceptance and GPU execution remain unproven.
+  One 0165 RAM-disk boot was issued through the bounded USB capture helper.
+  Phone log: `/tmp/ios-extra-run-39814973566/logs/phone-0165-gmu-hfi-start-resume.txt`
+  (SHA-256 `616da7d037e14403ef9064c347b978b8d7efe9d9df56ce1d89c515358e4f8e50`);
+  pcap: `/tmp/ios-extra-run-39814973566/logs/phone-0165-gmu-hfi-start-resume.pcap`
+  (SHA-256 `1db0dd86e8c6ba9dff7300c4c8877ce54c94ed16cce3bc3b048ed7e45e7fb43c`).
+  The phone log measured `FW_INIT_RESULT=0x100`, `HFI_CTRL_STATUS=1`, and the
+  expected `0x20070001` firmware. The first post-start message was
+  `id=15 type=1 size=3 hdr=0x0001030f`, matching a TABLE ACK, but the parser only
+  accepted generic ID 126 and reset the bounded probe. CM3 reset was verified;
+  GPU START and GX remained untested. Follow-up patch 0166 accepts a response
+  labeled with the acknowledged request ID while retaining sequence/echo/status
+  validation. GPU probe plus ASan/UBSan tests and the GMU bounded-boot test pass
+  with that host implementation. It still needs one phone test to verify TABLE
+  ACK payload handling and continue the HFI exchange.
 
 ## GMU cacheability source check (2026-10-22)
 

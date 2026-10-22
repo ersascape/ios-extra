@@ -7,9 +7,22 @@
   the recorded image; all 16 sparse chunks completed `OKAY`. Redacted fastboot
   transcript: `/tmp/fastboot-flash-fp6-rootfs-20261022.log`. Previous userdata
   was overwritten. This is a storage operation, not a GPU observation.
-- The 0165 RAM-disk test was not started: its single `pkexec` USB-capture
-  authorization timed out, and the helper refused to issue `fastboot boot`.
-  No new phone log or firmware result exists.
+- One 0165 RAM-disk boot was captured with the bounded USB helper. The decoded
+  phone log is `/tmp/ios-extra-run-39814973566/logs/phone-0165-gmu-hfi-start-resume.txt`
+  (SHA-256 `616da7d037e14403ef9064c347b978b8d7efe9d9df56ce1d89c515358e4f8e50`);
+  the pcap is in the same directory. It measured `FW_INIT_RESULT=0x100`,
+  `HFI_CTRL_STATUS=1`, and firmware `0x20070001`. The first HFI response was
+  `id=15 type=1 size=3 hdr=0x0001030f`, returned to the GPU performance TABLE
+  request. Patch 0161 only recognized generic ACK ID 126, so it reported the
+  valid request-ID response as unexpected and stopped. The probe verified CM3
+  reset. No START ACK, GX power-on, GPU command, DMA readback, or draw was
+  observed.
+- Patch 0166 recognizes both the request ID and generic ACK ID, while keeping
+  the existing echoed-header and status checks. `tests/test_gpu_probe.py` passes
+  normally and under ASan/UBSan; `tests/test_fp6_gmu_boot.py` passes. These are
+  host-model results. Patch 0166 needs a phone boot to verify the echoed header
+  and status dwords from the real TABLE response, then test the remaining HFI
+  startup messages.
 
 - Source review of Fairphone SM7635 graphics-kernel commit
   `54c948d9b30c2ba01835e64c36b68b80692554ac` confirms Gen8 HFI version minor

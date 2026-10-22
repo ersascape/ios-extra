@@ -68,23 +68,28 @@ kernel SHA256 is `916d0e406f6425d1681b3522c6e2403ca2b4c16342ac8dbc1355efa5da7891
 The locally packaged header-v2 RAM-disk image is
 `/tmp/ios-extra-run-39814973566/package/fp6-gmu-hfi-start-0165.img`, SHA256
 `1f1575412a97639396691ccfbc7898022937818b6bba4f5097d54fe25733de4f`.
-No phone test exists for 0165, so this is not evidence of firmware acceptance.
+One phone test reached `FW_INIT_RESULT=0x100` and `HFI_CTRL_STATUS=1`, then
+returned TABLE response header `0x0001030f` (ID 15, ACK type, 3 dwords). The
+driver only recognized generic ACK ID 126 and stopped; CM3 reset was verified.
+Patch 0166 now accepts request-ID ACKs with the same echoed-header/status
+validation. The decoded log and pcap are under
+`/tmp/ios-extra-run-39814973566/logs/phone-0165-gmu-hfi-start-resume.*`.
+Host probe checks, including ASan/UBSan, and the bounded GMU boot test pass.
 The user explicitly requested flashing the Tegu rootfs from
 `/home/ersa/Dev/ios-extra/research/fp6-rootfs-tegu-20261021/` to the existing
 `userdata` partition. That sparse image (SHA256
 `a1c6f7da616520841c4d56ac2a147940c5c93a0b4406cb1c9ae6832d64338f7c`) was
 written successfully in 16 fastboot chunks; transcript is
 `/tmp/fastboot-flash-fp6-rootfs-20261022.log`. This overwrote prior userdata.
-Do not repeat the flash. The subsequent 0165 RAM-disk boot did not run because
-the single `pkexec` capture authorization timed out; no phone log exists. For
-the next boot, use the already packaged image and USB helper, and do not retry
-authorization unless the user is available. Do not touch other partitions or
-use `fastboot getvar`.
+Do not repeat the flash. For the next phone test, rebuild once with patch 0166,
+package the resulting kernel with the known ADT/DTB and RAM-disk init, then use
+the USB helper. Do not touch other partitions or use `fastboot getvar`.
 
 Earlier phone evidence remains: patch 0159's CORE_FW_START path asserted with
-`irq=0x4 fw=0x900` and the bounded path verified CM3 reset. Patches 0160–0165
-have no phone result. No GPU command execution, GPU write/readback, draw/readback,
-or Metal rendering has been demonstrated.
+`irq=0x4 fw=0x900` and the bounded path verified CM3 reset. The 0165 phone test
+proves initial firmware execution and HFI controller readiness, but not
+completion of the HFI startup sequence. No GPU command execution, GPU
+write/readback, draw/readback, or Metal rendering has been demonstrated.
 
 - Work in this checkout on `main`; remote is `ersascape/ios-extra`. The goal is
   FP6 Adreno 810 GMU firmware/HFI, then bounded GPU execution and an A810 Metal
