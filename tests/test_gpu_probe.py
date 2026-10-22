@@ -2095,6 +2095,34 @@ int main(void)
     assert(fp6_map_calls == 1 && scm_calls == 2);
     puts("PASS: FP6 Adreno work starts from its dedicated EARLY_BOOT hook");
 
+    /* Patch 0169 snapshots the powered CB0 state without taking ownership.
+     * Keep the measured disabled-but-nonzero baseline intact and verify every
+     * stream group is read without issuing any MMIO write. */
+    memset(fp6_smmu, 0, sizeof(fp6_smmu));
+    fp6_smmu[0x20/4] = 0x4c017e18u;
+    fp6_smmu[0x24/4] = 0x40000016u;
+    fp6_smmu[(0x20000 + 0x00)/4] = 0x2ff5c314u;
+    fp6_smmu[(0x20000 + 0x30)/4] = 0x7d0e6f8cu;
+    fp6_smmu[(0x20000 + 0x10)/4] = 0x00038065u;
+    fp6_smmu[(0x20000 + 0x20)/4] = 0x0fcb6d7bu;
+    fp6_smmu[(0x20000 + 0x24)/4] = 0x19b14377u;
+    fp6_smmu[(0x20000 + 0x28)/4] = 0xaf8db9f4u;
+    fp6_smmu[(0x20000 + 0x2c)/4] = 0xdc20c8e1u;
+    fp6_smmu[(0x20000 + 0x38)/4] = 0x079fae8au;
+    fp6_smmu[(0x20000 + 0x3c)/4] = 0x8899bf1fu;
+    for (unsigned i = 0; i < 24; i++) fp6_smmu[(0xc00 + 4*i)/4] = 0x00020000u;
+    fp6_smmu[(0xc00 + 4*7)/4] = 0; /* surfaced as the one anomalous route */
+    static uint32_t smmu_snapshot_before[0x40000 / 4];
+    memcpy(smmu_snapshot_before, fp6_smmu, sizeof(smmu_snapshot_before));
+    all_mmio_writes = 0; output[0] = 0;
+    fp6_smmu_cb0_snapshot((vm_offset_t)fp6_smmu, "host-test");
+    assert(all_mmio_writes == 0);
+    assert(!memcmp(smmu_snapshot_before, fp6_smmu, sizeof(smmu_snapshot_before)));
+    assert(strstr(output, "CB0 stage=host-test CBAR=0x00000000 CBA2R=0x00000000 SCTLR=0x2ff5c314"));
+    assert(strstr(output, "TTBR0=0x19b143770fcb6d7b TTBR1=0xdc20c8e1af8db9f4"));
+    assert(strstr(output, "group=7 SMR=0x00000000 S2CR=0x00000000"));
+    puts("PASS: FP6 CB0 stage snapshot reports disabled state without SMMU writes");
+
     /* Exercise the actual GMU clock path, including the inherited phone state.
      * The earlier inventory tests intentionally leave fp6gmuload disabled. */
     fp6_gmu_clock_model = 1;

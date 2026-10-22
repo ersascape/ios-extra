@@ -1,5 +1,5 @@
 """Run actual runtime patch callbacks against pinned firmware and MMIO model."""
-import pathlib, tempfile, subprocess, importlib.util, sys
+import pathlib, tempfile, subprocess, importlib.util, sys, unittest
 r=pathlib.Path(__file__).resolve().parents[1]
 spec=importlib.util.spec_from_file_location('fp6_runtime_fw',r/'tools/fp6-gmu-fw.py')
 fw=importlib.util.module_from_spec(spec);sys.modules[spec.name]=fw;spec.loader.exec_module(fw)
@@ -97,7 +97,10 @@ int main(int argc,char **argv){
 '''
 with tempfile.TemporaryDirectory() as td:
  d=pathlib.Path(td);(d/'fp6_gmu_domain.h').write_text(header)
- fw.emit_header(fw.verify_pinned_blob(pathlib.Path('/tmp/fp6-firmware/gen80300_gmu.bin').read_bytes()),d/'fp6_gmu_fw.h')
+ firmware=pathlib.Path('/tmp/fp6-firmware/gen80300_gmu.bin')
+ if not firmware.is_file():
+  raise unittest.SkipTest('pinned local FP6 GMU firmware is unavailable')
+ fw.emit_header(fw.verify_pinned_blob(firmware.read_bytes()),d/'fp6_gmu_fw.h')
  (d/'test.c').write_text(preamble+s+model)
  subprocess.run(['cc','-std=c11','-Wall','-Wextra','-Werror','-Wno-misleading-indentation','-I',str(d),'-I',str(r/'xnu/helpers'),str(d/'test.c'),'-o',str(d/'test')],check=True)
  subprocess.run([str(d/'test')],check=True)

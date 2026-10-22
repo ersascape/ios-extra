@@ -2981,3 +2981,18 @@ error::ResourceWarning -m unittest discover -s tests` (also with
   but the value remains untested on FP6 hardware. GPU context activation and
   all firmware/GMU exchanges remain pending. No phone was accessed during
   this source and host-test pass.
+
+## FP6 CB0 stage diagnostic host coverage (2026-10-23)
+
+- Extended the GPU host harness to seed the measured disabled-but-nonzero CB0
+  state, including TTBR/TCR/MAIR, and verify patch 0169's stage snapshot emits
+  those values and an anomalous stream-group route without issuing any SMMU
+  writes or changing any modeled register.
+- `tests/test_gpu_probe.py` passed normally and under ASan/UBSan. The full
+  Python test suite passed (13 tests, 5 skipped). The GMU runtime integration
+  test now reports a skip when its pinned firmware blob is not present at
+  `/tmp/fp6-firmware/gen80300_gmu.bin`; it still runs when that local artifact
+  is available. This is host-only validation; it adds no new CI build or phone
+  observation. Patch 0169 remains untested on the phone because fastboot was
+  absent. The next useful hardware step remains its read-only CB0 stage image
+  after the user has placed the FP6 in fastboot.
