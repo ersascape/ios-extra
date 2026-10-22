@@ -2,6 +2,17 @@
 
 ## FP6 GMU-only HFI allocation follow-up (0162, 2026-10-22)
 
+- Source-review correction to 0162: GMU S1 PTE permissions now follow the
+  Linux Gen8 `get_attrs()` policy. `IOMMU_READ` is always present;
+  `GMU_WRITEABLE` controls write permission and `GMU_PRIV` controls privileged
+  access. The PTE uses nG, AF, outer-shareable, and the resulting AP bits. Host
+  fixtures verify default read-only/unprivileged and explicit privileged/RW
+  requests, plus GPU-access refusal. Normal and ASan/UBSan protocol/domain tests
+  pass; `test_gpu_probe.py` passes; the changed source compiles against the
+  39787950216 CI buildtree (`0 of 1 files failed`). No CI run or phone result
+  exists for this correction yet. The firmware's actual descriptor is still
+  unknown, and the user is testing Android.
+
 - Candidate patch 0162 answers non-secure, non-GPU-access `MEM_ALLOC` requests
   using permanent kernel backing and a live append to the GMU SMMU page tables.
   It cleans the published tables, issues context TLBIALL/TLBSYNC, waits for

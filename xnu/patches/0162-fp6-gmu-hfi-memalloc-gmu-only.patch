@@ -34,7 +34,7 @@ index ed75e45..38cba21 100644
   */
  #define FP6_GMU_HFI_SIZE        0x12000u        /* 840 + 16 + 17 x 4 KiB, page rounded */
  #define FP6_GMU_HFI_QUEUES      17u
-@@ -3059,6 +3060,88 @@ fp6_gmu_next_va(uint32_t size)
+@@ -3059,6 +3060,92 @@ fp6_gmu_next_va(uint32_t size)
  	return va + size > 0x80000000u ? 0 : (uint32_t)va;
  }
  
@@ -47,6 +47,8 @@ index ed75e45..38cba21 100644
 +#define FP6_HFI_MEMKIND_MAX 26u
 +#define FP6_HFI_MEMFLAG_GFX_ACC (1u << 0)
 +#define FP6_HFI_MEMFLAG_GMU_CACHEABLE (1u << 7)
++#define FP6_HFI_MEMFLAG_GMU_PRIV (1u << 4)
++#define FP6_HFI_MEMFLAG_GMU_WRITEABLE (1u << 5)
 +#define FP6_HFI_MEMFLAG_GFX_SECURE (1u << 12)
 +struct fp6_hfi_mem_alloc {
 +	uint32_t mem_kind, gmu_handle;
@@ -90,7 +92,7 @@ index ed75e45..38cba21 100644
 + * TLB is invalidated. All memory remains permanent if any later step fails. */
 +static int
 +fp6_gmu_domain_map_live(vm_offset_t smmu, uint32_t cb_off,
-+		uint32_t address, uint32_t size, int cached)
++		uint32_t address, uint32_t size, int cached, uint32_t flags)
 +{
 +	if (!smmu || !fp6_gmu_domain.frozen || fp6_gmu_domain.failed ||
 +	    fp6_smmu_read32(smmu, cb_off + FP6_SMMU_CB_SCTLR) != 0x27u) {
@@ -98,7 +100,9 @@ index ed75e45..38cba21 100644
 +		return 0;
 +	}
 +	fp6_gmu_domain.frozen = 0;
-+	int mapped = fp6_gmu_domain_reserve(&fp6_gmu_domain, address, size, cached);
++	int mapped = fp6_gmu_domain_reserve_access(&fp6_gmu_domain, address, size,
++	    cached, (flags & FP6_HFI_MEMFLAG_GMU_WRITEABLE) != 0,
++	    (flags & FP6_HFI_MEMFLAG_GMU_PRIV) != 0);
 +	if (!mapped) mapped = fp6_gmu_domain_publish(&fp6_gmu_domain);
 +	fp6_gmu_domain.frozen = 1;
 +	if (mapped) {
@@ -163,7 +167,7 @@ index ed75e45..38cba21 100644
 +	uint32_t va = fp6_gmu_hfi_find_va((flags & FP6_HFI_MEMFLAG_GMU_CACHEABLE) != 0,
 +	    (uint32_t)rounded, align);
 +	if (!va || !fp6_gmu_domain_map_live(smmu, cb_off, va, (uint32_t)rounded,
-+	    (flags & FP6_HFI_MEMFLAG_GMU_CACHEABLE) != 0)) {
++	    (flags & FP6_HFI_MEMFLAG_GMU_CACHEABLE) != 0, flags)) {
 +		printf("QCOM GMU: HFI MEM_ALLOC backing/map refused kind=%u handle=%u bytes=%u; CM3 reset required\n",
 +		    kind, handle, size);
 +		return 0;

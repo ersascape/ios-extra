@@ -29,14 +29,15 @@ static uint64_t walk(struct fp6_gmu_domain *d,uint32_t a) {
 int main(void) {
  struct fp6_gmu_domain *d=calloc(1,sizeof(*d)); assert(!fp6_gmu_domain_init(d,&ops,0));
  /* Exercise an L2 boundary and a separate top-level branch. */
- assert(!fp6_gmu_domain_reserve(d,0x1ff000,0x3000,1));
- assert(!fp6_gmu_domain_reserve(d,0xc0000000,0x1000,0));
+ assert(!fp6_gmu_domain_reserve_access(d,0x1ff000,0x3000,1,0,1));
+ assert(!fp6_gmu_domain_reserve_access(d,0xc0000000,0x1000,0,1,0));
  uint64_t pa=d->ranges[0].backing.pa;
  assert((walk(d,0x1ff000)&~4095ULL)==pa);
  assert((walk(d,0x201000)&~4095ULL)==pa+8192);
- assert((walk(d,0x1ff000)&0xfff)==0x603);
- assert((walk(d,0xc0000000)&0xfff)==0x603);
- unsigned n=allocations; assert(!fp6_gmu_domain_reserve(d,0x1ff000,0x3000,1));assert(n==allocations);
+ assert((walk(d,0x1ff000)&0xfff)==0xe83); /* nG, read-only, privileged */
+ assert((walk(d,0xc0000000)&0xfff)==0xe43); /* nG, read/write, unprivileged */
+ unsigned n=allocations; assert(!fp6_gmu_domain_reserve_access(d,0x1ff000,0x3000,1,0,1));assert(n==allocations);
+ assert(fp6_gmu_domain_reserve_access(d,0x1ff000,0x3000,1,1,1));
  assert(fp6_gmu_domain_reserve(d,0x200000,4096,1));
  uint8_t payload[]={1,2,3,4};
  assert(!fp6_gmu_domain_copy(d,0x1ffffe,payload,4));

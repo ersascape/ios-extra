@@ -52,6 +52,7 @@ static uint32_t fake_start_header;
 static uint32_t fake_counter_header;
 static uint32_t fake_mem_alloc_header, fake_mem_alloc_va;
 static uint32_t fake_mem_alloc_flags;
+static uint32_t fake_mem_alloc_handle=0xabcdu;
 static uint32_t fp6_gmu_hfi_va;
 static uint8_t *fp6_gmu_range_va(uint32_t);
 static uint64_t fake_gmu_walk(uint32_t a) {
@@ -186,12 +187,14 @@ static void fp6_smmu_write32(vm_offset_t b,uint32_t o,uint32_t v) {
    assert(dwords==11u && ((req_hdr>>20)&0xfffu)==6u);
    assert(cmdq[(wi+1u)%1024u]==fake_mem_alloc_header);
    assert(cmdq[(wi+2u)%1024u]==0u && cmdq[(wi+3u)%1024u]==0u);
-   assert(cmdq[(wi+4u)%1024u]==0u && cmdq[(wi+5u)%1024u]==2u);
-   assert(cmdq[(wi+6u)%1024u]==0xabcdu && cmdq[(wi+7u)%1024u]==0xabcdu);
+   assert(cmdq[(wi+4u)%1024u]==fake_mem_alloc_flags && cmdq[(wi+5u)%1024u]==2u);
+   assert(cmdq[(wi+6u)%1024u]==fake_mem_alloc_handle && cmdq[(wi+7u)%1024u]==fake_mem_alloc_handle);
    fake_mem_alloc_va=cmdq[(wi+8u)%1024u];
    assert(fake_mem_alloc_va && cmdq[(wi+9u)%1024u]==4096u && cmdq[(wi+10u)%1024u]==12u);
    assert(fp6_gmu_domain.frozen && (fake_gmu_walk(fake_mem_alloc_va)&~4095ULL)==
        fp6_gmu_domain.ranges[fp6_gmu_domain.count-1].backing.pa);
+   assert((fake_gmu_walk(fake_mem_alloc_va)&0xc0u)==
+       ((fake_mem_alloc_flags&(1u<<4)?0u:0x40u)|(fake_mem_alloc_flags&(1u<<5)?0u:0x80u)));
   } else {
    assert(id==14 && dwords==2 && cmdq[(wi+1u)%1024u]==0);
   }
@@ -201,7 +204,7 @@ static void fp6_smmu_write32(vm_offset_t b,uint32_t o,uint32_t v) {
    msgq[ri]=(11u<<8)|20u; fake_mem_alloc_header=msgq[ri]; msgq[(ri+1u)%1024u]=1u;
    msgq[(ri+2u)%1024u]=0u; msgq[(ri+3u)%1024u]=0u;
    msgq[(ri+4u)%1024u]=fake_mem_alloc_flags; msgq[(ri+5u)%1024u]=2u;
-   msgq[(ri+6u)%1024u]=0u; msgq[(ri+7u)%1024u]=0xabcdu;
+   msgq[(ri+6u)%1024u]=0u; msgq[(ri+7u)%1024u]=fake_mem_alloc_handle;
    msgq[(ri+8u)%1024u]=0u; msgq[(ri+9u)%1024u]=4096u;
    msgq[(ri+10u)%1024u]=12u; msg_hdr[11]=(ri+12u)%1024u;
   } else if(id==14 && fake_cntr_event) {
@@ -286,11 +289,11 @@ static void run_probe(uint32_t fw, uint32_t hfi, int fail_reset) {
  assert(hfi_starts==((fw==0x100)?1u:0u));
  unsigned expected=(fake_bad_hfi_ack?1u:5u)+(fake_cntr_event?1u:0u);
  if(fake_mem_alloc_event)expected=6u;
- if(fake_mem_alloc_event && fake_mem_alloc_flags)expected=5u;
+ if(fake_mem_alloc_event && (fake_mem_alloc_flags&1u))expected=5u;
  assert(fp6_hfi_doorbells==((fw==0x100 && hfi==1)?expected:0u));
  unsigned flushes=(fake_bad_hfi_ack?2u:10u)+(fake_cntr_event?2u:0u);
  if(fake_mem_alloc_event)flushes+=2u;
- if(fake_mem_alloc_event && fake_mem_alloc_flags)flushes=10u;
+ if(fake_mem_alloc_event && (fake_mem_alloc_flags&1u))flushes=10u;
  assert(fp6_hfi_cache_flushes==((fw==0x100 && hfi==1)?flushes:0u));
 }
 int main(void) {
@@ -371,7 +374,13 @@ int main(void) {
  fake_mem_alloc_event=1;
  run_probe(0x100,1,0); /* GMU-only request is backed, mapped, flushed, ACKed, then START completes */
  assert(fake_mem_alloc_va && fake_tlbi_count==1 && fake_tlbsync_count==1);
+ assert((fake_gmu_walk(fake_mem_alloc_va)&0xc0u)==0xc0u); /* Linux default: read-only, unprivileged */
+ fake_mem_alloc_flags=(1u<<4)|(1u<<5); /* GMU privileged read/write permissions */
+ fake_mem_alloc_handle=0xabceu;
+ run_probe(0x100,1,0);
+ assert(fake_mem_alloc_va && (fake_gmu_walk(fake_mem_alloc_va)&0xc0u)==0);
  fake_mem_alloc_flags=1u; /* GPU-accessible request must not receive a fabricated GPU address */
+ fake_mem_alloc_handle=0xabcfu;
  run_probe(0x100,1,0);
  assert(!fake_mem_alloc_va && fake_tlbi_count==0 && fake_tlbsync_count==0);
  fake_mem_alloc_flags=0;

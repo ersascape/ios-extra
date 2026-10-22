@@ -1,5 +1,25 @@
 # GPU bring-up log (chronological, newest first)
 
+## FP6 HFI GMU allocation permissions review (2026-10-22)
+
+- Compared the XNU GMU-only allocation path with Fairphone Gen8
+  `adreno_gen8_hwsched_hfi.c:get_attrs()` and the fork's QCOM ARM64 S1
+  `arm_lpae_prot_to_pte()`. Linux always maps read access, adds write access
+  only for `GMU_WRITEABLE`, and adds privileged-only access only for
+  `GMU_PRIV`; QCOM ARM64 S1 encodes read-only and unprivileged access in AP.
+  The prior XNU candidate mapped every request privileged and writable.
+- Updated the persistent domain allocator to carry access attributes per range
+  and build nG/AF/outer-shareable PTEs with request-derived AP bits. Existing
+  firmware/HFI boot mappings keep their prior privileged RW default. The HFI
+  allocator now passes the descriptor's GMU permission flags through.
+- Host domain and HFI tests verify read-only/unprivileged defaults and
+  privileged/RW flags, while GPU-access allocations remain refused. Normal and
+  ASan/UBSan tests pass; broad GPU probe tests pass; `sweet_gpu.c` cross-compiles
+  against CI buildtree `39787950216` (`0 of 1 files failed`). This is source and
+  host evidence only: CI for this correction has not run, no phone test exists,
+  and the actual firmware descriptor is unknown. Device commands remain
+  deferred while the user tests Android.
+
 ## FP6 patch 0162 GMU-only HFI allocation candidate — 2026-10-22
 
 - Patch 0162 extends 0161's event dispatcher to service the narrow Linux
