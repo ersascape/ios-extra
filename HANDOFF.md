@@ -66,18 +66,18 @@ then the next question.** The user prefers slow and careful over fast and clever
 
 ## FP6 continuation update (2026-10-22)
 
-The active branch has advanced past the timer follow-up above. Current HEAD is
-`77d990a`; patch 0153 passed CI `39745254929` and one phone test, as recorded
-at the top of `NOTES.md`. Patch 0154 is under review: Linux-matched minimum DDR
-BCM vote before CM3 release. Commit `0c5bd24` passed CI `39750406760` and was
-packaged as `/tmp/ios-extra-run-39750406760/package/fp6-gmu-bootstrap-ddr-vote.img`
-(SHA256 `6093f7f39acac3cb034dc926b94655b100784511f4575b45facc10572d6a3647`).
-The phone safely refused before CM3 release because the candidate searched ARC
-cmd-db ID 3 instead of BCM ID 5; no vote was written. The corrected local patch
-passes the targeted ASan/UBSan harness and applies to the prior CI source. It
-needs a focused commit/CI build and a retry. The phone is currently booted from
-the temporary image; do not assume fastboot. This is not GPU execution: HFI
-traffic, GMU DMA, GPU command execution and Metal remain unimplemented.
+The active branch has advanced past the timer follow-up above. Patch 0153 passed
+CI `39745254929` and one phone test, as recorded at the top of `NOTES.md`.
+Commit `0c5bd24` passed CI `39750406760`; its image failed closed before CM3
+release because the BCM lookup incorrectly used ARC cmd-db ID 3. Commit
+`4f68fcb` changed it to BCM ID 5, passed CI `39752494051`, and was packaged as
+`/tmp/ios-extra-run-39752494051/package/fp6-gmu-bootstrap-ddr-vote-cmdb5.img`
+(SHA256 `fe97c9fadae1388605b37124550677f596201c3f51bdc151afd6e80d4f835494`).
+The USB log still reports missing SH0 metadata; CM3 was not released and no
+BCM write occurred. Exact artifacts and next source-based diagnostic are in
+`docs/FP6_GPU_CONTINUATION.md`. Do not assume fastboot. This is not GPU
+execution: HFI traffic, GMU DMA, GPU command execution and Metal remain
+unimplemented.
 
 ## State in one paragraph
 

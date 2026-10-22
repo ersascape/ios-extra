@@ -60,9 +60,28 @@
   first candidate incorrectly searched BCM names under ARC ID 3 (where CX/MX
   ARC records reside). Patch 0154 is being corrected to search ID 5, and the
   host fixture now identifies its records as BCM entries. The corrected patch
-  passes the targeted ASan/UBSan host harness and applies to the prior CI source;
-  commit/CI rebuild and phone retry are pending. No vote attempt has succeeded
-  on hardware yet.
+  passes the targeted ASan/UBSan host harness. The build and ID-5 phone retry
+  are recorded in the following section; the retry also failed metadata lookup.
+  No vote attempt has succeeded on hardware yet.
+
+## FP6 patch 0154 cmd-db ID-5 retry (2026-10-22)
+
+- Commit `4f68fcb011d5cbec92485f5b076a470140560f59` passed CI run
+  `39752494051`; kernel SHA256 `1d67f88580dffa942cbc54e1b8b68c5d6f360de31dac6c16d8c3512b56eff9e8`.
+  Packaged header-v2 image with USB ECM enabled:
+  `/tmp/ios-extra-run-39752494051/package/fp6-gmu-bootstrap-ddr-vote-cmdb5.img`,
+  SHA256 `fe97c9fadae1388605b37124550677f596201c3f51bdc151afd6e80d4f835494`.
+- One temporary boot reached ping and produced a 96-packet USB log. Decoded
+  text `/tmp/ios-extra-run-39752494051/logs/phone-0154b-bootstrap-ddr-vote.txt`
+  (SHA256 `dc1eb8596dfaee7c70f0c8a40f056468c235fbf2b9f513361d10cd68aae2f602`),
+  pcap SHA256 `c94751cca1fbba39e8129d11d3e3da7ae9ff5bb782498d522cd0a652f918b4d9`.
+  SMMU walk, ARC floors, clocks, timer and firmware upload succeeded; optional
+  SCM remained unavailable. Bootstrap then still reported missing SH0 metadata
+  and stopped before CM3 release. No BCM write occurred.
+- ID 5 is indeed BCM (`cmd-db.h`: ARC=3, VRM=4, BCM=5), but this correction
+  alone did not fix lookup. Investigate DB header/entry assumptions and runtime
+  BCM record visibility before another boot. See `docs/FP6_GPU_CONTINUATION.md`
+  for a source/build/phone handoff and exact next step.
 
 ## FP6 GMU first-boot attempt (2026-10-22)
 

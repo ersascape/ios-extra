@@ -25,6 +25,16 @@
   candidate searched ARC ID 3. Corrected the lookup to BCM ID 5 and updated the
   fixture; ASan/UBSan host test and patch application pass. Rebuild and phone
   retry are pending.
+- CI `39752494051` / commit `4f68fcb...` included the ID-5 correction and
+  passed; image SHA256 `fe97c9fadae1388605b37124550677f596201c3f51bdc151afd6e80d4f835494`
+  was temporarily booted with `fp6usb=2`. The 96-packet USB log shows the
+  software SMMU walk, clocks, timer, persistent firmware upload and optional
+  SCM-unavailable message all behaved as before. BCM lookup still failed at
+  SH0; CM3 was not released and no BCM write occurred. Decoded log SHA256
+  `dc1eb8596dfaee7c70f0c8a40f056468c235fbf2b9f513361d10cd68aae2f602`;
+  pcap SHA256 `c94751cca1fbba39e8129d11d3e3da7ae9ff5bb782498d522cd0a652f918b4d9`.
+  The next investigation is the live BCM record/header interpretation, not
+  another guessed write. Full continuation is in `FP6_GPU_CONTINUATION.md`.
 
 ## FP6 CX timer USB diagnosis and seed fix (2026-10-22)
 
