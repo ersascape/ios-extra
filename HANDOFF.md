@@ -127,9 +127,13 @@ validated.
 
 Patch 0169 adds read-only CB0 snapshots after CB2-test cleanup, before CM3
 release, and after firmware init. Its local CI-buildtree cross-compile passed;
-CI and phone results are pending. The next image should enable
-`fp6smmu=2 fp6smmupower=1 fp6gmuload=1 fp6gmuboot=1` and capture USB logs. It
-has not been booted because the phone is not in fastboot.
+commit `8ec6a73e7b2bdf920b52977909a625e81d3d954d` passed CI `39835047101`.
+Image `/tmp/ios-extra-run-39835047101/package/fp6-cb0-stages-0169.img` has
+SHA-256 `4c9ac2171e8603bb7d8b2bb8aa9cd7c1c622467c9e4b6bcfffb94edced84cf89`;
+header-v2 round-trip passed. It uses the verified DTB and diagnostic RAM disk;
+the CI ADT has no `/product` artwork. The phone was not in fastboot, so this
+image has not been booted. The next test should enable
+`fp6smmu=2 fp6smmupower=1 fp6gmuload=1 fp6gmuboot=1` and capture USB logs.
 
 Earlier phone evidence remains: patch 0159's CORE_FW_START path asserted with
 `irq=0x4 fw=0x900` and the bounded path verified CM3 reset. The 0165 phone test

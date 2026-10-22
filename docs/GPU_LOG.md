@@ -1875,7 +1875,14 @@ No additional phone action was taken during handoff.**
   CM3 release, and after GMU firmware init. The existing first-GFX_ACC refusal
   snapshot supplies the HFI endpoint. No CB0 writes or policy changes.
 - `git apply --check` passes against the CI `39831380821` buildtree;
-  `tools/xnu-cc.py` compiles `bsd/dev/sweet_gpu.c` with 0/1 failures. CI and
-  phone evidence are pending. The phone is not in fastboot, so no boot was
-  attempted. Goal is to distinguish CB2 diagnostic, GMU setup, firmware and
-  HFI as the stage associated with the CB0 readback change.
+  `tools/xnu-cc.py` compiles `bsd/dev/sweet_gpu.c` with 0/1 failures. Commit
+  `8ec6a73e7b2bdf920b52977909a625e81d3d954d` passed full CI run `39835047101`;
+  kernel SHA-256 `6c9a6cedc6998253c9425706e789d02ad88c50664f6f741675467c0d0e62c126`.
+  The compiled kernel contains all three stage strings.
+- Packaged header-v2 image:
+  `/tmp/ios-extra-run-39835047101/package/fp6-cb0-stages-0169.img`, SHA-256
+  `4c9ac2171e8603bb7d8b2bb8aa9cd7c1c622467c9e4b6bcfffb94edced84cf89`.
+  The CI ADT lacks `/product` artwork; this diagnostic image is not for
+  SpringBoard validation. The phone was not in fastboot and no boot was
+  attempted. Next test should distinguish CB2 diagnostic, GMU setup, firmware
+  and HFI as the stage associated with CB0 readback changes.

@@ -10,9 +10,19 @@
   execution, or HFI without writing CB0.
 - The modified `sweet_gpu.c` cross-compiles against CI buildtree `39831380821`
   (`0 of 1 files failed`). Patch `git apply --check` passed against that
-  buildtree. CI and phone results are pending. The phone is not in fastboot,
-  so no additional boot was attempted. The next test should use one temporary
-  image with `fp6smmu=2 fp6smmupower=1 fp6gmuload=1 fp6gmuboot=1` and USB logs.
+  buildtree. Commit `8ec6a73e7b2bdf920b52977909a625e81d3d954d` passed full XNU
+  CI run `39835047101`; the kernel SHA-256 is
+  `6c9a6cedc6998253c9425706e789d02ad88c50664f6f741675467c0d0e62c126`. Binary
+  string inspection confirms all three stage labels are in the CI kernel.
+- Packaged the CI kernel and ADT with verified Volcano DTB
+  (`8198534128258bfe7b05bbb5b227affc181aa49b376884c08eae8564fce124e3`) and
+  the previous bounded RAM-disk init. Header-v2 round-trip passed. Image:
+  `/tmp/ios-extra-run-39835047101/package/fp6-cb0-stages-0169.img`, SHA-256
+  `4c9ac2171e8603bb7d8b2bb8aa9cd7c1c622467c9e4b6bcfffb94edced84cf89`.
+  The CI ADT lacks `/product` artwork; packaging used `--allow-no-product`,
+  so this image is for diagnostic kernel output only. The phone was not in
+  fastboot and no additional boot was attempted. Next test args include
+  `fp6smmu=2 fp6smmupower=1 fp6gmuload=1 fp6gmuboot=1` with USB logging.
 - This diagnostic does not change the GPU driver’s refusal policy and cannot
   establish SMMU ownership by itself. Do not change CB0 until the checkpoints
   identify an understood owner/state transition.
