@@ -149,19 +149,24 @@ The Fairphone Gen8.3 source shows the required cold-boot path continues through
 `gen8_hwsched_hfi_start()` (`adreno_gen8_hwsched_hfi.c:2138`): after
 `CORE_FW_START`, query/enable the context queue and register the hardware-fence
 client, send HW_FENCE control, initialize preemption and LPAC, enable AQE when
-the core supports it, then send `START`. While waiting for that `START` ACK,
-the GMU can interleave F2H `MEM_ALLOC` and `GMU_CNTR_REGISTER` requests. Linux
-creates and maps backing for the former; counter registration failure is
-allowed and answered with zero offsets. The XNU probe currently treats every
-queue-1 packet as a final ACK, so it cannot complete this exchange. The first
-required runtime extension is an event-aware HFI dispatcher plus correctly
-mapped memory for the actual allocation descriptors; a pre-mapped GMU-only
-arena cannot satisfy descriptors requiring GPU access. These are distinct wire
-replies: a generic H2F command completes with F2H ACK id 126, while a service
-reply uses ACK type and the original event ID (20 for MEM_ALLOC, 110 for
-GMU_CNTR_REGISTER), with the request header echoed. The counter response is
-six dwords; Linux explicitly sends zero low/high offsets when it cannot reserve
-a counter, then continues waiting for the START ACK.
+the core supports it, then send `START`. The A810 profile does not advertise
+LPAC/AQE, and XNU does not enable HW_FENCE without its required service. While
+waiting for the `START` ACK, the GMU can interleave F2H `MEM_ALLOC` and
+`GMU_CNTR_REGISTER` requests. Linux creates and maps backing for the former;
+counter registration failure is allowed and answered with zero offsets. XNU's
+event-aware dispatcher handles those request types, with GPU-access allocation
+support limited to the mapped GPU domain and live GMU mapping.
+
+The first 0165 phone exchange reached firmware-running and HFI-initialized
+states, then returned `0x0001030f` (ACK type, ID 15, size 3) in response to the
+first post-start TABLE request. Linux's generic H2F path identifies ACKs with
+ID 126, but this device response is labeled with the command ID. Patch 0166
+accepts either label and still validates the echoed request and zero status;
+the phone has not yet verified those payload fields. Service replies remain
+distinct: ACK type plus the original event ID (20 for MEM_ALLOC, 110 for
+GMU_CNTR_REGISTER), with the request header echoed. The counter response is six
+dwords; Linux explicitly sends zero low/high offsets when it cannot reserve a
+counter, then continues waiting for the `START` ACK.
 
 Once HFI startup completes, the reference calls `gen8_hwsched_gpu_boot()`
 (`adreno_gen8_hwsched.c:755`): start the GPU MMU, acquire GMU GPU OOB, run
