@@ -60,7 +60,7 @@ static void fp6_scm_invoke(uint64_t fid,uint64_t arginfo,uint64_t arg0,uint64_t 
 static uint32_t fp6_smmu_read32(vm_offset_t b, uint32_t o) {
  if (b>=0x81c60000u && b<0x81c80000u) {
   unsigned off=(unsigned)(b-0x81c60000u)+o;
-  if(hide_acv && off==304u)return 0;
+  if(hide_acv && off==328u)return 0;
   return fp6_cmd_db[off/4];
  }
  if (b>=0x17a20000u && b<0x17a30000u) return fp6_rsc[((b-0x17a20000u)+o)/4];
@@ -114,19 +114,21 @@ static int fp6_power_poll(vm_offset_t b,uint32_t o,uint32_t mask,uint32_t want,u
 static void make_cmd_db(void) {
  fp6_cmd_db[1]=0x0c0330dbu;
  /* Linux cmd_db_get_header() scans all populated slave headers in order. */
- fp6_cmd_db[2]=(112u<<16)|5u; /* SH0/MC0 in BCM slave header */
- fp6_cmd_db[3]=(2u<<16)|880u;
- fp6_cmd_db[6]=(160u<<16)|3u; /* ACV in following ARC header */
- fp6_cmd_db[7]=(1u<<16)|920u;
+ fp6_cmd_db[2]=(112u<<16)|3u; /* unrelated ARC entry precedes BCM */
+ fp6_cmd_db[3]=(1u<<16)|960u;
+ fp6_cmd_db[6]=(136u<<16)|5u; /* SH0/MC0/ACV in BCM slave header */
+ fp6_cmd_db[7]=(3u<<16)|880u;
+ fp6_cmd_db[64]=0x00504f41u; /* AOP */
  const uint32_t names[3]={0x00304853u,0x0030434du,0x00564341u};
- const uint32_t addrs[3]={0x50020u,0x50030u,0x30040u};
- const uint32_t widths[3]={16u,4u,4u};
+ const uint32_t addrs[3]={0x50020u,0x50030u,0x50068u};
+ const uint32_t widths[3]={16u,4u,0u}; /* fixed ACV has width zero */
+ const uint32_t units[3]={1000000u,1000000u,1u};
  for(unsigned i=0;i<3;i++) {
-  unsigned e=(256u+24u*i)/4u;
+  unsigned e=(280u+24u*i)/4u;
   fp6_cmd_db[e]=names[i];fp6_cmd_db[e+4]=addrs[i];
-  fp6_cmd_db[e+5]=((i<2?8u*i:0u)<<16)|8u;
-  unsigned aux=(144u+(i<2?880u:920u)+8u*(i<2?i:0))/4u;
-  fp6_cmd_db[aux]=1000000u;fp6_cmd_db[aux+1]=widths[i];
+  fp6_cmd_db[e+5]=(8u*i<<16)|8u;
+  unsigned aux=(144u+880u+8u*i)/4u;
+  fp6_cmd_db[aux]=units[i];fp6_cmd_db[aux+1]=widths[i];
  }
  fp6_rsc[0]=3u<<16;
  fp6_rsc[3]=(3u<<12)|(4u<<27); /* three ACTIVE TCSes, four commands per TCS */
@@ -186,6 +188,11 @@ int main(void) {
  fp6_gmu_first_boot(2,0x1000,0x800);
  assert(release_count==0 && rsc_command_count==commands_before_missing_acv);
  hide_acv=0;
+ fp6_cmd_db[(144u+880u+4u)/4u]=0; /* variable SH0 must have a nonzero width */
+ reset_value=1;release_count=reset_count=route_writes=hfi_starts=0;scm_calls=0;
+ fp6_gmu_first_boot(2,0x1000,0x800);
+ assert(release_count==0 && rsc_command_count==commands_before_missing_acv);
+ fp6_cmd_db[(144u+880u+4u)/4u]=16u;
  reset_value=1;release_count=reset_count=route_writes=hfi_starts=0;scm_calls=0;
  fp6_gmu_first_boot(2,0x1000,0x800);
  assert(route_writes==1 && release_count==1 && hfi_starts==1);
@@ -194,7 +201,7 @@ int main(void) {
  assert(fp6_rsc[(0xd00u+0x3cu)/4]==0x20000858u); /* 2,136,718 kB/s -> 2,136 votes */
  assert(fp6_rsc[(0xd00u+0x38u+24u)/4]==0x50030u);
  assert(fp6_rsc[(0xd00u+0x3cu+24u)/4]==0x20000858u);
- assert(fp6_rsc[(0xd00u+0x38u+48u)/4]==0x30040u);
+ assert(fp6_rsc[(0xd00u+0x38u+48u)/4]==0x50068u);
  assert(fp6_rsc[(0xd00u+0x3cu+48u)/4]==0x60000000u);
  unsigned published_before=publish_count;
  assert(!fp6_gmu_domain_publish(&fp6_gmu_domain));

@@ -1,5 +1,23 @@
 # ios-extra — current state
 
+## FP6 cmd-db ACV metadata diagnosis (2026-10-22)
+
+- Patch 0157 commit `32e325fb8197eac394b91eb9e7f6b140d6a6b9fe` passed CI
+  `39760355071`; kernel was locally packaged with verified ADT/Volcano DTB as
+  `/tmp/ios-extra-run-39760355071/package/fp6-gmu-cmdb-diagnostic.img`, SHA256
+  `bd3a24bce181fcc7c4510ba73a6157d126d15274bfaead9f82bfe8049d822476`.
+- One temporary boot captured 95 UDP packets. Decoded log
+  `/tmp/ios-extra-run-39760355071/logs/phone-0157-cmdb-diagnostic.txt`, SHA256
+  `2eff12f71f275bc4d48dab5fe2d7491312535e0f940dede1fb72436ed76253f1`;
+  pcap SHA256 `d6f144827081c75eaf3ce03d4f11e2b7c277c743e857a4847e4476de96c447b2`.
+- The dump identifies ACV in BCM slave 5 at address `0x00050068`; aux record is
+  valid (`unit=1`, `width=0`, `vcd=12`, length 8). The parser had rejected it
+  because it required nonzero width for every BCM. Linux marks ACV `fixed=true`
+  and does not use its width. Candidate patch 0158 permits zero width only for
+  fixed entries, retains the nonzero-width requirement for SH0/MC0, and updates
+  the ASan/UBSan fixture to the observed ACV metadata. It is not built or
+  phone-tested yet.
+
 ## FP6 Linux cmd-db lookup phone retest (2026-10-22)
 
 - Patch 0156 commit `8c8c00233ce086caf4ef840f02948d8e9520153c` passed CI

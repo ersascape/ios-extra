@@ -33,11 +33,12 @@ GMU DMA, GPU command, rendering or Metal work has succeeded yet.
   completion and fail-closed reset behavior. Patch 0155 corrects the BCM address
   ID check. On hardware, SH0/MC0 metadata passes but ACV is not found. No vote
   command was issued in that run.
-- Patch 0156 mirrored Linux `cmd_db_get_header()` but the 39758346968 phone run
-  still reports ACV missing. Candidate patch 0157 adds bounded read-only header
-  summaries and ACV/A-name entry and aux diagnostics on lookup failure. The
-  ASan/UBSan host test verifies a missing ACV cannot submit an RSC vote. Patch
-  0157 is not built or phone-tested yet.
+- Patch 0157's phone diagnostics found ACV at BCM ID 5 / address `0x00050068`
+  with `unit=1`, `width=0`, `vcd=12`, length 8. Linux marks ACV fixed and ignores
+  width; the old parser incorrectly required width nonzero. Candidate patch 0158
+  permits zero width only for fixed entries, retains the SH0/MC0 check, and
+  updates the host fixture to the measured record. ASan/UBSan passes. Patch 0158
+  still needs CI and phone validation.
 
 ## Latest build and phone evidence
 
@@ -60,11 +61,11 @@ GMU DMA, GPU command, rendering or Metal work has succeeded yet.
 
 ## Next debugging step
 
-Patch 0156 mirrored Linux's ordered cmd-db name search but the phone still
-reports ACV missing. Candidate patch 0157 adds bounded read-only summaries of
-cmd-db headers and ACV/A-name entry/aux data on lookup failure. Its host test
-checks missing ACV cannot submit an RSC command. Patch 0157 needs CI and phone
-validation. Do not relax fail-closed behavior or guess a TCS vote.
+Patch 0157's cmd-db dump identifies ACV at `0x00050068`, width zero, which is
+valid because Linux treats ACV as a fixed vote. Patch 0158 allows zero width only
+for that fixed request; the host test rejects zero-width SH0 while allowing fixed
+ACV. ASan/UBSan passes. Patch 0158 needs CI and phone validation. Do not relax
+fail-closed behavior or guess a TCS vote.
 
 Patch 0156 has passed host/source checks. Commit and push this focused candidate,
 wait for CI, package with the known local ADT/DTB, then perform one temporary boot

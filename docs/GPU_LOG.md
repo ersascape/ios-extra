@@ -1,5 +1,19 @@
 # GPU bring-up log (chronological, newest first)
 
+## FP6 patch 0157 cmd-db diagnostic phone result
+
+- CI `39760355071` passed; temporary image
+  `/tmp/ios-extra-run-39760355071/package/fp6-gmu-cmdb-diagnostic.img`, SHA256
+  `bd3a24bce181fcc7c4510ba73a6157d126d15274bfaead9f82bfe8049d822476`.
+- One boot captured 95 packets. Log SHA256
+  `2eff12f71f275bc4d48dab5fe2d7491312535e0f940dede1fb72436ed76253f1`;
+  pcap SHA256 `d6f144827081c75eaf3ce03d4f11e2b7c277c743e857a4847e4476de96c447b2`.
+- Read-only cmd-db diagnostics found ACV at BCM ID 5 / address `0x00050068`,
+  with valid aux length 8, `unit=1`, `width=0`, `vcd=12`. Parser rejected width 0
+  unconditionally. Linux Gen8 marks ACV fixed and doesn't use width. Patch 0158
+  permits zero width only for fixed entries; variable SH0/MC0 still require a
+  nonzero width. Host ASan/UBSan passes and CI/phone validation are pending.
+
 ## FP6 patch 0156 Linux cmd-db lookup retest (CI + phone)
 
 - CI `39758346968` passed for commit `8c8c00233ce086caf4ef840f02948d8e9520153c`;
