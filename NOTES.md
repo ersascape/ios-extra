@@ -65,9 +65,37 @@
   because CB0 or the selected fault-routed SID0 group failed the driver's
   cleanliness check. No GPU memory map, DMA, command execution, draw, or Metal
   was verified. Exact HFI lines and host setup are in `docs/GPU_LOG.md`.
-  The next source step is diagnostic-only: log the selected CB0/group fields at
-  that refusal while preserving the no-write gate. Candidate 0167 does this and
-  the host MMIO test passes; it is not yet CI-built or phone-tested.
+  Candidate 0167 was subsequently built and tested; see the current GPU state
+  and `docs/GPU_LOG.md` for its CI, image and phone evidence.
+
+## FP6 GPU HFI allocation refusal diagnostics 0167 (2026-10-22)
+
+- Commit `d3945d021d4f4013e8f966dfca41158d125cdae8` passed CI run
+  `39827421127`. The kernel SHA-256 is
+  `abe30b248c2b311fc83c10838e3bb2a51ae14719bec7b68700f64ccc32694445`.
+  Locally packaged the exact CI kernel with matching ADT, the verified stock
+  Volcano DTB and bounded RAM-disk init; header-v2 round-trip passed. Image
+  `/tmp/ios-extra-run-39827421127/package/fp6-gmu-hfi-diag-0167.img`, SHA-256
+  `65452f75f388850b624a1c1904f4676f9b56fa0aa062981500dc081447480b50`.
+- One bounded phone boot reached all six HFI ACKs and then received the first
+  global allocation (`kind=2`, handle 2, VA `0x1ff8000000000`, PA
+  `0x903e5c000`). It refused before changing the GPU SMMU. At refusal, group
+  1/24 was fault-routed (`SMR=0`, `S2CR=0x20000`); CB0 read `CBAR=0`,
+  `CBA2R=0`, `SCTLR=0x2ff54314`, `TCR=0x7d0e6f8c`, `TCR2=0x10065`,
+  `TTBR0=0x11f173774fcb6d7a`, `TTBR1=0xdc20c8a1af8db1f4`, `MAIR0=0x079fae8a`,
+  `MAIR1=0x8899bf1f`, `FSR=0`. CM3 reset was verified; no GPU mapping, DMA,
+  command execution, draw or Metal was reached. Log:
+  `/tmp/ios-extra-run-39827421127/logs/phone-0167-cb0-sid0-diagnostics.txt`
+  (SHA-256 `87eee3625cbd8f913153b9e065b025b43a2211fc72a14d0fe200d517ad752b36`).
+- Rechecked the packaged DTB itself: `kgsl-smmu@3da0000` has resource
+  `0x03da0000/0x40000`. Its measured `IDR1=0x40000016` gives a 4 KiB page
+  shift and NUMPAGENDXB=4; Fairphone Linux computes 32 pages before the CB
+  window, so CB0 at `+0x20000` is consistent with both the DTB aperture and
+  mainline's `arm_smmu_page()` layout. The earlier `0/22` context-bank scan ran
+  before the explicit SMMU power-up, so it does not establish that powered
+  CB0 is empty. Do not reclassify the odd CB0 values as a bad mapping or write
+  through them yet. Next, capture powered CB0 and all stream-group SMR/S2CR
+  values before any probe changes them, then compare with this post-HFI state.
 
 ## GMU cacheability source check (2026-10-22)
 

@@ -40,8 +40,7 @@ device proof.
 
 ## Active FP6 GPU state (2026-10-22)
 
-Patch 0166 is the latest built candidate; 0167 is a diagnostic-only source
-candidate for the CB0/SID0 refusal. The 0164 GPU-access path extends through
+Patch 0167 is the latest built and phone-tested candidate. The 0164 GPU-access path extends through
 post-`CORE_FW_START` HFI startup and accepts both request-ID and generic-ID
 ACKs. Patch 0164 commit
 `cacda42725fd0945a6a8df96bf28e27b8d8a2868` passed CI run `39807392802`. Kernel SHA256
@@ -85,14 +84,16 @@ captured one 0166 boot at
 It measured successful ACKs for GPU perf TABLE, DDR/CNOC TABLE, configuration,
 and preemption, plus an acknowledged DDR bootstrap vote. FW_INIT_RESULT remained
 `0x100` and HFI_CTRL_STATUS was `1`. The first GPU global allocation request
-arrived, but CB0/fault-routed SID0 cleanliness check refused mapping; firmware
-was reset cleanly. No DMA, GPU command, draw or Metal result. Candidate 0167
-logs individual CB0 and SID0 fields without changing MMIO state. Its host probe
-checks the diagnostic path and zero writes; it has not yet passed CI or run on
-the phone. Build/package once, then repeat one bounded boot to identify the
-actual dirty field. If a stale W1C FSR is implicated, confirm before the first
-CB0 FSR write and clear it only with SCTLR disabled and all translation controls
-otherwise clean. The decoded 0165 log and pcap are under
+arrived, but the CB0 cleanliness check refused mapping; firmware was reset
+cleanly. Candidate 0167 logs CB0 and the selected SID0 group without changing
+MMIO state. Phone evidence shows CBAR/CBA2R/FSR zero but nonzero
+SCTLR/TCR/TTBR/MAIR fields. The packaged stock DTB declares a `0x40000` SMMU
+register aperture, and Linux's NUMPAGENDXB formula agrees with the `+0x20000`
+CB0 window. The earlier `0/22` scan occurred before explicit SMMU power-up and
+does not establish that powered CB0 is empty. Next: capture powered CB0 and all
+SMR/S2CR groups before any SMMU test changes state, then compare against the
+post-HFI values. No DMA, GPU command, draw or Metal result. Do not clear or
+overwrite the unexplained CB0 fields. The decoded 0165 log and pcap are under
 `/tmp/ios-extra-run-39814973566/logs/phone-0165-gmu-hfi-start-resume.*`.
 The user explicitly requested flashing the Tegu rootfs from
 `/home/ersa/Dev/ios-extra/research/fp6-rootfs-tegu-20261021/` to the existing

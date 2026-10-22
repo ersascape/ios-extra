@@ -32,14 +32,33 @@
 
 ## FP6 CB0/SID0 refusal diagnostics candidate 0167 (2026-10-22)
 
-- Candidate 0167 logs the selected stream-match group's SMR/S2CR and all CB0
-  fields used by the clean-state gate: CBAR, CBA2R, SCTLR, TCR/TCR2, TTBR0/1,
-  MAIR0/1 and FSR. It preserves the refusal-before-write behavior.
-- The host probe checks that a deliberately dirty CBAR refusal reports group 0,
-  SMR `0`, S2CR `0x20000`, CBAR `1`, and zero MMIO writes.
-  `python3 tests/test_gpu_probe.py` passes. This verifies only the host diagnostic
-  branch; 0167 has no CI build or phone observation. Next: build/package once and
-  use a bounded phone boot to identify the actual dirty CB0/group field.
+- Commit `d3945d021d4f4013e8f966dfca41158d125cdae8` passed CI run
+  `39827421127`; kernel SHA-256
+  `abe30b248c2b311fc83c10838e3bb2a51ae14719bec7b68700f64ccc32694445`.
+  Packaged the exact CI kernel, ADT, stock Volcano DTB and bounded RAM-disk init
+  in `/tmp/ios-extra-run-39827421127/package/fp6-gmu-hfi-diag-0167.img`
+  (SHA-256 `65452f75f388850b624a1c1904f4676f9b56fa0aa062981500dc081447480b50`);
+  header-v2 round-trip passed. `python3 tests/test_gpu_probe.py` also passes,
+  including the deliberate dirty-CBAR refusal-before-write case.
+- One bounded phone boot completed the six previously observed HFI ACKs and
+  received `MEM_ALLOC` kind 2, handle 2, VA `0x1ff8000000000`, PA `0x903e5c000`.
+  0167 refused before SMMU writes. At refusal, selected group 1/24 had
+  `SMR=0`, `S2CR=0x20000`; CB0 was `CBAR=0`, `CBA2R=0`,
+  `SCTLR=0x2ff54314`, `TCR=0x7d0e6f8c`, `TCR2=0x00010065`,
+  `TTBR0=0x11f173774fcb6d7a`, `TTBR1=0xdc20c8a1af8db1f4`,
+  `MAIR0=0x079fae8a`, `MAIR1=0x8899bf1f`, `FSR=0`. CM3 reset was verified.
+  Log SHA-256 is `87eee3625cbd8f913153b9e065b025b43a2211fc72a14d0fe200d517ad752b36`
+  at `/tmp/ios-extra-run-39827421127/logs/phone-0167-cb0-sid0-diagnostics.txt`.
+- Rechecked the exact packaged DTB with `dtc`: `kgsl-smmu@3da0000` has
+  `reg=<0x03da0000 0x40000>`. Measured `IDR1=0x40000016` yields 4 KiB pages
+  and NUMPAGENDXB=4; Fairphone Linux's `arm_smmu_page()` therefore places CB0
+  at `+0x20000`, matching the XNU calculation and the declared resource size.
+  The previous `context banks with nonzero state=0/22` scan was before explicit
+  SMMU power-up, so it cannot establish powered CB0 cleanliness. Next probe must
+  capture powered CB0 and all stream-group SMR/S2CR values before test setup,
+  then compare them with the post-HFI values. No GPU mapping, DMA, command
+  execution, draw or Metal has been demonstrated. Do not clear/overwrite these
+  unexplained context fields yet.
 
 ## FP6 post-CORE_FW_START HFI candidate 0165 (2026-10-22)
 
