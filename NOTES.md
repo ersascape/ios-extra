@@ -1,6 +1,28 @@
 # ios-extra — current state
 
-## FP6 HFI service-message follow-up (0161, 2026-10-22)
+## FP6 GMU-only HFI allocation follow-up (0162, 2026-10-22)
+
+- Candidate patch 0162 answers non-secure, non-GPU-access `MEM_ALLOC` requests
+  using permanent kernel backing and a live append to the GMU SMMU page tables.
+  It cleans the published tables, issues context TLBIALL/TLBSYNC, waits for
+  completion, then returns the Linux-shaped ACK with host handle, GMU address
+  and page-rounded size. GPU-access, secure, hardware-fence, fixed-MMIO and
+  unsupported large size-alignment requests still fail closed and reset CM3.
+- Host protocol tests simulate kind 2 / flags 0 / 4 KiB / alignment 12: one
+  allocation maps at `0x60027000`, the table walk reaches its backing PA, the
+  service ACK is sent, and START completes. A GPU-access request is refused
+  without a mapping or service reply; CM3 reset is verified by the model.
+  Normal and ASan/UBSan harness runs pass. `sweet_gpu.c` compiles to an arm64
+  object against CI buildtree `39775328855` (`0 of 1 files failed`). These are
+  host/compiler checks only; the phone's actual MEM_ALLOC descriptor and
+  firmware acceptance remain unobserved. The user is using Android, so no
+  device commands were run.
+- Patch 0162, docs and test changes are still local pending review/commit. Next:
+  run `git diff --check`, verify patch application and targeted tests, then one
+  CI build and package. Defer the phone test until the user says Android work is
+  done. This does not enable GPU command execution.
+
+## FP6 HFI service-message milestone (0161, 2026-10-22)
 
 - Patch 0161 extends the 0160 HFI waiter to dispatch interleaved firmware
   messages. It answers `GMU_CNTR_REGISTER` (ID 110) with Linux's permitted
@@ -37,9 +59,10 @@
   must be imported into the GMU IOVA space. The Gen8 GMU VMA ranges are
   `0x60000000..0x7fffffff` (noncached) and `0xc0000000..0xdfffffff`
   (extended); the cacheable window is `0x4000..0x00ffffff`. XNU's current
-  published GMU domain has no live-map/TLBI update path and no GPU-side global
-  allocator. Therefore 0161 remains diagnostic; a real descriptor must select
-  the first implementable memory kind before replying.
+  published GMU domain initially had no live-map/TLBI update path and there is
+  still no GPU-side global allocator. Patch 0162 adds only the GMU-only kernel
+  allocation case. A real phone descriptor is still needed to establish that
+  this supported subset matches firmware's request.
 
 ## FP6 Gen8.3 HFI-to-GPU source boundary (2026-10-22)
 

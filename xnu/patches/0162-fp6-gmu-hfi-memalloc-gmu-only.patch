@@ -1,0 +1,277 @@
+diff --git a/bsd/dev/fp6_gmu_domain.h b/bsd/dev/fp6_gmu_domain.h
+index 5b298d7..3b8134c 100644
+--- a/bsd/dev/fp6_gmu_domain.h
++++ b/bsd/dev/fp6_gmu_domain.h
+@@ -1,8 +1,9 @@
+ /* Persistent 4 KiB GMU stage-1 domain, 32-bit IOVA, 48-bit PA.
+- * Tables and backing are boot-lifetime reservations. Caller MUST keep CM3
+- * reset asserted and the context disabled while building. activate only after
+- * publish + TLB invalidation + SID-specific translation checks by the owner.
+- * No allocation, callback or failure here releases reset or frees memory.
++ * Initial construction requires CM3 reset and the context disabled. Runtime
++ * append is allowed only while firmware is blocked awaiting the matching HFI
++ * MEM_ALLOC reply; caller must publish the new backing/tables, invalidate and
++ * synchronize the active context TLB, then reply. Every allocation remains a
++ * boot-lifetime reservation; no failure here releases reset or frees memory.
+  */
+ #ifndef FP6_GMU_DOMAIN_H
+ #define FP6_GMU_DOMAIN_H
+diff --git a/bsd/dev/sweet_gpu.c b/bsd/dev/sweet_gpu.c
+index ed75e45..1d17316 100644
+--- a/bsd/dev/sweet_gpu.c
++++ b/bsd/dev/sweet_gpu.c
+@@ -2866,9 +2866,10 @@ static int fp6_gmu_kernel_published(void *ctx)
+ /*
+  * Gen8 GMU first boot (docs/FP6_GMU_FIRST_BOOT.md; KGSL hwsched order),
+  * opt-in fp6gmuboot=1 after a successful fp6gmuload=1 upload. Polled: every
+- * GMU interrupt stays masked. This step stops after HFI_CTRL_INIT; no HFI
+- * message is sent yet. Always return CM3 to reset after the bounded probe;
+- * preserve mappings and votes even if reset cannot be verified.
++ * GMU interrupt stays masked. HFI startup services zero-offset counter events
++ * and bounded GMU-only MEM_ALLOC mappings; unsupported allocations stop the
++ * exchange. Always return CM3 to reset after the bounded probe; preserve
++ * mappings and votes even if reset cannot be verified.
+  */
+ #define FP6_GMU_HFI_SIZE        0x12000u        /* 840 + 16 + 17 x 4 KiB, page rounded */
+ #define FP6_GMU_HFI_QUEUES      17u
+@@ -3059,6 +3060,88 @@ fp6_gmu_next_va(uint32_t size)
+ 	return va + size > 0x80000000u ? 0 : (uint32_t)va;
+ }
+ 
++/* Linux gen8_hwsched_hfi.c supports 32 tracked MEM_ALLOC records. For this
++ * first runtime allocator, only GMU-only kernel blocks are serviced; GPU
++ * global allocations still require the A810 GPU-MMU heap. */
++#define FP6_HFI_MEM_ALLOC_MAX 32u
++#define FP6_HFI_MEMKIND_HW_FENCE 23u
++#define FP6_HFI_MEMKIND_MMIO_IPC_CORE 19u
++#define FP6_HFI_MEMKIND_MAX 26u
++#define FP6_HFI_MEMFLAG_GFX_ACC (1u << 0)
++#define FP6_HFI_MEMFLAG_GMU_CACHEABLE (1u << 7)
++#define FP6_HFI_MEMFLAG_GFX_SECURE (1u << 12)
++struct fp6_hfi_mem_alloc {
++	uint32_t mem_kind, gmu_handle;
++	uint32_t desc[9]; /* gpu_addr[2], flags, kind, host, gmu_handle, gmu_addr, size, align */
++};
++static struct fp6_hfi_mem_alloc fp6_hfi_mem_allocs[FP6_HFI_MEM_ALLOC_MAX];
++static unsigned fp6_hfi_mem_alloc_count;
++
++static uint32_t
++fp6_gmu_hfi_find_va(int cached, uint32_t size, uint32_t align)
++{
++	uint64_t first = cached ? 0x00004000ULL : 0x60000000ULL;
++	uint64_t limit = cached ? 0x01000000ULL : 0x80000000ULL;
++	unsigned va_exp = align & 0xffu;
++	unsigned size_exp = (align >> 8) & 0xffu;
++	if (va_exp > 30u || size_exp > 12u) return 0;
++	uint64_t va_align = va_exp > 12u ? (1ULL << va_exp) : 4096ULL;
++	uint64_t map_size = ((uint64_t)size + 4095ULL) & ~4095ULL;
++	uint64_t va = first;
++	if (!map_size || map_size > limit - first) return 0;
++	for (unsigned pass = 0; pass <= fp6_gmu_domain.count; pass++) {
++		va = (va + va_align - 1ULL) & ~(va_align - 1ULL);
++		if (va + map_size > limit) return 0;
++		int collided = 0;
++		for (unsigned i = 0; i < fp6_gmu_domain.count; i++) {
++			struct fp6_gmu_domain_range *r = &fp6_gmu_domain.ranges[i];
++			uint64_t end = (uint64_t)r->address + r->mapped_size;
++			if (va < end && r->address < va + map_size) {
++				va = end;
++				collided = 1;
++				break;
++			}
++		}
++		if (!collided) return (uint32_t)va;
++	}
++	return 0;
++}
++
++/* Publish one append-only range into the live GMU domain. Firmware is blocked
++ * on its HFI allocation request while page tables are cleaned and the context
++ * TLB is invalidated. All memory remains permanent if any later step fails. */
++static int
++fp6_gmu_domain_map_live(vm_offset_t smmu, uint32_t cb_off,
++		uint32_t address, uint32_t size, int cached)
++{
++	if (!smmu || !fp6_gmu_domain.frozen || fp6_gmu_domain.failed ||
++	    fp6_smmu_read32(smmu, cb_off + FP6_SMMU_CB_SCTLR) != 0x27u) {
++		printf("QCOM GMU: HFI MEM_ALLOC map refused: domain/context not live\n");
++		return 0;
++	}
++	fp6_gmu_domain.frozen = 0;
++	int mapped = fp6_gmu_domain_reserve(&fp6_gmu_domain, address, size, cached);
++	if (!mapped) mapped = fp6_gmu_domain_publish(&fp6_gmu_domain);
++	fp6_gmu_domain.frozen = 1;
++	if (mapped) {
++		printf("QCOM GMU: HFI MEM_ALLOC map failed IOVA=0x%x size=%u\n", address, size);
++		return 0;
++	}
++	fp6_smmu_write32(smmu, cb_off + FP6_SMMU_CB_TLBIALL, FP6_SMMU_DUMMY_VAL);
++	fp6_smmu_write32(smmu, cb_off + FP6_SMMU_CB_TLBSYNC, FP6_SMMU_DUMMY_VAL);
++	unsigned polls;
++	for (polls = 0; polls < 1000u; polls++) {
++		if (!(fp6_smmu_read32(smmu, cb_off + FP6_SMMU_CB_TLBSTATUS) & 1u)) break;
++		delay(10);
++	}
++	if (polls == 1000u) {
++		printf("QCOM GMU: HFI MEM_ALLOC TLB sync timeout IOVA=0x%x; CM3 reset required\n", address);
++		return 0;
++	}
++	__asm__ volatile("dsb sy" ::: "memory");
++	return 1;
++}
++
+ /* Reserve HFI, log, VRB and trace before the domain is published (frozen);
+  * publication cleans every host-initialized header to memory. */
+ static int
+@@ -3178,8 +3261,72 @@ fp6_gmu_hfi_enqueue(vm_offset_t g, uint8_t *mem, uint32_t *msg,
+ }
+ 
+ static int
+-fp6_gmu_hfi_send_req(vm_offset_t g, uint8_t *mem, uint32_t *msg, unsigned dwords,
+-	    unsigned *sequence)
++fp6_gmu_hfi_mem_alloc(vm_offset_t smmu, uint32_t cb_off, vm_offset_t g,
++		uint8_t *mem, const uint32_t *request, unsigned version,
++		unsigned *sequence)
++{
++	unsigned off = 2u;
++	uint32_t desc[9] = {0};
++	unsigned words = version ? 9u : 8u;
++	for (unsigned i = 0; i < words; i++) desc[i] = request[off + i];
++	uint32_t kind = desc[3], flags = desc[2], handle = desc[5];
++	uint32_t size = desc[7], align = desc[8];
++	if (kind >= FP6_HFI_MEMKIND_MAX || !handle || !size ||
++	    (flags & (FP6_HFI_MEMFLAG_GFX_ACC | FP6_HFI_MEMFLAG_GFX_SECURE)) ||
++	    kind == FP6_HFI_MEMKIND_HW_FENCE || kind == FP6_HFI_MEMKIND_MMIO_IPC_CORE) {
++		printf("QCOM GMU: HFI MEM_ALLOC unsupported version=%u flags=0x%x kind=%u handle=%u bytes=%u align=0x%x; CM3 reset required\n",
++		    version, flags, kind, handle, size, align);
++		return 0;
++	}
++	for (unsigned i = 0; i < fp6_hfi_mem_alloc_count; i++) {
++		struct fp6_hfi_mem_alloc *entry = &fp6_hfi_mem_allocs[i];
++		if (entry->mem_kind == kind && entry->gmu_handle == handle) {
++			memcpy(desc, entry->desc, sizeof(desc));
++			goto reply;
++		}
++	}
++	if (fp6_hfi_mem_alloc_count == FP6_HFI_MEM_ALLOC_MAX) {
++		printf("QCOM GMU: HFI MEM_ALLOC table full kind=%u handle=%u; CM3 reset required\n", kind, handle);
++		return 0;
++	}
++	uint64_t rounded = ((uint64_t)size + 4095ULL) & ~4095ULL;
++	if (!rounded || rounded > 0xffffffffULL) return 0;
++	uint32_t va = fp6_gmu_hfi_find_va((flags & FP6_HFI_MEMFLAG_GMU_CACHEABLE) != 0,
++	    (uint32_t)rounded, align);
++	if (!va || !fp6_gmu_domain_map_live(smmu, cb_off, va, (uint32_t)rounded,
++	    (flags & FP6_HFI_MEMFLAG_GMU_CACHEABLE) != 0)) {
++		printf("QCOM GMU: HFI MEM_ALLOC backing/map refused kind=%u handle=%u bytes=%u; CM3 reset required\n",
++		    kind, handle, size);
++		return 0;
++	}
++	/* Linux's GMU-only path returns a kernel memdesc and maps it R/W/privileged.
++	 * The domain allocator owns permanent backing; the descriptor size is the
++	 * 4 KiB-rounded mapped size and host_mem_handle aliases gmu_mem_handle. */
++	desc[4] = handle;
++	desc[6] = va;
++	desc[7] = (uint32_t)rounded;
++	struct fp6_hfi_mem_alloc *entry = &fp6_hfi_mem_allocs[fp6_hfi_mem_alloc_count++];
++	entry->mem_kind = kind;
++	entry->gmu_handle = handle;
++	memcpy(entry->desc, desc, sizeof(desc));
++	printf("QCOM GMU: HFI MEM_ALLOC mapped kind=%u flags=0x%x handle=%u GMU=0x%x bytes=%u cached=%u\n",
++	    kind, flags, handle, va, (uint32_t)rounded,
++	    (flags & FP6_HFI_MEMFLAG_GMU_CACHEABLE) != 0);
++reply:
++	uint32_t response[11] = {0};
++	response[0] = (1u << 16) | 20u; /* HFI_MSG_ACK / F2H_MSG_MEM_ALLOC */
++	response[1] = request[0];       /* req_hdr echoes the GMU event header */
++	memcpy(&response[2], desc, sizeof(desc));
++	if (!fp6_gmu_hfi_enqueue(g, mem, response, 11u, sequence)) {
++		printf("QCOM GMU: HFI MEM_ALLOC reply refused kind=%u handle=%u\n", kind, handle);
++		return 0;
++	}
++	return 1;
++}
++
++static int
++fp6_gmu_hfi_send_req(vm_offset_t smmu, uint32_t cb_off, vm_offset_t g,
++	    uint8_t *mem, uint32_t *msg, unsigned dwords, unsigned *sequence)
+ {
+ 	volatile uint32_t *t = (volatile uint32_t *)(void *)mem;
+ 	volatile uint32_t *cmd_hdr = t + 6;
+@@ -3262,24 +3409,15 @@ fp6_gmu_hfi_send_req(vm_offset_t g, uint8_t *mem, uint32_t *msg, unsigned dwords
+ 			}
+ 			if (msg_id == 20u) {
+ 				uint32_t version = size >= 2u ? reply[1] : 0xffffffffu;
+-				unsigned off = 2u; /* legacy padding and v1 version both precede desc */
+ 				if (type != 0u || size != (version ? 11u : 10u)) {
+ 					printf("QCOM GMU: HFI MEM_ALLOC malformed version=%u size=%u type=%u; resetting CM3\n",
+ 					    version, size, type);
+ 					return 0;
+ 				}
+-				uint64_t gpu = size >= off + 2u ? reply[off] | ((uint64_t)reply[off + 1u] << 32) : 0;
+-				uint32_t flags = size > off + 2u ? reply[off + 2u] : 0;
+-				uint32_t kind = size > off + 3u ? reply[off + 3u] : 0xffffffffu;
+-				uint32_t host_handle = reply[off + 4u];
+-				uint32_t gmu_handle = reply[off + 5u];
+-				uint32_t gmu_addr = reply[off + 6u];
+-				uint32_t bytes = size > off + 7u ? reply[off + 7u] : 0;
+-				uint32_t align = size > off + 8u ? reply[off + 8u] : 0;
+-				printf("QCOM GMU: HFI MEM_ALLOC unsupported version=%u size=%u gpu=0x%llx flags=0x%x kind=%u host=%u gmu_handle=%u gmu=0x%x bytes=%u align=0x%x; no reply, resetting CM3\n",
+-				    version, size, (unsigned long long)gpu, flags, kind, host_handle,
+-				    gmu_handle, gmu_addr, bytes, align);
+-				return 0;
++				msg_hdr[10] = (ri + padded) % 1024u;
++				if (!fp6_gmu_hfi_mem_alloc(smmu, cb_off, g, mem, reply, version, sequence))
++					return 0;
++				continue;
+ 			}
+ 			if (type == 1u && msg_id == 126u && size >= 3u && size <= 4u) {
+ 				uint32_t ack[4] = { reply[0], reply[1], reply[2], size >= 4u ? reply[3] : 0u };
+@@ -3473,7 +3611,8 @@ fp6_hfi_bw_word(uint32_t level_kbps, unsigned bcm_width, unsigned buswidth,
+ }
+ 
+ static int
+-fp6_gmu_hfi_start_sequence(vm_offset_t g, uint8_t *mem)
++fp6_gmu_hfi_start_sequence(vm_offset_t smmu, uint32_t cb_off, vm_offset_t g,
++		uint8_t *mem)
+ {
+ 	static const uint32_t ddr_levels[] = { 0, 0x000bebc2u, 0x00209a8eu };
+ 	static const uint32_t cnoc_levels[] = { 0, 0x64u };
+@@ -3521,7 +3660,7 @@ fp6_gmu_hfi_start_sequence(vm_offset_t g, uint8_t *mem)
+ 	perf[13] = 0; perf[14] = 0;
+ 	perf[15] = cx_vote[1]; perf[16] = gmu_freq_khz[1];
+ 	perf[17] = cx_vote[2]; perf[18] = gmu_freq_khz[2];
+-	if (!fp6_gmu_hfi_send_req(g, mem, perf, perf_dw, &seq)) return 0;
++	if (!fp6_gmu_hfi_send_req(smmu, cb_off, g, mem, perf, perf_dw, &seq)) return 0;
+ 	printf("QCOM GMU: HFI GPU perf table ACK gfx=%uMHz ARC=0x%08x GMU=%u/%uMHz\n",
+ 	    gpu_freq_khz / 1000u, gx_vote, gmu_freq_khz[1] / 1000u, gmu_freq_khz[2] / 1000u);
+ 	/* H2F_MSG_BW_VOTE_TBL. First three DDR levels are identical for DDR7/DDR8. */
+@@ -3553,15 +3692,15 @@ fp6_gmu_hfi_start_sequence(vm_offset_t g, uint8_t *mem)
+ 			bw[32u + i * 8u + j] = data;
+ 		}
+ 	}
+-	if (!fp6_gmu_hfi_send_req(g, mem, bw, 160u, &seq)) return 0;
++	if (!fp6_gmu_hfi_send_req(smmu, cb_off, g, mem, bw, 160u, &seq)) return 0;
+ 	printf("QCOM GMU: HFI DDR/CNOC table ACK levels=%u/%u BCM=%08x/%08x/%08x/%08x\n",
+ 	    3u, 2u, bcm[0].addr, bcm[1].addr, bcm[2].addr, bcm[3].addr);
+ 	uint32_t feature[4] = { fp6_hfi_hdr(11u, 4u), 1u, 1u, 0u };
+-	if (!fp6_gmu_hfi_send_req(g, mem, feature, 4u, &seq)) return 0;
++	if (!fp6_gmu_hfi_send_req(smmu, cb_off, g, mem, feature, 4u, &seq)) return 0;
+ 	feature[0] = fp6_hfi_hdr(11u, 4u); feature[1] = 16u;
+-	if (!fp6_gmu_hfi_send_req(g, mem, feature, 4u, &seq)) return 0;
++	if (!fp6_gmu_hfi_send_req(smmu, cb_off, g, mem, feature, 4u, &seq)) return 0;
+ 	uint32_t start[2] = { fp6_hfi_hdr(14u, 2u), 0u };
+-	return fp6_gmu_hfi_send_req(g, mem, start, 2u, &seq);
++	return fp6_gmu_hfi_send_req(smmu, cb_off, g, mem, start, 2u, &seq);
+ }
+ 
+ /* Linux gen8_gmu_device_start() submits this peak-only vote before CM3 start.
+@@ -3752,7 +3891,7 @@ fp6_gmu_first_boot(vm_offset_t smmu, uint32_t cb_off, uint32_t smr_off)
+ 		    v, hfi ? "(HFI initialized)" : "(HFI init timeout)");
+ 		if (hfi) {
+ 			uint8_t *hfi_mem = fp6_gmu_range_va(fp6_gmu_hfi_va);
+-			if (!hfi_mem || !fp6_gmu_hfi_start_sequence(g, hfi_mem))
++			if (!hfi_mem || !fp6_gmu_hfi_start_sequence(smmu, cb_off, g, hfi_mem))
+ 				printf("QCOM GMU: HFI sequence stopped; GMU will be reset\n");
+ 		}
+ 	}

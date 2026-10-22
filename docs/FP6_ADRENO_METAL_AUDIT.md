@@ -122,12 +122,15 @@ validates generic ACKs against the echoed request header and success status,
 matching the Linux service path.
 
 The firmware can also request `MEM_ALLOC` while `START` is pending. Patch 0161
-decodes and logs that descriptor, then resets CM3 without replying. This is
-intentional containment: XNU does not yet have the GPU-visible allocator and
-SMMU mapping path needed to back the firmware's request. A real descriptor
-from the next authorized phone observation is needed before that allocator is
-designed. The host peer exercises both the counter exchange and the refusal
-path; it does not establish firmware acceptance or HFI startup on hardware.
+decoded and logged the descriptor, then reset CM3 without replying. Candidate
+patch 0162 now services only non-secure GMU-only kernel allocations: it creates
+permanent backing, appends the mapping to the live GMU page tables, cleans the
+tables, performs context TLBIALL/TLBSYNC, and replies with the GMU address.
+Requests requiring GPU access, secure memory, hardware-fence memory, fixed MMIO,
+or unsupported size alignment still fail closed. The updated host peer models
+one successful GMU-only exchange and one GPU-access refusal. Neither test
+establishes the phone's real descriptor or firmware acceptance; Android is
+currently in use and there is no 0162 phone observation.
 
 The Fairphone module tree at `54c948d9b30c2ba01835e64c36b68b80692554ac`
 shows why the request flags decide the allocator. `get_mem_alloc_entry()`
@@ -136,11 +139,11 @@ allocates GMU-only memory from kernel pages and maps it into the GMU VMA. With
 imports that buffer into the GMU address space. The GMU VMA ranges are
 `0x60000000..0x7fffffff` for noncached kernel buffers,
 `0xc0000000..0xdfffffff` for the extended range, and
-`0x4000..0x00ffffff` for cacheable mappings. XNU currently publishes and
-freezes its GMU page tables before firmware runs; adding HFI-time buffers needs
-a live page-table update plus SMMU TLBI/sync. Requests with `GFX_ACC` also need
-the GPU-side allocation and mapping path. Until the real descriptor is logged,
-the HFI handler must not guess which path or permissions the firmware needs.
+`0x4000..0x00ffffff` for cacheable mappings. XNU now has a narrow live-map path
+for GMU-only HFI allocations, provided firmware is blocked awaiting that HFI
+reply. Requests with `GFX_ACC` still need the GPU-side allocation and mapping
+path. The actual descriptor and cache/permission requirements must be read from
+the phone log before widening the supported set.
 
 The Fairphone Gen8.3 source shows the required cold-boot path continues through
 `gen8_hwsched_hfi_start()` (`adreno_gen8_hwsched_hfi.c:2138`): after

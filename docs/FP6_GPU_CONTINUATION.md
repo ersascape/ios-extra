@@ -24,7 +24,7 @@ GMU DMA, GPU command, rendering or Metal work has succeeded yet.
 
 ## Current source state
 
-- Candidate patch 0160 now mirrors the bounded Linux Gen8 pre-start sequence:
+- Patch 0160 mirrors the bounded Linux Gen8 pre-start sequence:
   GPU performance table, BW vote table, HWSCHED and KPROF controls, then
   CORE_FW_START. The GPU row is the stock FP6 362 MHz point, BCM words contain
   both AB/X and IB/Y values, and ACV perfmode stays off for the reduced DDR
@@ -39,6 +39,16 @@ GMU DMA, GPU command, rendering or Metal work has succeeded yet.
   SHA256 `f63635017fa022319c4f6c6a6cb29224aec193edea49372eb4dc13ae85c2db8e`.
   No 0160 phone observation exists yet. The host responder synthesizes ACKs;
   it does not model firmware validation.
+- Patch 0161 adds event-aware HFI handling: zero-offset counter registration
+  replies and bounded refusal of F2H MEM_ALLOC. It passed CI `39779962789` and
+  was packaged locally as documented in `NOTES.md`; it has no phone result.
+- Current local candidate 0162 handles only non-secure GMU-only MEM_ALLOC with
+  permanent kernel backing and a live SMMU page-table append/TLBI/sync. Host
+  normal and ASan/UBSan tests cover a synthetic successful request and a
+  GPU-access refusal. Arm64 object compile against buildtree `39775328855`
+  reports 0/1 failures. The actual phone descriptor and firmware acceptance
+  are unknown; no CI build or phone test exists. User is testing Android, so
+  defer device commands.
 - Patch 0159 adds a bounded HFI `CORE_FW_START` request/ACK exchange based on
   Fairphone Linux Gen8. CI `39766804611` passed and the packaged image booted
   once. The phone reported `irq=0x4 fw=0x900` after the request; bit 2 is DBGQ
@@ -101,9 +111,9 @@ for that fixed request; the host test rejects zero-width SH0 while allowing fixe
 ACV. Patch 0158 is validated by CI and on hardware. Do not relax fail-closed
 behavior or guess a TCS vote.
 
-Next: finish review of patch 0160, run one CI build and package only after the
-source checks remain green. Wait for the user's Android work before any device
-test. If the 0160 phone probe gets CORE_FW_START ACK, next handle observed
-F2H MEM_ALLOC requests with pre-mapped backing and explicit cache ownership;
-then add a bounded GPU memory write/readback. Rendering and NativeMetal
-integration remain later milestones.
+Next: finish review and commit 0162, then run one CI build and package. Wait for
+the user's Android work before any device test. Once the phone can be tested,
+capture the real MEM_ALLOC descriptor and determine whether this GMU-only subset
+is sufficient; widen it only for observed request types and flags. Then continue
+to a bounded GPU memory write/readback. Rendering and NativeMetal integration
+remain later milestones.

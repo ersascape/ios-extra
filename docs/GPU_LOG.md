@@ -1,5 +1,26 @@
 # GPU bring-up log (chronological, newest first)
 
+## FP6 patch 0162 GMU-only HFI allocation candidate — 2026-10-22
+
+- Patch 0162 extends 0161's event dispatcher to service the narrow Linux
+  GMU-only kernel-memory case: a permanent backing range is added to the live
+  GMU SMMU page tables, cleaned, followed by context TLBIALL/TLBSYNC and a
+  bounded sync poll. It then returns the host handle, GMU IOVA and mapped size
+  in an HFI ACK. Requests with GPU access, secure memory, hardware-fence kind,
+  fixed MMIO kind or size alignment above 4 KiB fail closed and cause CM3 reset.
+- Host harness simulates a 4 KiB kind-2/flags-0 request at the noncached GMU
+  window. CPU table walk reaches the allocated PA, TLBI and sync are issued,
+  service ACK is sent, START receives its ACK, and CM3 reset is verified. A
+  simulated `GFX_ACC` request is refused without a mapping or service reply;
+  the bounded reset path verifies. Normal and ASan/UBSan runs pass, as does the
+  broad GPU probe suite. Arm64 object compile against CI buildtree
+  `39775328855` reports `0 of 1 files failed`; patch application check passes.
+- The request values above are test-fixture values, not phone observations.
+  The phone's actual descriptor and firmware response are still unknown. The
+  change is local and not yet built by CI or tested on hardware; phone commands
+  are deferred while the user is testing Android. It does not demonstrate GPU
+  DMA, command execution, rendering, or Metal.
+
 ## FP6 patch 0160 source/host review (2026-10-22)
 
 - Candidate patch 0160 adds the Linux Gen8 HFI performance and bandwidth tables,

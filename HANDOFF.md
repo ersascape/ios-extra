@@ -45,18 +45,18 @@ found Linux sends scratch, perf/BW tables and optional feature/log controls
 before CORE_FW_START, while patch 0159 sent that command immediately after HFI
 controller initialization.
 
-An unbuilt 0160 candidate now adds the stock 362 MHz GPU row, GMU 350/650 MHz
-rows, a bounded three-level DDR/two-level CNOC table with full AB/IB encoding,
-HWSCHED/KPROF controls, generic HFI ACK handling and debug-queue capture. Host
-protocol/table/reset checks and ASan/UBSan pass; the broad GPU MMIO harness and
-single-file XNU compile pass. Commit `5243eb1f6e8b0590e580fd66e604ea34a5faa0f2`
-passed CI run `39775328855` and was locally packaged with the verified product
-ADT and stock DTB. Image SHA256 is
-`f63635017fa022319c4f6c6a6cb29224aec193edea49372eb4dc13ae85c2db8e`.
-No phone observation exists for 0160. Optional ACD/BCL/CLX/IFPC settings are
-not reproduced yet; F2H MEM_ALLOC is not handled. The user is testing Android,
-so defer device commands. No GPU execution has been demonstrated. Latest
-package and log hashes are in `NOTES.md` and `docs/GPU_LOG.md`.
+Patches 0160 and 0161 passed CI and were packaged; neither has a phone result.
+Patch 0161 dispatches GMU counter and MEM_ALLOC events but refuses allocation.
+The local 0162 candidate services only non-secure GMU-only MEM_ALLOC: permanent
+kernel backing, live page-table append, cache clean, context TLBIALL/TLBSYNC,
+and a Linux-shaped HFI ACK. GPU-access, secure, fence, fixed-MMIO and unsupported
+large-alignment requests still reset CM3 safely. Normal and ASan/UBSan host
+protocol tests pass, including one successful synthetic GMU-only request and a
+GPU-access refusal; the changed source compiles to an arm64 object against CI
+buildtree `39775328855` (`0 of 1 files failed`). This does not reveal the phone's
+actual descriptor or prove firmware acceptance. No 0162 CI build or phone test
+exists. The user is testing Android, so continue local review and defer all
+device commands. No GPU execution has been demonstrated.
 
 - Work in this checkout on `main`; remote is `ersascape/ios-extra`. The goal is
   FP6 Adreno 810 GMU firmware/HFI, then bounded GPU execution and an A810 Metal

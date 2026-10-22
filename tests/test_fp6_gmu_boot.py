@@ -26,10 +26,16 @@ typedef uint64_t ppnum_t;
 static struct fp6_gmu_domain fp6_gmu_domain;
 static vm_offset_t fp6_gmu_window = 1;
 #define FP6_SMMU_GMU_SID 5u
+#define FP6_SMMU_CB_SCTLR 0x0000u
 #define FP6_SMMU_CB_FSR 0x58u
+#define FP6_SMMU_CB_TLBIALL 0x0618u
+#define FP6_SMMU_CB_TLBSYNC 0x07f0u
+#define FP6_SMMU_CB_TLBSTATUS 0x07f4u
+#define FP6_SMMU_DUMMY_VAL 0xffffffffu
 #define FP6_GMU_TEST 1
-static uint32_t reset_value=1, fw_result=0x100, hfi_result=1, smr;
+static uint32_t reset_value=1, fw_result=0x100, hfi_result=1, smr, fake_cb_sctlr=0x27;
 static unsigned release_count, reset_count, route_writes, hfi_starts;
+static unsigned fake_tlbi_count, fake_tlbsync_count;
 static int refuse_reset;
 static int PE_parse_boot_argn(const char *s, void *v, int n) {(void)s;(void)v;(void)n;return 0;}
 static uint64_t fake_ticks=1000000, fake_frequency=19200000, cx_seed, cx_seed_tick;
@@ -44,8 +50,15 @@ static int fake_bad_hfi_ack;
 static int fake_cntr_event, fake_mem_alloc_event;
 static uint32_t fake_start_header;
 static uint32_t fake_counter_header;
+static uint32_t fake_mem_alloc_header, fake_mem_alloc_va;
+static uint32_t fake_mem_alloc_flags;
 static uint32_t fp6_gmu_hfi_va;
 static uint8_t *fp6_gmu_range_va(uint32_t);
+static uint64_t fake_gmu_walk(uint32_t a) {
+ unsigned i=a>>30,j=(a>>21)&511,k=(a>>12)&511;
+ assert(fp6_gmu_domain.l2[i].va && fp6_gmu_domain.l3[i][j].va);
+ return ((uint64_t *)fp6_gmu_domain.l3[i][j].va)[k];
+}
 static void flush_dcache64(uintptr_t address, unsigned count, int physical) {
  assert(address && count && !physical); fp6_hfi_cache_flushes++;
 }
@@ -83,7 +96,11 @@ static uint32_t fp6_smmu_read32(vm_offset_t b, uint32_t o) {
   return fp6_cmd_db[off/4];
  }
  if (b>=0x17a20000u && b<0x17a30000u) return fp6_rsc[((b-0x17a20000u)+o)/4];
- if (b==2) return o==0x800 ? smr : 0;
+ if (b==2) {
+  if(o==0x800)return smr;
+  if(o==0x1000+FP6_SMMU_CB_SCTLR)return fake_cb_sctlr;
+  return 0;
+ }
  if (b==3) {
   cx_reads++;
   uint64_t value=cx_seed+(fake_ticks-cx_seed_tick)*cx_rate_num/cx_rate_den;
@@ -99,7 +116,12 @@ static uint32_t fp6_smmu_read32(vm_offset_t b, uint32_t o) {
  return 0;
 }
 static void fp6_smmu_write32(vm_offset_t b,uint32_t o,uint32_t v) {
- if (b==2) { assert(o==0x800); smr=v;route_writes++;return; }
+ if (b==2) {
+  if(o==0x800){smr=v;route_writes++;return;}
+  if(o==0x1000+FP6_SMMU_CB_TLBIALL){assert(v==FP6_SMMU_DUMMY_VAL);fake_tlbi_count++;return;}
+  if(o==0x1000+FP6_SMMU_CB_TLBSYNC){assert(v==FP6_SMMU_DUMMY_VAL);fake_tlbsync_count++;return;}
+  assert(0);
+ }
  if (b==3) {
   cx_writes++;
   fake_ticks+=cx_write_ticks;if(o==0x200)cx_pending_lo=v;
@@ -138,7 +160,7 @@ static void fp6_smmu_write32(vm_offset_t b,uint32_t o,uint32_t v) {
   unsigned id=req_hdr&0xffu, seq=(req_hdr>>20)&0xfffu;
   assert(id!=126 && dwords>=2 && rounded<1024);
   assert(seq==fp6_hfi_doorbells+1);
-  assert(((req_hdr>>16)&0xfu)==((id==110u)?1u:0u));
+  assert(((req_hdr>>16)&0xfu)==((id==110u || id==20u)?1u:0u));
   if(fp6_hfi_doorbells==0) {
    assert(id==15 && dwords==19 && cmdq[(wi+1u)%1024u]==0);
    assert(cmdq[(wi+2u)%1024u]==1 && cmdq[(wi+3u)%1024u]==2 && cmdq[(wi+4u)%1024u]==3);
@@ -160,14 +182,25 @@ static void fp6_smmu_write32(vm_offset_t b,uint32_t o,uint32_t v) {
    assert(cmdq[(wi+2u)%1024u]==1 && cmdq[(wi+3u)%1024u]==0);
   } else if((req_hdr>>16&0xfu)==1u && id==110u) {
    assert(dwords==6u && ((req_hdr>>20)&0xfffu)==6u);
+  } else if((req_hdr>>16&0xfu)==1u && id==20u) {
+   assert(dwords==11u && ((req_hdr>>20)&0xfffu)==6u);
+   assert(cmdq[(wi+1u)%1024u]==fake_mem_alloc_header);
+   assert(cmdq[(wi+2u)%1024u]==0u && cmdq[(wi+3u)%1024u]==0u);
+   assert(cmdq[(wi+4u)%1024u]==0u && cmdq[(wi+5u)%1024u]==2u);
+   assert(cmdq[(wi+6u)%1024u]==0xabcdu && cmdq[(wi+7u)%1024u]==0xabcdu);
+   fake_mem_alloc_va=cmdq[(wi+8u)%1024u];
+   assert(fake_mem_alloc_va && cmdq[(wi+9u)%1024u]==4096u && cmdq[(wi+10u)%1024u]==12u);
+   assert(fp6_gmu_domain.frozen && (fake_gmu_walk(fake_mem_alloc_va)&~4095ULL)==
+       fp6_gmu_domain.ranges[fp6_gmu_domain.count-1].backing.pa);
   } else {
    assert(id==14 && dwords==2 && cmdq[(wi+1u)%1024u]==0);
   }
   uint32_t ri=msg_hdr[11];
   if(id==14 && fake_mem_alloc_event) {
-   msgq[ri]=(11u<<8)|20u; msgq[(ri+1u)%1024u]=1u;
+   fake_start_header=cmdq[wi];
+   msgq[ri]=(11u<<8)|20u; fake_mem_alloc_header=msgq[ri]; msgq[(ri+1u)%1024u]=1u;
    msgq[(ri+2u)%1024u]=0u; msgq[(ri+3u)%1024u]=0u;
-   msgq[(ri+4u)%1024u]=0u; msgq[(ri+5u)%1024u]=2u;
+   msgq[(ri+4u)%1024u]=fake_mem_alloc_flags; msgq[(ri+5u)%1024u]=2u;
    msgq[(ri+6u)%1024u]=0u; msgq[(ri+7u)%1024u]=0xabcdu;
    msgq[(ri+8u)%1024u]=0u; msgq[(ri+9u)%1024u]=4096u;
    msgq[(ri+10u)%1024u]=12u; msg_hdr[11]=(ri+12u)%1024u;
@@ -175,6 +208,9 @@ static void fp6_smmu_write32(vm_offset_t b,uint32_t o,uint32_t v) {
    fake_start_header=cmdq[wi];
    msgq[ri]=(3u<<8)|110u; fake_counter_header=msgq[ri]; msgq[(ri+1u)%1024u]=7u;
    msgq[(ri+2u)%1024u]=9u; msg_hdr[11]=(ri+4u)%1024u;
+  } else if((cmdq[wi]>>16&0xfu)==1u && id==20u) {
+   assert(fake_mem_alloc_event && fake_start_header);
+   fake_hfi_reply(msgq,msg_hdr,fake_start_header,5u);
   } else if((cmdq[wi]>>16&0xfu)==1u && id==110u) {
    assert(dwords==6u && cmdq[(wi+1u)%1024u]==fake_counter_header);
    assert(cmdq[(wi+2u)%1024u]==7u && cmdq[(wi+3u)%1024u]==9u);
@@ -238,6 +274,7 @@ MAIN = r'''
 static void run_probe(uint32_t fw, uint32_t hfi, int fail_reset) {
  fw_result=fw;hfi_result=hfi;refuse_reset=fail_reset;reset_value=1;
  fp6_gmu_hfi_irq=0;fp6_hfi_doorbells=fp6_hfi_cache_flushes=0;
+ fake_tlbi_count=fake_tlbsync_count=0;fake_mem_alloc_va=0;
  fake_start_header=fake_counter_header=0;
  release_count=reset_count=route_writes=hfi_starts=0;
  scm_calls=0;scm_available=1;scm_status=0;
@@ -248,9 +285,12 @@ static void run_probe(uint32_t fw, uint32_t hfi, int fail_reset) {
  assert(route_writes==1 && smr==0x80000005u);
  assert(hfi_starts==((fw==0x100)?1u:0u));
  unsigned expected=(fake_bad_hfi_ack?1u:5u)+(fake_cntr_event?1u:0u);
- if(fake_mem_alloc_event)expected=5u;
+ if(fake_mem_alloc_event)expected=6u;
+ if(fake_mem_alloc_event && fake_mem_alloc_flags)expected=5u;
  assert(fp6_hfi_doorbells==((fw==0x100 && hfi==1)?expected:0u));
  unsigned flushes=(fake_bad_hfi_ack?2u:10u)+(fake_cntr_event?2u:0u);
+ if(fake_mem_alloc_event)flushes+=2u;
+ if(fake_mem_alloc_event && fake_mem_alloc_flags)flushes=10u;
  assert(fp6_hfi_cache_flushes==((fw==0x100 && hfi==1)?flushes:0u));
 }
 int main(void) {
@@ -329,7 +369,12 @@ int main(void) {
  fp6_gmu_first_boot(2,0x1000,0x800);
  assert(scm_calls==1 && route_writes==1 && release_count==1);
  fake_mem_alloc_event=1;
- run_probe(0x100,1,0); /* GPU/GMU memory request is logged and contained, never guessed */
+ run_probe(0x100,1,0); /* GMU-only request is backed, mapped, flushed, ACKed, then START completes */
+ assert(fake_mem_alloc_va && fake_tlbi_count==1 && fake_tlbsync_count==1);
+ fake_mem_alloc_flags=1u; /* GPU-accessible request must not receive a fabricated GPU address */
+ run_probe(0x100,1,0);
+ assert(!fake_mem_alloc_va && fake_tlbi_count==0 && fake_tlbsync_count==0);
+ fake_mem_alloc_flags=0;
  fake_mem_alloc_event=0;
  (void)fp6_gmu_boot_wanted;
  (void)fp6_gmu_domain_copy;
