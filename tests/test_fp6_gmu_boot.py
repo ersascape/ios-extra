@@ -38,7 +38,7 @@ static int PE_parse_boot_argn(const char *s, void *v, int n) {(void)s;(void)v;(v
 static uint64_t fake_ticks=1000000, fake_frequency=19200000, cx_seed, cx_seed_tick;
 static uint32_t cx_pending_lo;
 static int cx_map_fail, irq_enabled=1, scm_available=1, scm_status;
-static unsigned cx_rate_num=1, cx_rate_den=1, cx_writes, cx_write_ticks=5;
+static unsigned cx_rate_num=1, cx_rate_den=1, cx_writes, cx_reads, cx_write_ticks=5;
 static unsigned scm_calls;
 static uint64_t scm_fid[2], scm_arginfo[2], scm_arg0[2];
 static uint64_t fp6_gmu_test_counter(void) { return fake_ticks += 20; }
@@ -55,6 +55,7 @@ static void fp6_scm_invoke(uint64_t fid,uint64_t arginfo,uint64_t arg0,uint64_t 
 static uint32_t fp6_smmu_read32(vm_offset_t b, uint32_t o) {
  if (b==2) return o==0x800 ? smr : 0;
  if (b==3) {
+  cx_reads++;
   uint64_t value=cx_seed+(fake_ticks-cx_seed_tick)*cx_rate_num/cx_rate_den;
   if(o==0x200) return (uint32_t)value;
   if(o==0x204) return (uint32_t)(value>>32);
@@ -136,12 +137,17 @@ int main(void) {
  fake_frequency=19200000;
  fp6_gmu_cx_timer_ready=0;cx_map_fail=1;
  assert(!fp6_gmu_cx_timer_sync() && !fp6_gmu_cx_timer_ready && irq_enabled);
- cx_map_fail=0;cx_rate_num=1;cx_rate_den=2;
- assert(!fp6_gmu_cx_timer_sync() && !fp6_gmu_cx_timer_ready && irq_enabled);
+ cx_rate_num=0;cx_rate_den=1; /* phone-measured CX counter remains static after seed */
+ cx_map_fail=1;
  reset_value=1;release_count=reset_count=route_writes=hfi_starts=0;scm_calls=0;
  fp6_gmu_first_boot(2,0x1000,0x800);
  assert(route_writes==0 && release_count==0 && scm_calls==0);
- cx_rate_num=cx_rate_den=1;assert(fp6_gmu_cx_timer_sync());
+ cx_map_fail=0;cx_reads=0;fp6_gmu_cx_timer_ready=0;
+ int timer_ok=fp6_gmu_cx_timer_sync();
+ assert(timer_ok && fp6_gmu_cx_timer_ready && cx_reads==0 && cx_seed!=0);
+ reset_value=1;release_count=reset_count=route_writes=hfi_starts=0;scm_calls=0;
+ fp6_gmu_first_boot(2,0x1000,0x800);
+ assert(route_writes==1 && release_count==1 && hfi_starts==1);
  unsigned cache_sets_before_publish=cache_set_count;
  assert(!fp6_gmu_domain_publish(&fp6_gmu_domain));
  assert(cache_set_count==cache_sets_before_publish);

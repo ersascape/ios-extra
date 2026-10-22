@@ -1,5 +1,22 @@
 # GPU bring-up log (chronological, newest first)
 
+## FP6 CX timer USB diagnosis and seed fix (2026-10-22)
+
+- CI run `39735265609` passed for `089d4ef39822e751ada55eae9bc53f3ccc4472f2`.
+  Image `/tmp/ios-extra-run-39735265609/package/fp6-gmu-timer-diagnostics.img`,
+  SHA256 `b5a30a6bce20a730c39529ae08121ddfdbe29c614ad42477b3a21ed9de6c9fef`;
+  it was used for one temporary `fastboot boot`, with no partition writes.
+- USB capture artifacts are under `/tmp/ios-extra-run-39735265609/logs/`.
+  Pcap SHA256 `d297cbf17896b9e36d0afc4709ae6ead0b1eeff7fb7709a9cfdba6a12aca0851`;
+  decoded text SHA256 `729d365b3edab8c39364aca208c58e2673738594498b8dfb438ebba4c643af32`.
+  The 405-packet capture confirms CPU time advanced while CX remained static at
+  its seed. That is why XNU's post-seed advance check refused firmware upload.
+- Patch 0152 follows Linux `gen8_cx_timer_init()`: seed the CX counter and
+  proceed without an extra CX readback, offset, advance or rate gate. The host
+  test models the measured static counter and passes. CI and phone validation
+  remain pending. No firmware upload, SCM/CM3 release or HFI operation occurred
+  in the diagnostic boot.
+
 This is the full per-step record that used to be `NOTES.md`: exact images, hashes,
 CI runs, phone results and the reasoning at the time. The current state and the next
 action are in [NOTES.md](../NOTES.md) and [HANDOFF.md](../HANDOFF.md). Entries that say

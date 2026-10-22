@@ -87,11 +87,31 @@
   source tree from CI run `39732507544`. This is source-level verification
   only; CI and phone results are pending.
 
+## FP6 CX timer: USB diagnosis and Linux-aligned seed fix (2026-10-22)
+
+- CI `39735265609` passed for `089d4ef39822e751ada55eae9bc53f3ccc4472f2`.
+  The temporary image was `/tmp/ios-extra-run-39735265609/package/fp6-gmu-timer-diagnostics.img`,
+  SHA256 `b5a30a6bce20a730c39529ae08121ddfdbe29c614ad42477b3a21ed9de6c9fef`.
+  It was booted once with `fastboot boot`; no partition was flashed or written.
+- USB capture `/tmp/ios-extra-run-39735265609/logs/phone-0151-cxtimer-diagnostics.pcap`
+  (SHA256 `d297cbf17896b9e36d0afc4709ae6ead0b1eeff7fb7709a9cfdba6a12aca0851`)
+  decoded to 405 packets / 122,058 log bytes at
+  `/tmp/ios-extra-run-39735265609/logs/phone-0151-cxtimer-diagnostics.txt`
+  (SHA256 `729d365b3edab8c39364aca208c58e2673738594498b8dfb438ebba4c643af32`).
+  The phone reports CPU counter `0x71e78f2c7->0x71e793e01` while CX stays
+  `0x71e78f2ab->0x71e78f2ab`; this confirms the added “must advance” check caused
+  the refusal. Firmware upload, SCM/CM3 release and HFI did not run.
+- Patch 0152 removes the post-seed CX readback, offset, advance and rate gates.
+  Fairphone Linux `gen8_cx_timer_init()` seeds the counter and continues without
+  those checks. The host harness models a static post-seed CX counter;
+  `python3 tests/test_fp6_gmu_boot.py` and `git diff --check` pass. CI and phone
+  validation of this fix are pending.
+
 ## Current FP6 GPU path
 
 The target is FP6 Adreno 810 Gen8.3. Patches 0148/0149 booted on the phone: the corrected GPU PLL/GMU clocks came up, 159 persistent pages were checked/uploaded, GMU firmware reported `FW_INIT_RESULT=0x100`, HFI controller initialization reported `HFI_CTRL_STATUS=1`, and CM3 reset was verified afterward. The photo records early GPU lines; the later USB capture started after that segment. GMU DMA and HFI command processing are still unproven.
 
-Next, build the combined timer and HFI cache-coherency follow-up once in CI, verify/package it, then use one USB-captured temporary boot to see whether timer sync passes and firmware reaches FW_INIT/HFI_CTRL. After that, inventory runtime DDR/BCM metadata and implement the minimum DDR vote before HFI messages. Full HFI needs perf/BW tables and MEM_ALLOC request handling. After HFI runs and idles safely, bring up GPU MMU/OOB, Gen8 SQE/AQE and scheduler; prove a bounded GPU write to mapped memory and then a simple draw/readback. Finally expose allocation, mapping/cache, submission and fence operations through an IOKit ABI and adapt an A810-correct Turnip/Metal frontend and IOSurface presentation. The local NativeAdreno path carries A740 hardware assumptions. Metal rendering remains unimplemented.
+Next, build patch 0152 once in CI, verify/package it, then use one USB-captured temporary boot to see whether firmware reaches FW_INIT/HFI_CTRL. After that, inventory runtime DDR/BCM metadata and implement the minimum DDR vote before HFI messages. Full HFI needs perf/BW tables and MEM_ALLOC request handling. After HFI runs and idles safely, bring up GPU MMU/OOB, Gen8 SQE/AQE and scheduler; prove a bounded GPU write to mapped memory and then a simple draw/readback. Finally expose allocation, mapping/cache, submission and fence operations through an IOKit ABI and adapt an A810-correct Metal frontend and IOSurface presentation. Metal rendering remains unimplemented.
 
 See [FP6 GMU first boot](docs/FP6_GMU_FIRST_BOOT.md), [FP6 Adreno Metal audit](docs/FP6_ADRENO_METAL_AUDIT.md) and [FP6 SMMU power](docs/FP6_SMMU_POWER.md).
 

@@ -1,0 +1,84 @@
+diff --git a/bsd/dev/sweet_gpu.c b/bsd/dev/sweet_gpu.c
+index 0000000..0000000 100644
+--- a/bsd/dev/sweet_gpu.c
++++ b/bsd/dev/sweet_gpu.c
+@@ -2912,23 +2912,6 @@
+ #define fp6_gmu_test_frequency() fp6_gmu_arch_frequency()
+ #endif
+ 
+-static int
+-fp6_gmu_cx_counter_read(vm_offset_t cx, uint64_t *value)
+-{
+-	uint32_t hi = fp6_smmu_read32(cx, FP6_CX_AO_COUNTER_HI);
+-	uint32_t lo = fp6_smmu_read32(cx, FP6_CX_AO_COUNTER_LO);
+-	uint32_t hi2 = fp6_smmu_read32(cx, FP6_CX_AO_COUNTER_HI);
+-	if (hi == 0xffffffffu || lo == 0xffffffffu || hi2 == 0xffffffffu)
+-		return 0;
+-	if (hi != hi2) {
+-		lo = fp6_smmu_read32(cx, FP6_CX_AO_COUNTER_LO);
+-		hi = hi2;
+-		if (lo == 0xffffffffu) return 0;
+-	}
+-	*value = ((uint64_t)hi << 32) | lo;
+-	return 1;
+-}
+-
+ /* Linux gen8_cx_timer_init, with bounded sample and post-seed checks. */
+ static int
+ fp6_gmu_cx_timer_sync(void)
+@@ -3008,51 +2991,17 @@
+ 	__asm__ volatile("dsb sy" ::: "memory");
+ 	(void)ml_set_interrupts_enabled(irq_was_enabled);
+ 
+-	uint64_t cx_before, cpu_before, cx_after, cpu_after;
+-	if (!fp6_gmu_cx_counter_read(cx, &cx_before)) {
+-		printf("QCOM GMU: CX timer seed counter read failed\n");
+-		return 0;
+-	}
+-	cpu_before = fp6_gmu_test_counter();
+-	uint64_t initial_error = cx_before > cpu_before ? cx_before - cpu_before : cpu_before - cx_before;
+-	if (initial_error > frequency / 1000u) {
+-		printf("QCOM GMU: CX timer seed offset too large CPU=0x%llx CX=0x%llx error=%llu\n",
+-		    (unsigned long long)cpu_before, (unsigned long long)cx_before,
+-		    (unsigned long long)initial_error);
+-		return 0;
+-	}
+-	delay(1000);
+-	if (!fp6_gmu_cx_counter_read(cx, &cx_after)) {
+-		printf("QCOM GMU: CX timer delayed counter read failed\n");
+-		return 0;
+-	}
+-	cpu_after = fp6_gmu_test_counter();
+-	if (cpu_after <= cpu_before || cx_after <= cx_before) {
+-		printf("QCOM GMU: CX timer did not advance CPU=0x%llx->0x%llx CX=0x%llx->0x%llx\n",
+-		    (unsigned long long)cpu_before, (unsigned long long)cpu_after,
+-		    (unsigned long long)cx_before, (unsigned long long)cx_after);
+-		return 0;
+-	}
+-	uint64_t cpu_delta = cpu_after - cpu_before;
+-	uint64_t cx_delta = cx_after - cx_before;
+-	uint64_t delta_error = cpu_delta > cx_delta ? cpu_delta - cx_delta : cx_delta - cpu_delta;
+-	if (delta_error > frequency / 5000u + 64u) {
+-		printf("QCOM GMU: CX timer rate mismatch CPU=%llu CX=%llu error=%llu\n",
+-		    (unsigned long long)cpu_delta, (unsigned long long)cx_delta,
+-		    (unsigned long long)delta_error);
+-		return 0;
+-	}
++	/* Linux gen8_cx_timer_init seeds the CX counter and proceeds. It does
++	 * not read the counter back or require it to advance before firmware. */
+ 	fp6_gmu_cx_timer_ready = 1;
+-	printf("QCOM GMU: CX timer synced source=XNU_CNTVCT CNTFRQ=%llu samples=%u zero=%u shorter=%u outlier=%u backwards=%u/%u read=%llu..%llu write=%llu..%llu skew=%llu min=%llu max=%llu seed=0x%llx offset=%llu delta=%llu/%llu\n",
++	printf("QCOM GMU: CX timer seeded source=XNU_CNTVCT CNTFRQ=%llu samples=%u zero=%u shorter=%u outlier=%u backwards=%u/%u read=%llu..%llu write=%llu..%llu skew=%llu min=%llu max=%llu seed=0x%llx\n",
+ 	    (unsigned long long)frequency, valid, zero_skew, shorter, outlier,
+ 	    backward_before_write, backward_after_write,
+ 	    (unsigned long long)read_min, (unsigned long long)read_max,
+ 	    (unsigned long long)write_min, (unsigned long long)write_max,
+ 	    (unsigned long long)skew,
+ 	    (unsigned long long)skew_min, (unsigned long long)skew_max,
+-	    (unsigned long long)seed, (unsigned long long)initial_error,
+-	    (unsigned long long)cpu_delta,
+-	    (unsigned long long)cx_delta);
++	    (unsigned long long)seed);
+ 	return 1;
+ }
+ 

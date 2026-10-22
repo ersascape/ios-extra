@@ -1,5 +1,7 @@
 diff --git a/bsd/dev/sweet_gpu.c b/bsd/dev/sweet_gpu.c
 index 0000000..0000000 100644
+--- a/bsd/dev/sweet_gpu.c
++++ b/bsd/dev/sweet_gpu.c
 @@ -3009,7 +3009,10 @@
  	(void)ml_set_interrupts_enabled(irq_was_enabled);
  
