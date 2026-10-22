@@ -36,6 +36,11 @@ int main(void) {
  assert((walk(d,0x201000)&~4095ULL)==pa+8192);
  assert((walk(d,0x1ff000)&0xfff)==0xe83); /* nG, read-only, privileged */
  assert((walk(d,0xc0000000)&0xfff)==0xe43); /* nG, read/write, unprivileged */
+ /* GMU_CACHEABLE selects the GMU IOVA window; Linux get_attrs() does not
+  * request IOMMU_CACHE, so both mappings use MAIR AttrIndx 0 (bits 4:2). */
+ assert(((walk(d,0x1ff000) >> 2) & 7) == 0);
+ assert(((walk(d,0xc0000000) >> 2) & 7) == 0);
+ assert(d->ranges[0].cached == 1 && d->ranges[1].cached == 0);
  unsigned n=allocations; assert(!fp6_gmu_domain_reserve_access(d,0x1ff000,0x3000,1,0,1));assert(n==allocations);
  assert(fp6_gmu_domain_reserve_access(d,0x1ff000,0x3000,1,1,1));
  assert(fp6_gmu_domain_reserve(d,0x200000,4096,1));

@@ -1,5 +1,35 @@
 # ios-extra — current state
 
+## GMU cacheability source check (2026-10-22)
+
+- Read-only Fairphone Gen8.3 source review corrected a possible false alarm in
+  the GMU page-table PTE: `HFI_MEMFLAG_GMU_CACHEABLE` selects the GMU `GMU_CACHE`
+  IOVA aperture (`0x4000..0x00ffffff`), while `get_attrs()` in
+  `adreno_gen8_hwsched_hfi.c` only returns READ plus optional PRIV/WRITE. It
+  does not request `IOMMU_CACHE`. Linux `io-pgtable-arm.c` therefore uses
+  AttrIndx 0 for both cacheable-window and noncached-window mappings. The XNU
+  GMU context's MAIR0 is `0x44` (AttrIndx 0 = Normal Non-cacheable), matching
+  the current GMU PTE construction; adding AttrIndx 1 based only on the HFI
+  flag would diverge from Linux.
+- Added an explicit host assertion that both windows use AttrIndx 0 while the
+  cached flag remains associated with the correct GMU IOVA range. This is a
+  source-model check, not a phone observation. `fastboot devices` returned
+  zero devices during this pass, so the 0164 phone test remains pending.
+- The same Linux `gen8_hwsched_hfi_start()` review confirms the current XNU
+  sequence ends after `CORE_FW_START` (with event dispatch active). On success,
+  Linux next enables the context queue and hardware-fence client, sends
+  HW_FENCE control, configures preemption/LPAC/AQE, and sends `START`. XNU does
+  not yet implement that post-CORE_FW_START sequence. The 0164 phone log must
+  first establish CORE_FW_START ACK and any real MEM_ALLOC descriptors; after
+  that, the next implementation is the measured post-start command sequence.
+- Linux hardware-fence backing is a separate resource from ordinary kernel
+  pages: `adreno_hwsched_register_hw_fence()` obtains a descriptor from
+  `msm_hw_fence_register()` and uses its device/CPU addresses; `MEM_ALLOC`
+  kind `HW_FENCE` then reuses that descriptor. XNU has no equivalent service,
+  and 0164 correctly refuses that kind. Keep the HFI HW_FENCE feature disabled
+  until this external memory contract is implemented; context queue startup
+  can be investigated independently.
+
 ## FP6 GPU HFI global-memory integration candidate (0163/0164, 2026-10-22)
 
 - Patch 0163's GPU global-domain helper now takes an explicit allocation size

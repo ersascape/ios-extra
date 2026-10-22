@@ -19,6 +19,44 @@
 
 # GPU bring-up log (chronological, newest first)
 
+## Source audit — GMU cacheable flag and SMMU PTE attributes (2026-10-22)
+
+
+Read-only Fairphone Gen8.3 source review resolved whether XNU's GMU page-table
+PTE should set an AttrIndx bit for `HFI_MEMFLAG_GMU_CACHEABLE`. In
+`adreno_gen8_hwsched_hfi.c`, `get_attrs()` returns `IOMMU_READ` and adds only
+`IOMMU_PRIV` / `IOMMU_WRITE` from the HFI flags; it does not add
+`IOMMU_CACHE`. In `drivers/iommu/io-pgtable-arm.c`, the S1 mapping selects
+MAIR AttrIndx 1 only for `IOMMU_CACHE`, otherwise AttrIndx 0. The flag instead
+chooses between the GMU cacheable VA aperture (`0x4000..0x00ffffff`) and the
+noncached kernel apertures (`0x60000000..0x7fffffff`, extended
+`0xc0000000..0xdfffffff`). XNU's GMU MAIR0 value `0x44` defines AttrIndx 0 as
+Normal Non-cacheable, so the existing AttrIndx-0 PTE matches this Linux policy.
+No driver PTE change was justified.
+
+Added host assertions in `tests/test_fp6_gmu_domain.py` for AttrIndx 0 on both
+window classes while checking the cached-window metadata. The focused test passes; its optional pinned-firmware integration skips because
+that local firmware blob is unavailable. No build or phone test was run for this
+source-only correction; `fastboot devices` returned zero devices.
+
+The same source trace identifies the current HFI stopping point. XNU's 0164
+path sends the prerequisite tables/features, then `CORE_FW_START`, with the
+event dispatcher available while waiting. Linux `gen8_hwsched_hfi_start()`
+continues by enabling the context queue and hardware-fence client, sending
+HW_FENCE control, configuring preemption/LPAC/AQE, and sending `START`. XNU
+does not yet perform those post-CORE_FW_START steps. The phone must first show
+whether 0164 receives the CORE_FW_START ACK and which real MEM_ALLOC descriptors
+arrive; only then can the next command sequence be matched safely.
+
+The Gen8 source also shows why `HFI_MEMKIND_HW_FENCE` cannot be answered with
+ordinary allocated pages: `adreno_hwsched_register_hw_fence()` obtains the
+fence queue descriptor from `msm_hw_fence_register()` and builds its memdesc
+from the service's device and CPU addresses. The MEM_ALLOC handler reuses that
+pre-registered memdesc. XNU has no matching service, and 0164 rejects this
+allocation kind. Leave the HW_FENCE feature disabled while advancing context
+queue startup; add the feature only with its external memory contract.
+
+
 ## FP6 HFI GMU allocation permissions review (2026-10-22)
 
 - Compared the XNU GMU-only allocation path with Fairphone Gen8
