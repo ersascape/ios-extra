@@ -3,7 +3,7 @@
 diff --git a/bsd/dev/sweet_gpu.c b/bsd/dev/sweet_gpu.c
 --- a/bsd/dev/sweet_gpu.c
 +++ b/bsd/dev/sweet_gpu.c
-@@ -3120,6 +3120,151 @@
+@@ -3120,6 +3120,152 @@
  	return 0;
  }
  
@@ -19,7 +19,8 @@ diff --git a/bsd/dev/sweet_gpu.c b/bsd/dev/sweet_gpu.c
 +	if (fp6_smmu_read32(db, 4) != 0x0c0330dbu) return 0;
 +	for (unsigned h = 8; h < 136; h += 16) {
 +		uint32_t a = fp6_smmu_read32(db, h);
-+		if ((a & 0xffffu) != 3u) continue;
++		/* cmd-db IDs: ARC=3, VRM=4, BCM=5 (qcom/cmd-db.h). */
++		if ((a & 0xffffu) != 5u) continue;
 +		uint32_t b = fp6_smmu_read32(db, h + 4);
 +		unsigned entries = 144u + (a >> 16);
 +		unsigned aux = 144u + (b & 0xffffu);

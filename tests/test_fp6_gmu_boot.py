@@ -109,7 +109,7 @@ static int fp6_power_poll(vm_offset_t b,uint32_t o,uint32_t mask,uint32_t want,u
 static void make_cmd_db(void) {
  fp6_cmd_db[1]=0x0c0330dbu;
  /* One RPMh resource header, three BCM entries at byte offset 256. */
- fp6_cmd_db[2]=(112u<<16)|3u;
+ fp6_cmd_db[2]=(112u<<16)|5u; /* BCM slave ID, distinct from ARC ID 3 */
  fp6_cmd_db[3]=(3u<<16)|880u;
  const uint32_t names[3]={0x00304853u,0x0030434du,0x00564341u};
  const uint32_t addrs[3]={0x30020u,0x30030u,0x30040u};

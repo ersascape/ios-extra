@@ -69,12 +69,15 @@ then the next question.** The user prefers slow and careful over fast and clever
 The active branch has advanced past the timer follow-up above. Current HEAD is
 `77d990a`; patch 0153 passed CI `39745254929` and one phone test, as recorded
 at the top of `NOTES.md`. Patch 0154 is under review: Linux-matched minimum DDR
-BCM vote before CM3 release. Its targeted host harness passes with UBSan and it
-applies to the exact source from that CI buildtree. It has not been built by CI
-or tested on phone. Next, finish source review, then make one focused commit
-and push for CI; package a temporary image and use the existing authorized
-phone test only after checking `fastboot devices`. This is not GPU execution:
-HFI traffic, GMU DMA, GPU command execution and Metal remain unimplemented.
+BCM vote before CM3 release. Commit `0c5bd24` passed CI `39750406760` and was
+packaged as `/tmp/ios-extra-run-39750406760/package/fp6-gmu-bootstrap-ddr-vote.img`
+(SHA256 `6093f7f39acac3cb034dc926b94655b100784511f4575b45facc10572d6a3647`).
+The phone safely refused before CM3 release because the candidate searched ARC
+cmd-db ID 3 instead of BCM ID 5; no vote was written. The corrected local patch
+passes the targeted ASan/UBSan harness and applies to the prior CI source. It
+needs a focused commit/CI build and a retry. The phone is currently booted from
+the temporary image; do not assume fastboot. This is not GPU execution: HFI
+traffic, GMU DMA, GPU command execution and Metal remain unimplemented.
 
 ## State in one paragraph
 

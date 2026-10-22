@@ -15,8 +15,16 @@
   Linux; no hardware result exists yet.
 - `tests/test_fp6_gmu_boot.py` passes with UBSan and models the BCM records,
   vote calculation, RPMh acknowledgment, FW_INIT and bounded reset. The patch
-  applies to the exact XNU file from CI run `39745254929`. No new CI build or
-  phone test has run. GPU execution is still not implemented.
+  applies to the exact XNU file from CI run `39745254929`. GPU execution is
+  still not implemented.
+- First hardware attempt used CI `39750406760`, image SHA256
+  `6093f7f39acac3cb034dc926b94655b100784511f4575b45facc10572d6a3647`. The
+  screen showed `bootstrap BCM metadata missing name=SH0`; fail-closed logic
+  stopped before CM3 release and no BCM write occurred. No USB ECM/pcap was
+  available. Review found BCM entries use cmd-db slave ID 5, while the
+  candidate searched ARC ID 3. Corrected the lookup to BCM ID 5 and updated the
+  fixture; ASan/UBSan host test and patch application pass. Rebuild and phone
+  retry are pending.
 
 ## FP6 CX timer USB diagnosis and seed fix (2026-10-22)
 

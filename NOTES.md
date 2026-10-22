@@ -34,12 +34,35 @@
   reset if metadata, TCS state, or completion is uncertain. Fairphone Linux
   source (`9535e0f08` plus its Gen8.3 module) supports the encoding and startup
   order. The host harness passes with UBSan and the patch applies to the exact
-  source from CI run `39745254929`; no CI build or phone observation exists for
-  0154 yet. This is an active bus-vote write, not read-only. After validating it
-  once on phone, continue with HFI BW/PERF tables and MEM_ALLOC handling with
+  source from CI run `39745254929`. The first CI image and phone attempt are
+  recorded below; the BCM slave ID was wrong, so no vote was written. This is
+  an active bus-vote write, not read-only. After validating it once on phone,
+  continue with HFI BW/PERF tables and MEM_ALLOC handling with
   explicit cache ownership transitions. GPU MMU/OOB, SQE/AQE submission,
   bounded GPU memory write, rendering/readback, and the A810-compatible
   IOKit/Metal path remain outstanding.
+
+## FP6 patch 0154 first phone attempt (2026-10-22)
+
+- CI `39750406760` passed for `0c5bd243dc26286b1283d5b00ca3daed50c890a2`.
+  Kernel SHA256 `d9020fb23a17d7787fef17d0848a51910437da1bb2fb65a3ef07821963a25d78`.
+  Local package used the verified FP6 ADT and stock DTB; header-v2 round-trip
+  passed. Image `/tmp/ios-extra-run-39750406760/package/fp6-gmu-bootstrap-ddr-vote.img`,
+  SHA256 `6093f7f39acac3cb034dc926b94655b100784511f4575b45facc10572d6a3647`.
+- One `fastboot boot` was issued after finding exactly one fastboot device. The
+  phone log photo shows `bootstrap BCM metadata missing name=SH0`, then
+  `first boot stopped before CM3 release; DDR vote unavailable`. Therefore no
+  BCM command was written and this boot did not start GMU firmware. The device
+  continued booting and the user reports it is waiting for Apple HFS. USB ECM
+  did not appear before timeout, so no pcap was produced; the fastboot transcript
+  is `/tmp/ios-extra-run-39750406760/logs/phone-0154-bootstrap-ddr-vote-fastboot.txt`.
+- Source review found the bug: cmd-db slave IDs are ARC=3, VRM=4, BCM=5. The
+  first candidate incorrectly searched BCM names under ARC ID 3 (where CX/MX
+  ARC records reside). Patch 0154 is being corrected to search ID 5, and the
+  host fixture now identifies its records as BCM entries. The corrected patch
+  passes the targeted ASan/UBSan host harness and applies to the prior CI source;
+  commit/CI rebuild and phone retry are pending. No vote attempt has succeeded
+  on hardware yet.
 
 ## FP6 GMU first-boot attempt (2026-10-22)
 
