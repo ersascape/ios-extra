@@ -129,6 +129,19 @@ from the next authorized phone observation is needed before that allocator is
 designed. The host peer exercises both the counter exchange and the refusal
 path; it does not establish firmware acceptance or HFI startup on hardware.
 
+The Fairphone module tree at `54c948d9b30c2ba01835e64c36b68b80692554ac`
+shows why the request flags decide the allocator. `get_mem_alloc_entry()`
+allocates GMU-only memory from kernel pages and maps it into the GMU VMA. With
+`GFX_ACC`, it allocates a GPU global buffer; with `GMU_ACC` as well, it also
+imports that buffer into the GMU address space. The GMU VMA ranges are
+`0x60000000..0x7fffffff` for noncached kernel buffers,
+`0xc0000000..0xdfffffff` for the extended range, and
+`0x4000..0x00ffffff` for cacheable mappings. XNU currently publishes and
+freezes its GMU page tables before firmware runs; adding HFI-time buffers needs
+a live page-table update plus SMMU TLBI/sync. Requests with `GFX_ACC` also need
+the GPU-side allocation and mapping path. Until the real descriptor is logged,
+the HFI handler must not guess which path or permissions the firmware needs.
+
 The Fairphone Gen8.3 source shows the required cold-boot path continues through
 `gen8_hwsched_hfi_start()` (`adreno_gen8_hwsched_hfi.c:2138`): after
 `CORE_FW_START`, query/enable the context queue and register the hardware-fence

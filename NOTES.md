@@ -13,14 +13,33 @@
   bounded MEM_ALLOC refusal/reset. Normal and ASan/UBSan runs pass. The changed
   `sweet_gpu.c` cross-compiles against CI buildtree `39775328855` with system
   Clang (`0 of 1 files failed`). The focused patch applies in the host suite;
-  `git diff --check` is clean. This is local source validation only: no CI build
-  or phone observation for 0161 yet. The user is testing Android, so no device
+  `git diff --check` is clean. Commit `b5b9faa6f27eeea631586a03bd9ca86e41d9a37f`
+  passed CI run `39779962789` (XNU build and FP6 job). Kernel SHA256 is
+  `5d09f5406cfcbb1fcf3480ab7aca2f79f98a40ff65465fe7b32d9fa84ead7930`.
+  CI image packaging skipped because `FP6_STOCK_DTB_URL` is unset. Locally
+  packaged the CI kernel with the verified product ADT
+  (`4da4226e6b9ac393ff22b66a304d9172d6be2bfd6d558348a47379c51aab1d80`)
+  and stock Volcano DTB
+  (`8198534128258bfe7b05bbb5b227affc181aa49b376884c08eae8564fce124e3`).
+  Header-v2 round-trip passed. Image `/tmp/ios-extra-run-39779962789/package/fp6-hfi-service-0161`,
+  SHA256 `79944b9033c401f3b2f29869714c2227481d3c4281f6fb90b1f9aec511b50e59`.
+  It has not been phone-tested; the user is using Android, and no device
   commands were run.
 - The decisive next evidence is a later phone log containing the exact
   `MEM_ALLOC` descriptor, after which the allocation kind, size, address and
   mapping requirements can be matched to the Gen8.3 Linux source before
   implementing any backing. This patch does not complete HFI startup or GPU
   execution.
+- Deeper Linux-source review (Fairphone module tree commit
+  `54c948d9b30c2ba01835e64c36b68b80692554ac`) clarifies the implementation
+  split: GMU-only requests use kernel memory plus a GMU IOVA mapping; requests
+  with `GFX_ACC` use GPU global memory, and requests also carrying `GMU_ACC`
+  must be imported into the GMU IOVA space. The Gen8 GMU VMA ranges are
+  `0x60000000..0x7fffffff` (noncached) and `0xc0000000..0xdfffffff`
+  (extended); the cacheable window is `0x4000..0x00ffffff`. XNU's current
+  published GMU domain has no live-map/TLBI update path and no GPU-side global
+  allocator. Therefore 0161 remains diagnostic; a real descriptor must select
+  the first implementable memory kind before replying.
 
 ## FP6 Gen8.3 HFI-to-GPU source boundary (2026-10-22)
 
