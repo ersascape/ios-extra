@@ -29,9 +29,13 @@
 - Linux `gen8_hwsched_hfi_start()` sends warmboot scratch, performance and BW
   tables, optional feature controls and log settings before `CORE_FW_START`.
   Patch 0159 sent CORE_FW_START directly after HFI controller init, so it did
-  not reproduce Linux's pre-start sequence. Inspect FP6-relevant table inputs
-  and debug/fault data before choosing the next bounded probe. Do not add
-  guessed table values or MEM_ALLOC mappings.
+  not reproduce Linux's pre-start sequence. The phone's HFI version is
+  `0x20070001` (2.7.1), selecting the `H2F_MSG_TABLE` GPU performance format.
+  Linux builds that table from the active GPU pwrlevel bin and live cmd-db
+  `gfx.lvl`, `cx.lvl`, and `mx.lvl` ARC data; the BW table uses the selected DDR
+  levels and live SH0/MC0/ACV BCM metadata. Next implementation must source and
+  validate those exact inputs and capture the GMU debug queue on failure. Do
+  not add guessed table values or MEM_ALLOC mappings.
 - Linux `adreno_gen8_hwsched_hfi.c` allocates/maps F2H `MEM_ALLOC` requests
   dynamically. The next response must first identify any request the GMU makes;
   XNU must not invent handles or addresses that are absent from the persistent

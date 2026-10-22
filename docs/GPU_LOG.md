@@ -21,10 +21,13 @@
   captured, so the assertion reason is still unknown.
 - Source inspection found Linux `gen8_hwsched_hfi_start()` submits warmboot
   scratch, GPU performance and BW tables, optional feature controls and log
-  settings before CORE_FW_START. Patch 0159 tried CORE_FW_START immediately
-  after controller initialization. Next, inspect the FP6 table data and the
-  driver's debug queue/fault snapshot path before another build; do not guess
-  resource descriptors or table values.
+  settings before CORE_FW_START. Phone firmware reports HFI version
+  `0x20070001` (2.7.1), so GPU performance uses `H2F_MSG_TABLE`. Linux derives
+  performance entries from the selected GPU pwrlevel bin and live `gfx.lvl`,
+  `cx.lvl`, `mx.lvl` ARC cmd-db values; bandwidth entries use DDR levels and
+  SH0/MC0/ACV BCM metadata. Patch 0159 sent CORE_FW_START without these
+  prerequisites. The next implementation must source those exact inputs and
+  preserve debug-queue data on failure, instead of guessing table values.
 - If firmware returns `F2H_MSG_MEM_ALLOC` instead of the expected ACK, the code
   logs the unexpected message and resets GMU. Linux dynamically allocates/maps
   those descriptors; the phone response must establish the required allocation

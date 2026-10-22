@@ -30,9 +30,13 @@ GMU DMA, GPU command, rendering or Metal work has succeeded yet.
   and `0xe00` is the firmware assertion mask. The bounded path reset CM3. The
   debug queue payload was not captured, so the assertion cause remains unknown.
 - Linux sends warmboot scratch, perf/BW tables and optional feature/log
-  controls before CORE_FW_START; patch 0159 did not. Compare the actual Linux
-  FP6 inputs and GMU fault/debug snapshot path before the next build. The host
-  harness's simulated ACK is not evidence of device firmware acceptance.
+  controls before CORE_FW_START; patch 0159 did not. The phone reports HFI
+  version `0x20070001` (2.7.1), selecting the `H2F_MSG_TABLE` format. Linux
+  builds performance entries from the selected GPU pwrlevel bin plus live
+  `gfx.lvl`, `cx.lvl`, and `mx.lvl` cmd-db ARC values, and its bandwidth table
+  from DDR levels plus BCM metadata. Source those exact inputs and preserve the
+  GMU debug queue on failure before the next build. The host harness's simulated
+  ACK is not evidence of device firmware acceptance.
 
 - Current source is commit `548673a33b397ef80cdbc701cd503903ab63118a` (patch
   0158), CI `39762347940` passed. The kernel was verified and packaged locally
