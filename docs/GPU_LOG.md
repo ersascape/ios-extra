@@ -15,9 +15,16 @@
 - Host HFI queue peer and ACK-format checks pass, as do the GMU domain, GPU
   global-domain, and normal plus ASan/UBSan GPU probe tests. Local arm64 compile
   of `sweet_gpu.c` against CI buildtree `39793471917` reports `0 of 1 files
-  failed`. Source/host/compiler results only: no CI build or 0165 phone test
-  exists yet. The 0164 package remains the most recent image; no GPU execution,
-  readback, draw or Metal result is established.
+  failed`. Commit `b96b41b2ea432f65a9164f279a7ab5e61cc8b014` passed CI run
+  `39814973566`; verified kernel SHA-256 is
+  `916d0e406f6425d1681b3522c6e2403ca2b4c16342ac8dbc1355efa5da7891a8`.
+  CI skipped image packaging because `FP6_STOCK_DTB_URL` is unset. The exact CI
+  kernel and ADT were locally packaged with the verified stock Volcano DTB and
+  bounded RAM-disk init; header-v2 checks passed. Image
+  `/tmp/ios-extra-run-39814973566/package/fp6-gmu-hfi-start-0165.img`, SHA-256
+  `1f1575412a97639396691ccfbc7898022937818b6bba4f5097d54fe25733de4f`.
+  Its `rd=md0` boot args select the bounded probe. There is no 0165 phone test,
+  firmware acceptance, GPU execution, readback, draw or Metal result yet.
 
 ## FP6 GPU global HFI allocation candidate 0164 (2026-10-22)
 

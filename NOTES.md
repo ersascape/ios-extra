@@ -17,11 +17,21 @@
   next request is exactly one dword, and both ACKs are validated. GMU domain,
   GPU global-domain and GPU probe tests pass. `tools/xnu-cc.py` compiles
   `sweet_gpu.c` against CI buildtree `39793471917` (`0 of 1 files failed`).
-- No CI build or phone test exists for 0165 yet. The 0164 image remains the
-  latest package; `fastboot devices` returned zero. The next gate is one CI build
-  for 0165, then package that exact kernel and run the existing temporary-boot
-  test when the FP6 is in fastboot. Firmware acceptance and GPU execution remain
-  unproven.
+- Commit `b96b41b2ea432f65a9164f279a7ab5e61cc8b014` passed CI run
+  `39814973566`; XNU build and FP6 workflow succeeded. The verified kernel
+  SHA-256 is `916d0e406f6425d1681b3522c6e2403ca2b4c16342ac8dbc1355efa5da7891a8`;
+  the CI kernel manifest passed. CI skipped image packaging because
+  `FP6_STOCK_DTB_URL` is unset. Locally packaged the exact CI kernel and ADT,
+  verified stock Volcano DTB, and bounded RAM-disk init with header-v2 round-trip:
+  `/tmp/ios-extra-run-39814973566/package/fp6-gmu-hfi-start-0165.img`, SHA-256
+  `1f1575412a97639396691ccfbc7898022937818b6bba4f5097d54fe25733de4f`.
+  The boot line enables the bounded SMMU/GMU/HFI probe and uses `rd=md0`; it
+  does not write a partition. No 0165 phone test exists. `fastboot devices`
+  returned zero before packaging; repeat immediately before any device test.
+  The user requested a rootfs flash, but no iOS rootfs image and exact target
+  partition have been identified; do not use the Android `userdata.img` files
+  found in Downloads as a substitute. Firmware acceptance and GPU execution
+  remain unproven.
 
 ## GMU cacheability source check (2026-10-22)
 

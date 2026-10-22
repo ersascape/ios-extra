@@ -55,15 +55,22 @@ the same backing into the live GMU domain. Host tests cover context setup with
 the measured TBI/ASIDPNE readbacks and a synthetic GFX_ACC request through the
 ACK and page-table walk. Normal, ASan/UBSan, and local arm64 object checks pass.
 These results do not prove the phone's actual descriptor, firmware acceptance,
-or any device DMA. The unbuilt 0165 patch adds Gen8 v5 ACK result decoding,
+or any device DMA. The 0165 patch adds Gen8 v5 ACK result decoding,
 context-queue capability query, A810 preemption feature control, and the
 one-dword HFI `START` request. It follows the Fairphone module source at
 `54c948d9b30c2ba01835e64c36b68b80692554ac`; HW_FENCE remains off because XNU
 does not provide its required service. Normal and ASan/UBSan host probes pass,
-and local arm64 compilation reports `0 of 1 files failed`. No CI build or phone
-test exists for 0165, so this is not yet evidence of firmware acceptance.
-The last device check returned zero; a one-shot RAM-disk boot and USB log are
-pending. Do not flash or use `fastboot getvar`.
+and local arm64 compilation reports `0 of 1 files failed`. Commit
+`b96b41b2ea432f65a9164f279a7ab5e61cc8b014` passed CI run `39814973566`; verified
+kernel SHA256 is `916d0e406f6425d1681b3522c6e2403ca2b4c16342ac8dbc1355efa5da7891a8`.
+The locally packaged header-v2 RAM-disk image is
+`/tmp/ios-extra-run-39814973566/package/fp6-gmu-hfi-start-0165.img`, SHA256
+`1f1575412a97639396691ccfbc7898022937818b6bba4f5097d54fe25733de4f`.
+No phone test exists for 0165, so this is not evidence of firmware acceptance.
+The most recent device check returned zero. The user has asked to flash a
+rootfs, but no iOS rootfs artifact or exact target partition has been identified;
+the Android `userdata.img` files in Downloads are not suitable substitutes.
+Resolve that before any persistent write. Do not use `fastboot getvar`.
 
 Earlier phone evidence remains: patch 0159's CORE_FW_START path asserted with
 `irq=0x4 fw=0x900` and the bounded path verified CM3 reset. Patches 0160–0165
