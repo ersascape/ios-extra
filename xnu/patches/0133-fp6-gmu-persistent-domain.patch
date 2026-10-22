@@ -2,7 +2,7 @@ diff --git a/bsd/dev/fp6_gmu_domain.h b/bsd/dev/fp6_gmu_domain.h
 new file mode 100644
 --- /dev/null
 +++ b/bsd/dev/fp6_gmu_domain.h
-@@ -0,0 +1,139 @@
+@@ -0,0 +1,138 @@
 +/* Persistent 4 KiB GMU stage-1 domain, 32-bit IOVA, 48-bit PA.
 + * Tables and backing are boot-lifetime reservations. Caller MUST keep CM3
 + * reset asserted and the context disabled while building. activate only after

@@ -9,8 +9,10 @@
   fixtures verify default read-only/unprivileged and explicit privileged/RW
   requests, plus GPU-access refusal. Normal and ASan/UBSan protocol/domain tests
   pass; `test_gpu_probe.py` passes; the changed source compiles against the
-  39787950216 CI buildtree (`0 of 1 files failed`). No CI run or phone result
-  exists for this correction yet. The firmware's actual descriptor is still
+  39787950216 CI buildtree (`0 of 1 files failed`). CI `39792609801` stopped
+  before compilation because the edited 0133 patch had a stale added-file line
+  count; the count is corrected and both focused tests pass again. One retry CI
+  is pending. No phone result exists. The firmware's actual descriptor is still
   unknown, and the user is testing Android.
 
 - Candidate patch 0162 answers non-secure, non-GPU-access `MEM_ALLOC` requests

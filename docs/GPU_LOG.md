@@ -15,10 +15,11 @@
 - Host domain and HFI tests verify read-only/unprivileged defaults and
   privileged/RW flags, while GPU-access allocations remain refused. Normal and
   ASan/UBSan tests pass; broad GPU probe tests pass; `sweet_gpu.c` cross-compiles
-  against CI buildtree `39787950216` (`0 of 1 files failed`). This is source and
-  host evidence only: CI for this correction has not run, no phone test exists,
-  and the actual firmware descriptor is unknown. Device commands remain
-  deferred while the user tests Android.
+  against CI buildtree `39787950216` (`0 of 1 files failed`). CI `39792609801`
+  stopped before compilation because the edited 0133 patch's added-file line
+  count was stale. The count is corrected and focused tests pass again; one
+  retry is pending. No phone test exists, and the actual firmware descriptor is
+  unknown. Device commands remain deferred while the user tests Android.
 
 ## FP6 patch 0162 GMU-only HFI allocation candidate — 2026-10-22
 

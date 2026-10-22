@@ -70,10 +70,12 @@ The current unbuilt follow-up aligns GMU allocation PTE access bits with Linux:
 always readable, writable only with `GMU_WRITEABLE`, and privileged-only only
 with `GMU_PRIV`, plus nG/AF/outer-shareable attributes. Normal and sanitizer
 HFI/domain tests pass, broad GPU probe tests pass, and the changed source
-cross-compiles against buildtree `39787950216` (`0 of 1 files failed`). One CI
-build remains to validate this source correction; firmware descriptor and phone
-acceptance are still unknown. The user is testing Android; run no device
-commands until they say they are done.
+cross-compiles against buildtree `39787950216` (`0 of 1 files failed`). CI
+`39792609801` stopped before compilation because the modified 0133 patch had a
+stale new-file line count. The count is corrected and focused tests pass again;
+one retry build remains. Firmware descriptor and phone acceptance are still
+unknown. The user is testing Android; run no device commands until they say they
+are done.
 
 - Work in this checkout on `main`; remote is `ersascape/ios-extra`. The goal is
   FP6 Adreno 810 GMU firmware/HFI, then bounded GPU execution and an A810 Metal
