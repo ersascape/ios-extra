@@ -27,11 +27,16 @@
   `1f1575412a97639396691ccfbc7898022937818b6bba4f5097d54fe25733de4f`.
   The boot line enables the bounded SMMU/GMU/HFI probe and uses `rd=md0`; it
   does not write a partition. No 0165 phone test exists. `fastboot devices`
-  returned zero before packaging; repeat immediately before any device test.
-  The user requested a rootfs flash, but no iOS rootfs image and exact target
-  partition have been identified; do not use the Android `userdata.img` files
-  found in Downloads as a substitute. Firmware acceptance and GPU execution
-  remain unproven.
+  returned zero before packaging. The user then identified and explicitly
+  requested flashing the Tegu iOS rootfs from
+  `/home/ersa/Dev/ios-extra/research/fp6-rootfs-tegu-20261021/` to the existing
+  `userdata` partition. Its sparse SHA-256 matched the recorded
+  `a1c6f7da616520841c4d56ac2a147940c5c93a0b4406cb1c9ae6832d64338f7c`; all 16
+  fastboot sparse chunks completed `OKAY`. Redacted transcript:
+  `/tmp/fastboot-flash-fp6-rootfs-20261022.log`. This overwrote prior userdata.
+  The follow-up 0165 RAM-disk boot was not issued: the single `pkexec` capture
+  authorization timed out, and the helper refused to boot. No 0165 phone log
+  exists yet. Firmware acceptance and GPU execution remain unproven.
 
 ## GMU cacheability source check (2026-10-22)
 

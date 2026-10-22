@@ -19,9 +19,11 @@ Use one temporary `fastboot boot` per measured hardware question, capture USB lo
 and distinguish source, host, CI and phone evidence. Do not treat a software model as
 device proof.
 
-- Never flash, never touch partitions, never `fastboot getvar`. Boot images only via
-  `fastboot boot`, only when the user has put the phone in fastboot (`fastboot
-  devices` shows exactly one). Do not reboot the phone unannounced. Other agents also
+- Boot kernel images only via `fastboot boot`, only when exactly one phone is in
+  fastboot. The user explicitly authorized one write of the identified Tegu iOS
+  rootfs to `userdata` on 2026-10-22; it completed and must not be repeated.
+  Never change GPT or write bootloader, boot, recovery, modem or persist. Never
+  run `fastboot getvar`. Do not reboot the phone unannounced. Other agents also
   use the phone and `/home/dipa/ios-sweet`; do not edit that tree.
 - **Always check fastboot first:** run `fastboot devices` with serials redacted
   before asking the user to enter fastboot. Exactly one already present means
@@ -67,10 +69,17 @@ The locally packaged header-v2 RAM-disk image is
 `/tmp/ios-extra-run-39814973566/package/fp6-gmu-hfi-start-0165.img`, SHA256
 `1f1575412a97639396691ccfbc7898022937818b6bba4f5097d54fe25733de4f`.
 No phone test exists for 0165, so this is not evidence of firmware acceptance.
-The most recent device check returned zero. The user has asked to flash a
-rootfs, but no iOS rootfs artifact or exact target partition has been identified;
-the Android `userdata.img` files in Downloads are not suitable substitutes.
-Resolve that before any persistent write. Do not use `fastboot getvar`.
+The user explicitly requested flashing the Tegu rootfs from
+`/home/ersa/Dev/ios-extra/research/fp6-rootfs-tegu-20261021/` to the existing
+`userdata` partition. That sparse image (SHA256
+`a1c6f7da616520841c4d56ac2a147940c5c93a0b4406cb1c9ae6832d64338f7c`) was
+written successfully in 16 fastboot chunks; transcript is
+`/tmp/fastboot-flash-fp6-rootfs-20261022.log`. This overwrote prior userdata.
+Do not repeat the flash. The subsequent 0165 RAM-disk boot did not run because
+the single `pkexec` capture authorization timed out; no phone log exists. For
+the next boot, use the already packaged image and USB helper, and do not retry
+authorization unless the user is available. Do not touch other partitions or
+use `fastboot getvar`.
 
 Earlier phone evidence remains: patch 0159's CORE_FW_START path asserted with
 `irq=0x4 fw=0x900` and the bounded path verified CM3 reset. Patches 0160–0165

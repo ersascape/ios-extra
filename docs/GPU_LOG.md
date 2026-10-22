@@ -1,5 +1,16 @@
 ## FP6 post-CORE_FW_START HFI candidate 0165 (2026-10-22)
 
+- User-requested rootfs write: verified Tegu sparse image from
+  `/home/ersa/Dev/ios-extra/research/fp6-rootfs-tegu-20261021/` was flashed to
+  the existing `userdata` partition. SHA-256
+  `a1c6f7da616520841c4d56ac2a147940c5c93a0b4406cb1c9ae6832d64338f7c` matched
+  the recorded image; all 16 sparse chunks completed `OKAY`. Redacted fastboot
+  transcript: `/tmp/fastboot-flash-fp6-rootfs-20261022.log`. Previous userdata
+  was overwritten. This is a storage operation, not a GPU observation.
+- The 0165 RAM-disk test was not started: its single `pkexec` USB-capture
+  authorization timed out, and the helper refused to issue `fastboot boot`.
+  No new phone log or firmware result exists.
+
 - Source review of Fairphone SM7635 graphics-kernel commit
   `54c948d9b30c2ba01835e64c36b68b80692554ac` confirms Gen8 HFI version minor
   7 uses the inline ACK layout: result at dword 2 and GMU status at dword 3.
