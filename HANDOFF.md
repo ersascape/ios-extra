@@ -40,49 +40,41 @@ device proof.
 
 ## Active FP6 GPU state (2026-10-23)
 
-Patch 0169 is the latest phone run. It reached `FW_INIT_RESULT=0x100`,
-`HFI_CTRL_STATUS=1`, six successful HFI ACKs and an acknowledged bootstrap DDR
-vote. The first GPU-global `MEM_ALLOC` was refused by our conservative
-all-registers-zero CB0 guard. This refusal happened before any CB0 write; CM3
-reset was verified and context/clock votes were retained. No GMU DMA, GPU
-command execution, write/readback, draw or Metal rendering has been proven.
+Patch 0170 is the latest phone run. CI `39842360411` passed, and the
+header-v2 diagnostic image is
+`/tmp/ios-extra-run-39842360411/package-correct/fp6-cb0-reinit-0170.img`
+(SHA-256 `678ae82e3565a403f33abfa0b1ba6ae4629325637e918da158e9d087a15f90a8`).
+The bounded `fastboot boot` succeeded and captured 113 UDP packets. Decoded log
+and raw packet file are under `/tmp/ios-extra-run-39842360411/logs/`;
+both have SHA-256
+`8f4552a25b5c20f67db78e2620c3e9eaf851c07004b5e89d3197cccdeec50216`.
+No flash or EDL command was issued. CM3 reset was verified. The phone remains
+in the temporary XNU boot; no autonomous fastboot return has been tested.
 
-The 0169 USB capture is under `/tmp/ios-extra-run-39835047101/logs/`:
-`phone-0169-cb0-stages.txt` and `.udp`, each SHA-256
-`a466761c1ca5c5f662e77c99473530482419386951163adad7392d821f51f097` (99 UDP
-packets). The one temporary `fastboot boot` succeeded; no flash or EDL command
-was issued. The user returned the phone to fastboot after the run. The powered
-CB0 state remained identical after the CB2 test, before CM3 release, after
-firmware init and at the allocation refusal: `CBAR=CBA2R=0`, `SCTLR=0x2ff54314`
-(`M=0`), `TCR=0x710e6fcc`, `TCR2=0x00030065`, `TTBR0=0x19b3d3770fc36d7b`,
-`TTBR1=0xdc20c4a9af8db9f4`, `MAIR0=0x069faeaa`, `MAIR1=0x8c99bf1f`, `FSR=0`.
-Group 0 was SID5->CB2 for the contained GMU walk; group 1 remained empty and
-fault-routed for SID0. Firmware did not change CB0.
+Phone evidence: GMU firmware ran (`FW_INIT_RESULT=0x100`), HFI initialized,
+and six HFI startup requests plus the bootstrap DDR vote were acknowledged.
+The guarded CB0 takeover passed readback, SID0 was enabled on group 1, and the
+SID5->CB2 route remained intact. XNU serviced the real GPU-access allocation
+events for kinds 2, 14, 15, kind 1 (four buffers), 3 and 4, and GMU-only kind
+16. It then stopped at kind 5 / flags `0x1007` / 3,670,016 bytes and reset CM3.
+The allocation is secure preemption memory. Fairphone Linux maps it through
+`kgsl_allocate_secure()` and transfers ownership to `VMID_CP_PIXEL` using
+`hyp_assign_table()`; do not satisfy it with normal pages or clear its secure
+flag. No HFI START ACK, GPU core boot, GPU DMA, command write/readback, draw or
+Metal output has been measured.
 
-Patch `0170-fp6-smmu-cb0-disabled-reinit.patch` allows a narrowly guarded
-replacement of this stale context: zero CBAR/CBA2R, SCTLR.M clear, FSR clear,
-TLB idle, no valid stream route to CB0, and an exactly empty/fault-routed stream
-group. It configures and verifies CB0 while SID0 is still fault-routed, then
-installs SID0 last, preserving the SID5->CB2 route. Host tests (normal and
-ASan/UBSan), the full Python suite (13 tests, 5 dependency skips), and local
-arm64 compilation pass. CI and phone validation are pending. This is the next
-bounded hardware question; even a successful mapping ACK will not alone prove
-GPU-master DMA.
-
-Before the next phone run, finish reviewing the 0170 diff and handoff/docs,
-commit and push once to `main`, and use `gh -R ersascape/ios-extra` to verify its
-single CI build. Package one temporary diagnostic image from that CI kernel.
-Immediately before invoking `tools/gpu-phone-test.py`, check that exactly one
-device is in fastboot; helper rechecks before its single `fastboot boot`. Capture
-the USB log under `/tmp`. Never flash, run `fastboot getvar`, reboot the phone
-unannounced, or issue any EDL command. If exactly one device is not present,
-stop and ask the user to put it in fastboot.
+Next, finish source review of the Gen8 non-preempting single-ring path and its
+preemption-memory dependencies. A future bounded probe may omit the HFI
+preemption enable only if source review confirms a valid single-ring startup
+and host tests cover the altered sequence. Current phone state is not fastboot;
+never reboot it unannounced. Before any later temporary boot, check
+`fastboot devices` and require exactly one device; helper repeats the check.
+Continue using the ramdisk and `/tmp` logs. No flash, `fastboot getvar`, or EDL
+commands.
 
 Historical patch-by-patch evidence and earlier image identities are in
-`NOTES.md` and `docs/GPU_LOG.md`; do not treat older status paragraphs below as
-current. The Linux bring-up ordering/source audit is in
-`docs/FP6_ADRENO_METAL_AUDIT.md`. The A618-specific `GPU_GMU_BOOT.md` is not the
-FP6 hardware reference.
+`NOTES.md` and `docs/GPU_LOG.md`. The Linux bring-up/source audit is in
+`docs/FP6_ADRENO_METAL_AUDIT.md`; `docs/GPU_GMU_BOOT.md` is A618-specific.
 
 ## FP6 continuation update (2026-10-22)
 

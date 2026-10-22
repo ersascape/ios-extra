@@ -1,5 +1,51 @@
 # ios-extra — current state
 
+## FP6 CB0 takeover and HFI allocation boundary 0170 (2026-10-23)
+
+- Commit `54a96ca789ef424bfe2f265e480d76c7a4f206a8` passed XNU CI run
+  `39842360411`; XNU build succeeded. CI skipped its hosted boot image because
+  `FP6_STOCK_DTB_URL` is unset. Kernel SHA-256:
+  `036a0a3e5c7c98d74724266c7d16de4b2b67ed36f54f0b9979b187f4a0594d4e`.
+  The matching CI ADT and verified Volcano DTB were locally packaged with the
+  workflow's minimal init. Header-v2 round-trip passed. Image:
+  `/tmp/ios-extra-run-39842360411/package-correct/fp6-cb0-reinit-0170.img`,
+  SHA-256 `678ae82e3565a403f33abfa0b1ba6ae4629325637e918da158e9d087a15f90a8`.
+  It uses `rd=md0` and bounded GMU/HFI arguments; no partition was written.
+- One temporary `fastboot boot` succeeded. The USB logger captured 113 UDP
+  packets at `/tmp/ios-extra-run-39842360411/logs/phone-0170-cb0-reinit.txt`
+  and `.udp`; SHA-256 for both is
+  `8f4552a25b5c20f67db78e2620c3e9eaf851c07004b5e89d3197cccdeec50216`.
+  Fastboot transcript is in the matching `-fastboot.txt`. No flash or EDL
+  command was issued. The bounded path verified CM3 reset and retained SMMU
+  context/clock votes. The device is still in the temporary XNU boot; do not
+  assume it has returned to fastboot.
+- **Phone measured:** 0170 found powered CB0 disabled and unrouted, with a
+  different residual register image than 0169 (`CBAR=CBA2R=0`,
+  `SCTLR=0x2ff54304` with `M=0`, `FSR=0`). It replaced that context, verified
+  the programmed TTBR1 setup, enabled SID0 through group 1, and preserved the
+  existing group 0 SID5->CB2 route. This is the first successful live CB0/SID0
+  configuration on the phone, not proof that the GPU master performed a
+  translation.
+- Firmware ran (`FW_INIT_RESULT=0x100`), HFI initialized (`HFI_CTRL_STATUS=1`),
+  and the phone ACKed the six startup requests plus the bootstrap DDR vote.
+  XNU then handled GPU allocation events for kinds 2, 14, 15, four kind-1
+  buffers, kind 3 and kind 4, publishing the requested GPU mappings; it also
+  mapped a GMU-only kind-16 allocation. The next request was kind 5, flags
+  `0x1007`, size 3,670,016 bytes. The driver stopped and reset CM3 because this
+  includes `GFX_SECURE`; it did not map ordinary memory into this request.
+  No HFI `START` ACK, GPU core boot, DMA result, command/write-readback, draw or
+  Metal output was observed.
+- **Source check:** Fairphone's `adreno_hfi.h` identifies kind 5 as
+  `HFI_MEMKIND_CSW_PRIV_SECURE`. `adreno_gen8_hwsched_hfi.c` sends secure
+  allocations to `kgsl_allocate_secure()`. `kgsl_sharedmem.c` uses secure
+  allocation and `hyp_assign_table()` to transfer pages from HLOS to
+  `VMID_CP_PIXEL`; normal host RAM is not a valid substitute. Gen8 source also
+  has a non-preempting, single-ring setup path when the preemption feature is
+  disabled. Next, verify whether a bounded single-ring command probe can omit
+  preemption without requesting kind 5; otherwise the missing protected-memory
+  service is the blocker. Do not clear the secure flag or acknowledge this
+  request with non-secure pages.
+
 ## FP6 CB0 transition diagnostics 0169 (2026-10-23)
 
 - Added patch `0169-fp6-smmu-cb0-stage-snapshots.patch`. It only reads CB0 and
@@ -799,17 +845,16 @@
 
 ## Current FP6 GPU path
 
-The active target is FP6 Adreno 810 Gen8.3. On the latest 0169 phone boot,
-GMU firmware ran (`FW_INIT_RESULT=0x100`), HFI controller init succeeded
-(`HFI_CTRL_STATUS=1`), and the device ACKed the required startup tables and
-preemption. The first GPU-global HFI allocation was refused only because
-powered CB0 contained stale nonzero values while translation was disabled and
-no stream routed to it. Patch 0170 now permits takeover only under those
-measured disabled/unrouted conditions; it has host and compiler validation but
-needs one CI build and a phone test before proceeding to GPU core startup.
-GMU DMA, GPU command write/readback, draw/readback and Metal are still
-unverified. Follow the 0169/0170 current-state sections above; subsequent
-entries are historical bring-up records.
+The active target is FP6 Adreno 810 Gen8.3. Patch 0170 passed CI `39842360411`
+and the phone test safely configured disabled CB0 for SID0 and serviced nine
+GPU-access allocation kinds plus one GMU-only allocation. Firmware and HFI
+startup succeeded, then the probe correctly stopped at secure preemption kind 5
+(`GFX_SECURE`); Fairphone Linux uses protected pages assigned to `VMID_CP_PIXEL`,
+which XNU does not yet implement. The bounded path reset CM3. GPU-core boot,
+GPU-master DMA, command write/readback, draw/readback and Metal remain
+unverified. See the 0170 section at the top for the exact image and log. The
+next source question is whether a single-ring probe can disable preemption and
+avoid the secure allocation while retaining a valid Gen8 startup path.
 
 See [FP6 GMU first boot](docs/FP6_GMU_FIRST_BOOT.md), [FP6 Adreno Metal audit](docs/FP6_ADRENO_METAL_AUDIT.md) and [FP6 SMMU power](docs/FP6_SMMU_POWER.md).
 

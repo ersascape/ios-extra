@@ -1869,6 +1869,45 @@ No additional phone action was taken during handoff.**
   Source inspection finds no autonomous reset path: `SweetPlatformExpert`
   does not override `haltRestart()`, and generic XNU handling here does not
   request Qualcomm PSCI reset or select a bootloader/fastboot reason.
+# FP6 guarded CB0 reinitialization and secure HFI allocation boundary 0170 (2026-10-23)
+
+- Commit `54a96ca789ef424bfe2f265e480d76c7a4f206a8` passed CI `39842360411`;
+  XNU build succeeded. CI image packaging was skipped because
+  `FP6_STOCK_DTB_URL` is unset. Kernel SHA-256
+  `036a0a3e5c7c98d74724266c7d16de4b2b67ed36f54f0b9979b187f4a0594d4e`.
+- Packaged the CI kernel/ADT with the verified stock Volcano DTB and the actual
+  workflow init (not a prior payload). Header-v2 unpack/round-trip passed.
+  Image `/tmp/ios-extra-run-39842360411/package-correct/fp6-cb0-reinit-0170.img`,
+  SHA-256 `678ae82e3565a403f33abfa0b1ba6ae4629325637e918da158e9d087a15f90a8`.
+  The CI ADT lacks `/product` artwork, so this is a diagnostic image only.
+- One temporary `fastboot boot` succeeded. User-mode ECM capture recorded 113
+  UDP packets in
+  `/tmp/ios-extra-run-39842360411/logs/phone-0170-cb0-reinit.txt` and `.udp`;
+  both SHA-256 `8f4552a25b5c20f67db78e2620c3e9eaf851c07004b5e89d3197cccdeec50216`.
+  Fastboot transcript is the sibling `-fastboot.txt`. No partition was written
+  and no EDL command was used. The bounded path verified CM3 reset and retained
+  context/clock votes. Phone remains in temporary XNU boot.
+- Powered CB0 began disabled and unrouted with `CBAR=CBA2R=0`,
+  `SCTLR=0x2ff54304` (`M=0`), `FSR=0`; this residual state differed from 0169.
+  Patch 0170 reinitialized CB0 and verified TTBR1 context readback before
+  enabling SID0 on group 1. Existing group 0 SID5->CB2 remained. This is the
+  first successful SID0 context configuration on the phone, not proof of a
+  GPU-master translation.
+- Firmware reported `FW_INIT_RESULT=0x100`; `HFI_CTRL_STATUS=1`. Six HFI startup
+  requests and bootstrap DDR vote were acknowledged. During HFI startup, XNU
+  serviced GPU-access allocation events for kinds 2, 14, 15, four kind-1
+  buffers, 3 and 4, plus GMU-only kind 16. The next request was kind 5, flags
+  `0x1007`, size 3,670,016; the bounded handler refused it and reset CM3. No
+  `START` ACK, GPU core boot, DMA, command write/readback, draw or Metal output.
+- Source review against Fairphone module commit
+  `54c948d9b30c2ba01835e64c36b68b80692554ac`: kind 5 is
+  `HFI_MEMKIND_CSW_PRIV_SECURE`; `GFX_SECURE` routes allocation to
+  `kgsl_allocate_secure()`, which uses secure allocation and `hyp_assign_table`
+  to transfer pages from HLOS to `VMID_CP_PIXEL`. Normal pages are not a valid
+  substitute. Gen8 source supports a one-ring setup when preemption is disabled;
+  review whether a bounded no-preemption startup can avoid requesting kind 5.
+  Do not clear the secure flag or ACK with ordinary memory.
+
 # FP6 CB0 transition diagnostics 0169 (2026-10-23)
 
 - Added read-only CB0/SID-group snapshots after CB2-test cleanup, just before

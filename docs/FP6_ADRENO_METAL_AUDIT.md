@@ -134,10 +134,24 @@ Therefore HFI `MEM_ALLOC` may arrive before GPU command processing is started;
 XNU must finish and publish every requested GPU/GMU mapping before replying,
 and retain its backing until a proven quiesce.
 
-This is source-order evidence only. It does not authorize replacing the
-measured nonzero CB0 state or prove XNU's current HFI mapping works. Keep the
-0169 boot read-only and compare its post-CB2, pre-CM3, post-firmware and
-first-allocation snapshots before attempting the first CB0 write.
+Patch 0170 has now replaced the measured disabled/unrouted CB0 state under
+explicit guards and the phone read back the GPU TTBR1 context and SID0 route.
+The same boot serviced multiple real GPU-access HFI allocations. This proves
+that firmware/HFI progressed through those allocation events, but not that the
+GPU master fetched a PTE or performed DMA.
+
+The next measured boundary is secure preemption memory. The actual request was
+kind 5 (`CSW_PRIV_SECURE`), flags `0x1007`, size 3,670,016. Fairphone Linux
+routes `GFX_SECURE` to `kgsl_allocate_secure()`, which invokes secure-buffer
+allocation and `hyp_assign_table()` to transfer pages from HLOS to
+`VMID_CP_PIXEL`. XNU currently has no matching protected-page allocator; do not
+map ordinary pages or acknowledge the secure descriptor with a normal PA.
+
+The Gen8 source has a non-preempting path: `gen8_ringbuffer_init()` creates one
+ring when the preemption feature is not set. Before using that as a bounded
+bring-up mode, verify all startup dependencies and confirm firmware omits the
+secure preemption allocation when HFI preemption is disabled. This is a test
+candidate, not a measured GPU execution path.
 
 ## Gen8.3 HFI-to-GPU boundary (source review, 2026-10-22)
 
