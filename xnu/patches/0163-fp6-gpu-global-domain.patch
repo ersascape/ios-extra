@@ -1,0 +1,252 @@
+diff --git a/bsd/dev/fp6_gpu_global_domain.h b/bsd/dev/fp6_gpu_global_domain.h
+new file mode 100644
+index 0000000..1111111
+--- /dev/null
++++ b/bsd/dev/fp6_gpu_global_domain.h
+@@ -0,0 +1,175 @@
++/*
++ * FP6 Adreno global-memory window in the SID-0 TTBR1 translation regime.
++ * This is intentionally separate from the GMU's 32-bit TTBR0 domain.
++ * Backing and tables are permanent: once published, callers never unmap or
++ * free them while either firmware or GPU may retain a translation.
++ */
++#ifndef FP6_GPU_GLOBAL_DOMAIN_H
++#define FP6_GPU_GLOBAL_DOMAIN_H
++#define FP6_GPU_GLOBAL_BASE       0x0001ff8000000000ULL
++#define FP6_GPU_GLOBAL_SIZE       (20u * 1024u * 1024u)
++#define FP6_GPU_GLOBAL_PAGE       4096u
++#define FP6_GPU_GLOBAL_L3_COUNT   10u
++#define FP6_GPU_GLOBAL_MAPS       32u
++#define FP6_GPU_GLOBAL_GFX_PRIV   (1u << 1)
++#define FP6_GPU_GLOBAL_GFX_WRITE  (1u << 2)
++#define FP6_GPU_GLOBAL_PTE_XN     (3ULL << 53)
++struct fp6_gpu_global_page { uint8_t *va; uint64_t pa; };
++struct fp6_gpu_global_ops {
++ int (*alloc_table)(void *, struct fp6_gpu_global_page *);
++ int (*publish)(void *, const void *, uint32_t);
++};
++struct fp6_gpu_global_range {
++ uint64_t address;
++ uint64_t pa;
++ uint32_t size, mapped_size, flags;
++ int complete;
++};
++struct fp6_gpu_global_domain {
++ const struct fp6_gpu_global_ops *ops;
++ void *ctx;
++ struct fp6_gpu_global_page l0, l1, l2;
++ struct fp6_gpu_global_page l3[FP6_GPU_GLOBAL_L3_COUNT];
++ struct fp6_gpu_global_range ranges[FP6_GPU_GLOBAL_MAPS];
++ uint32_t next_offset;
++ unsigned count;
++ int failed, frozen;
++};
++static int
++fp6_gpu_global_alloc_table(struct fp6_gpu_global_domain *d,
++    struct fp6_gpu_global_page *p)
++{
++ if (d->ops->alloc_table(d->ctx, p) || !p->va ||
++     ((uintptr_t)p->va & (FP6_GPU_GLOBAL_PAGE - 1u)) ||
++     (p->pa & (FP6_GPU_GLOBAL_PAGE - 1u)) ||
++     p->pa >= (1ULL << 36) || FP6_GPU_GLOBAL_PAGE > (1ULL << 36) - p->pa) {
++  d->failed = 1;
++  return -1;
++ }
++ for (unsigned i = 0; i < FP6_GPU_GLOBAL_PAGE; i++) p->va[i] = 0;
++ return 0;
++}
++static int
++fp6_gpu_global_init(struct fp6_gpu_global_domain *d,
++    const struct fp6_gpu_global_ops *ops, void *ctx)
++{
++ if (!d || !ops || !ops->alloc_table || !ops->publish || d->l0.va ||
++     d->count || d->failed || d->frozen) return -1;
++ d->ops = ops;
++ d->ctx = ctx;
++ if (fp6_gpu_global_alloc_table(d, &d->l0) ||
++     fp6_gpu_global_alloc_table(d, &d->l1) ||
++     fp6_gpu_global_alloc_table(d, &d->l2)) return -1;
++ for (unsigned i = 0; i < FP6_GPU_GLOBAL_L3_COUNT; i++)
++  if (fp6_gpu_global_alloc_table(d, &d->l3[i])) return -1;
++ /* 48-bit TTBR1 canonical base: L0[511] -> L1[0] -> L2[0..9]. */
++ ((uint64_t *)d->l0.va)[511] = d->l1.pa | 3u;
++ ((uint64_t *)d->l1.va)[0] = d->l2.pa | 3u;
++ for (unsigned i = 0; i < FP6_GPU_GLOBAL_L3_COUNT; i++)
++  ((uint64_t *)d->l2.va)[i] = d->l3[i].pa | 3u;
++ return 0;
++}
++static uint64_t
++fp6_gpu_global_canonical(uint64_t address)
++{
++ uint64_t low = address & ((1ULL << 48) - 1u);
++ return (low & (1ULL << 47)) ? low | 0xffff000000000000ULL : low;
++}
++static int
++fp6_gpu_global_va(struct fp6_gpu_global_domain *d, uint32_t size,
++    unsigned align_exp, uint64_t *address, uint32_t *mapped_size)
++{
++ uint64_t rounded = ((uint64_t)size + FP6_GPU_GLOBAL_PAGE - 1u) &
++     ~(uint64_t)(FP6_GPU_GLOBAL_PAGE - 1u);
++ if (!d || !address || !mapped_size || d->failed || !size ||
++     align_exp > 24u || !rounded || rounded > UINT32_MAX) return -1;
++ uint64_t align = align_exp > 12u ? 1ULL << align_exp : FP6_GPU_GLOBAL_PAGE;
++ uint64_t off = ((uint64_t)d->next_offset + align - 1u) & ~(align - 1u);
++ for (unsigned pass = 0; pass <= d->count; pass++) {
++  if (off > FP6_GPU_GLOBAL_SIZE || rounded > FP6_GPU_GLOBAL_SIZE - off)
++   return -1;
++  int collided = 0;
++  for (unsigned i = 0; i < d->count; i++) {
++   struct fp6_gpu_global_range *r = &d->ranges[i];
++   uint64_t end = off + rounded;
++   uint64_t rend = (r->address - FP6_GPU_GLOBAL_BASE) + r->mapped_size;
++   uint64_t roff = r->address - FP6_GPU_GLOBAL_BASE;
++   if (off < rend && roff < end) {
++    off = (rend + align - 1u) & ~(align - 1u);
++    collided = 1;
++    break;
++   }
++  }
++  if (!collided) break;
++  if (pass == d->count) return -1;
++ }
++ if (off > FP6_GPU_GLOBAL_SIZE || rounded > FP6_GPU_GLOBAL_SIZE - off)
++  return -1;
++ *address = FP6_GPU_GLOBAL_BASE + off;
++ *mapped_size = (uint32_t)rounded;
++ d->next_offset = (uint32_t)(off + rounded);
++ return 0;
++}
++static int
++fp6_gpu_global_map(struct fp6_gpu_global_domain *d, uint64_t address,
++    uint32_t size, uint64_t pa, uint32_t flags)
++{
++ uint64_t mapped = ((uint64_t)size + FP6_GPU_GLOBAL_PAGE - 1u) &
++     ~(uint64_t)(FP6_GPU_GLOBAL_PAGE - 1u);
++ uint64_t end = address + mapped;
++ if (!d || !d->l0.va || d->failed || !size ||
++     (address & (FP6_GPU_GLOBAL_PAGE - 1u)) || (pa & (FP6_GPU_GLOBAL_PAGE - 1u)) ||
++     address < FP6_GPU_GLOBAL_BASE || end < address ||
++     end > FP6_GPU_GLOBAL_BASE + FP6_GPU_GLOBAL_SIZE ||
++     pa >= (1ULL << 36) || mapped > (1ULL << 36) - pa ||
++     mapped > UINT32_MAX || d->count == FP6_GPU_GLOBAL_MAPS) return -1;
++ for (unsigned i = 0; i < d->count; i++) {
++  struct fp6_gpu_global_range *r = &d->ranges[i];
++  uint64_t rend = r->address + r->mapped_size;
++  if (address == r->address && size == r->size && flags == r->flags && pa == r->pa)
++   return r->complete ? 0 : -1;
++  if (address < rend && r->address < end) return -1;
++ }
++ uint64_t *l2 = (uint64_t *)(void *)d->l2.va;
++ for (uint64_t a = address; a < end; a += FP6_GPU_GLOBAL_PAGE) {
++  uint64_t ca = fp6_gpu_global_canonical(a);
++  unsigned l0i = (unsigned)((ca >> 39) & 511u);
++  unsigned l1i = (unsigned)((ca >> 30) & 511u);
++  unsigned l2i = (unsigned)((ca >> 21) & 511u);
++  unsigned l3i = (unsigned)((ca >> 12) & 511u);
++  if (l0i != 511u || l1i != 0u || l2i >= FP6_GPU_GLOBAL_L3_COUNT ||
++      (((uint64_t *)d->l0.va)[l0i] & ~0xfffULL) != d->l1.pa ||
++      (((uint64_t *)d->l1.va)[l1i] & ~0xfffULL) != d->l2.pa ||
++      (l2[l2i] & ~0xfffULL) != d->l3[l2i].pa) goto fail;
++  uint64_t *pte = &((uint64_t *)(void *)d->l3[l2i].va)[l3i];
++  if (*pte) goto fail;
++  /* QCOM ARM64 LPAE S1: default GPU-read-only, unprivileged, outer-shareable,
++   * access-flagged, non-global and execute-never. */
++  *pte = (pa + a - address) | 3u | (1ULL << 11) | (1ULL << 10) |
++      (2ULL << 8) | FP6_GPU_GLOBAL_PTE_XN |
++      ((flags & FP6_GPU_GLOBAL_GFX_WRITE) ? 0 : (2ULL << 6)) |
++      ((flags & FP6_GPU_GLOBAL_GFX_PRIV) ? 0 : (1ULL << 6));
++ }
++ struct fp6_gpu_global_range *r = &d->ranges[d->count++];
++ r->address = address; r->pa = pa; r->size = size;
++ r->mapped_size = (uint32_t)mapped; r->flags = flags; r->complete = 1;
++ return 0;
++fail:
++ d->failed = 1;
++ return -1;
++}
++static int
++fp6_gpu_global_publish(struct fp6_gpu_global_domain *d)
++{
++ if (!d || !d->l0.va || d->failed) return -1;
++ for (unsigned i = 0; i < FP6_GPU_GLOBAL_L3_COUNT; i++)
++  if (d->ops->publish(d->ctx, d->l3[i].va, FP6_GPU_GLOBAL_PAGE)) goto fail;
++ if (d->ops->publish(d->ctx, d->l2.va, FP6_GPU_GLOBAL_PAGE) ||
++     d->ops->publish(d->ctx, d->l1.va, FP6_GPU_GLOBAL_PAGE) ||
++     d->ops->publish(d->ctx, d->l0.va, FP6_GPU_GLOBAL_PAGE)) goto fail;
++ d->frozen = 1;
++ return 0;
++fail:
++ d->failed = 1;
++ return -1;
++}
++static uint64_t
++fp6_gpu_global_walk(struct fp6_gpu_global_domain *d, uint64_t address)
++{
++ uint64_t ca = fp6_gpu_global_canonical(address);
++ if (!d || !d->l0.va || address < FP6_GPU_GLOBAL_BASE ||
++     address >= FP6_GPU_GLOBAL_BASE + FP6_GPU_GLOBAL_SIZE) return ~0ULL;
++ unsigned i = (unsigned)((ca >> 39) & 511u);
++ unsigned j = (unsigned)((ca >> 30) & 511u);
++ unsigned k = (unsigned)((ca >> 21) & 511u);
++ unsigned n = (unsigned)((ca >> 12) & 511u);
++ if ((((uint64_t *)d->l0.va)[i] & ~0xfffULL) != d->l1.pa ||
++     (((uint64_t *)d->l1.va)[j] & ~0xfffULL) != d->l2.pa || k >= FP6_GPU_GLOBAL_L3_COUNT ||
++     (((uint64_t *)d->l2.va)[k] & ~0xfffULL) != d->l3[k].pa) return ~0ULL;
++ uint64_t pte = ((uint64_t *)d->l3[k].va)[n];
++ if ((pte & 3u) != 3u || !(pte & (1ULL << 10))) return ~0ULL;
++ return (pte & 0x0000fffffffff000ULL) | (address & 0xfffu);
++}
++#endif
+-- 
+diff --git a/bsd/dev/fp6_gmu_domain.h b/bsd/dev/fp6_gmu_domain.h
+--- a/bsd/dev/fp6_gmu_domain.h
++++ b/bsd/dev/fp6_gmu_domain.h
+@@ -48,8 +48,9 @@
+  d->ops = ops; d->ctx = ctx;
+  return fp6_gmu_domain_alloc(d, 4096, &d->root);
+ }
+-static int fp6_gmu_domain_reserve_access(void *ctx, uint32_t address,
+- uint32_t size, int cached, int writable, int privileged)
++static int fp6_gmu_domain_reserve_access_backing(void *ctx, uint32_t address,
++ uint32_t size, int cached, int writable, int privileged,
++ const struct fp6_gmu_domain_page *backing)
+ {
+  struct fp6_gmu_domain *d = ctx;
+  uint64_t mapped_size = ((uint64_t)size + 4095) & ~4095ULL;
+@@ -70,7 +71,14 @@
+  struct fp6_gmu_domain_range *r = &d->ranges[d->count++];
+  r->address = address; r->size = size; r->mapped_size = (uint32_t)mapped_size;
+  r->cached = cached; r->writable = writable; r->privileged = privileged;
+- if (fp6_gmu_domain_alloc(d, r->mapped_size, &r->backing)) return -1;
++ if (backing) {
++  if (!backing->va || (backing->pa & 4095) ||
++      backing->pa >= (1ULL << 48) ||
++      r->mapped_size > (1ULL << 48) - backing->pa) {
++   d->failed = 1; return -1;
++  }
++  r->backing = *backing;
++ } else if (fp6_gmu_domain_alloc(d, r->mapped_size, &r->backing)) return -1;
+  for (uint64_t a = address; a < end; a += 4096) {
+   unsigned i = (unsigned)(a >> 30), j = (unsigned)((a >> 21) & 511);
+   unsigned k = (unsigned)((a >> 12) & 511);
+@@ -93,6 +101,20 @@
+  r->complete = 1;
+  return 0;
+ }
++static int fp6_gmu_domain_reserve_access(void *ctx, uint32_t address,
++ uint32_t size, int cached, int writable, int privileged)
++{
++ return fp6_gmu_domain_reserve_access_backing(ctx, address, size, cached,
++     writable, privileged, NULL);
++}
++static int fp6_gmu_domain_reserve_external_access(void *ctx, uint32_t address,
++ uint32_t size, int cached, int writable, int privileged,
++ const struct fp6_gmu_domain_page *backing)
++{
++ if (!backing) return -1;
++ return fp6_gmu_domain_reserve_access_backing(ctx, address, size, cached,
++     writable, privileged, backing);
++}
+ static int fp6_gmu_domain_reserve(void *ctx, uint32_t address,
+  uint32_t size, int cached)
+ {

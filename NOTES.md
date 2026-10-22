@@ -2714,3 +2714,28 @@ error::ResourceWarning -m unittest discover -s tests` (also with
   missing XNU clock header; the next CI build is required to validate it. No
   SMMU write has been tested on the phone. Do not use the earlier 0131 build
   for a translated-context phone test.
+
+## FP6 Adreno GPU TTBR1 allocator groundwork (2026-10-22)
+
+- Added patch 0163's standalone GPU global-memory page-table core and a host
+  harness. The core builds a 4 KiB, four-level TTBR1 tree for the Linux KGSL
+  global aperture (`0x0001ff8000000000`, 20 MiB), limits output addresses to
+  the measured 36-bit SMMU PA range, and emits Linux-style AF/nG/OSH/access
+  permission/XN leaf attributes. The allocator also checks directly reserved
+  ranges and supports live append plus republish for HFI MEM_ALLOC service.
+- Patch 0163 also adds an external-backing entry point to the existing GMU
+  domain, so a future `GFX_ACC | GMU_ACC` allocation can map the same physical
+  pages in both domains. A one-off host C fixture verified the GMU PTE uses
+  the supplied backing PA. The HFI service does not call either new API yet.
+- `python3 tests/test_fp6_gpu_global_domain.py` passes, covering VA alignment,
+  L3-boundary translation, permissions, idempotent replay, overlap refusal,
+  bounds and live append. `git apply --check` passes for patch 0163. This is
+  only the page-table component: it is not yet connected to `sweet_gpu.c`,
+  does not configure GPU SID0/CB0, and does not yet service GFX_ACC requests.
+- Linux source recheck confirms `arm_smmu_lpae_tcr()` shifts the LPAE TCR
+  fields into TCR.T1, sets EPD0 and clears A1 for TTBR1. With 48-bit IAS,
+  4 KiB TG1, outer-shareable noncoherent table walks and NC IRGN/ORGN, this
+  yields candidate `TCR=0xa0100080`; the source encoding is now accounted for,
+  but the value remains untested on FP6 hardware. GPU context activation and
+  all firmware/GMU exchanges remain pending. No phone was accessed during
+  this source and host-test pass.
