@@ -16,11 +16,19 @@
   not sent because their runtime enable/data inputs have not been reproduced.
 - Host probe test checks five HFI requests, queue sequencing, table fields,
   matching and mismatched ACK sequences, and reset containment; ASan/UBSan
-  version passes. `test_gpu_probe.py`
-  passes with a no-op cache-flush stub. Single-file XNU cross-compile against CI
-  buildtree `39766804611` reports `0 of 1 files failed`. This is source and host
-  evidence only: no full CI build, package or phone test has been run for 0160.
-  The simulated ACK is not evidence of GMU acceptance.
+  version passes. `test_gpu_probe.py` passes with a no-op cache-flush stub.
+  Single-file XNU cross-compile against CI buildtree `39766804611` reports
+  `0 of 1 files failed`.
+- Commit `5243eb1f6e8b0590e580fd66e604ea34a5faa0f2` passed CI run
+  `39775328855` (XNU build and FP6 boot job). Kernel SHA256
+  `ddce0dae8fd220bcd9a238b3500cf5693af4c46bd72ee0d18dd123f1bfca4d14`.
+  CI image packaging was skipped because its generated ADT omitted `/product`
+  artwork traits; the CI kernel was packaged locally with the previously
+  verified product ADT and stock DTB. Image:
+  `/tmp/ios-extra-run-39775328855/package/fp6-gmu-hfi-prerequisites/fp6-gmu-hfi-prerequisites.img`,
+  SHA256 `f63635017fa022319c4f6c6a6cb29224aec193edea49372eb4dc13ae85c2db8e`.
+  Header-v2 payload/kernel/DTB round-trip passed. No phone test has been run;
+  the simulated ACK is not evidence of GMU acceptance.
 - The original 0159 phone result remains `irq=0x4 fw=0x900`; debug data was not
   captured. The next phone test should establish whether the corrected
   pre-start tables clear that assertion. The phone is currently reserved for

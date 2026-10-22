@@ -8,10 +8,17 @@
   the GPU point to 362 MHz, added both average/X and peak/Y BCM vote fields,
   disabled ACV perfmode for a shortened DDR table, and validates zero ARC rows.
 - Host HFI model checks the five-request ordering, table values, sequence/ACK
-  matching, mismatched ACK rejection and reset/fault cases. `test_fp6_gmu_boot.py` and its ASan/UBSan run
-  pass; `test_gpu_probe.py` passes. Local XNU compile against CI buildtree
-  `39766804611` reports `0 of 1 files failed`.
-- Source inspection only: no 0160 CI run, package or phone result. Optional
+  matching, mismatched ACK rejection and reset/fault cases. `test_fp6_gmu_boot.py`
+  and its ASan/UBSan run pass; `test_gpu_probe.py` passes. Local XNU compile
+  against CI buildtree `39766804611` reports `0 of 1 files failed`.
+- Commit `5243eb1f6e8b0590e580fd66e604ea34a5faa0f2` passed CI `39775328855`.
+  Kernel SHA256 `ddce0dae8fd220bcd9a238b3500cf5693af4c46bd72ee0d18dd123f1bfca4d14`.
+  CI image packaging skipped because its generated ADT has no `/product`
+  artwork traits. Locally packaged with the existing verified product ADT and
+  stock DTB; header-v2 round-trip passed. Image
+  `/tmp/ios-extra-run-39775328855/package/fp6-gmu-hfi-prerequisites/fp6-gmu-hfi-prerequisites.img`,
+  SHA256 `f63635017fa022319c4f6c6a6cb29224aec193edea49372eb4dc13ae85c2db8e`.
+- No 0160 phone result. Optional
   ACD/BCL/CLX/IFPC startup inputs and F2H MEM_ALLOC servicing remain absent.
   Phone testing is deferred while the user tests Android.
 

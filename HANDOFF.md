@@ -49,11 +49,14 @@ An unbuilt 0160 candidate now adds the stock 362 MHz GPU row, GMU 350/650 MHz
 rows, a bounded three-level DDR/two-level CNOC table with full AB/IB encoding,
 HWSCHED/KPROF controls, generic HFI ACK handling and debug-queue capture. Host
 protocol/table/reset checks and ASan/UBSan pass; the broad GPU MMIO harness and
-single-file XNU compile pass. No CI build, package or phone observation exists
-for 0160. Optional ACD/BCL/CLX/IFPC settings are not reproduced yet; F2H
-MEM_ALLOC is not handled. The user is testing Android, so defer device commands.
-No GPU execution has been demonstrated. Latest package and log hashes are in
-`NOTES.md` and `docs/GPU_LOG.md`.
+single-file XNU compile pass. Commit `5243eb1f6e8b0590e580fd66e604ea34a5faa0f2`
+passed CI run `39775328855` and was locally packaged with the verified product
+ADT and stock DTB. Image SHA256 is
+`f63635017fa022319c4f6c6a6cb29224aec193edea49372eb4dc13ae85c2db8e`.
+No phone observation exists for 0160. Optional ACD/BCL/CLX/IFPC settings are
+not reproduced yet; F2H MEM_ALLOC is not handled. The user is testing Android,
+so defer device commands. No GPU execution has been demonstrated. Latest
+package and log hashes are in `NOTES.md` and `docs/GPU_LOG.md`.
 
 - Work in this checkout on `main`; remote is `ersascape/ios-extra`. The goal is
   FP6 Adreno 810 GMU firmware/HFI, then bounded GPU execution and an A810 Metal

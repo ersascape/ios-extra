@@ -32,8 +32,13 @@ GMU DMA, GPU command, rendering or Metal work has succeeded yet.
   protocol/table checks, including bad ACK sequence rejection, pass under
   ASan/UBSan; the broad GPU probe harness passes, and the changed XNU source
   compiles against CI buildtree `39766804611`.
-  No full CI build, package or 0160 phone observation exists yet. The host
-  responder synthesizes ACKs; it does not model firmware validation.
+  Commit `5243eb1f6e8b0590e580fd66e604ea34a5faa0f2` passed CI `39775328855`
+  and the local header-v2 image package round-trip. Kernel SHA256 is
+  `ddce0dae8fd220bcd9a238b3500cf5693af4c46bd72ee0d18dd123f1bfca4d14`; image
+  `/tmp/ios-extra-run-39775328855/package/fp6-gmu-hfi-prerequisites/fp6-gmu-hfi-prerequisites.img`
+  SHA256 `f63635017fa022319c4f6c6a6cb29224aec193edea49372eb4dc13ae85c2db8e`.
+  No 0160 phone observation exists yet. The host responder synthesizes ACKs;
+  it does not model firmware validation.
 - Patch 0159 adds a bounded HFI `CORE_FW_START` request/ACK exchange based on
   Fairphone Linux Gen8. CI `39766804611` passed and the packaged image booted
   once. The phone reported `irq=0x4 fw=0x900` after the request; bit 2 is DBGQ
