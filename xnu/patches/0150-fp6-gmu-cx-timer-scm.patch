@@ -1,0 +1,192 @@
+diff --git a/bsd/dev/sweet_gpu.c b/bsd/dev/sweet_gpu.c
+index 68db938..020906d 100644
+--- a/bsd/dev/sweet_gpu.c
++++ b/bsd/dev/sweet_gpu.c
+@@ -1982,6 +1982,7 @@ sweet_gpu_replay(void)
+ #include <sys/systm.h>
+ #include <pexpert/pexpert.h>
+ #include <kern/clock.h>
++#include <arm/machine_routines.h>
+ #include <arm/caches_internal.h>
+ #include <vm/pmap.h>
+ #include <vm/vm_kern.h>
+@@ -2876,6 +2877,158 @@ static int fp6_gmu_kernel_published(void *ctx)
+ #define FP6_GMU_TRACE_SIZE      0x4000u
+ static uint32_t fp6_gmu_hfi_va, fp6_gmu_log_va, fp6_gmu_vrb_va, fp6_gmu_trace_va;
+ 
++/* CX_MISC AO counter is at dword offsets 0x80/0x81 in its own DT window. */
++#define FP6_CX_MISC_PA          0x03d9e000u
++#define FP6_CX_MISC_SIZE        0x1000u
++#define FP6_CX_AO_COUNTER_LO    0x200u
++#define FP6_CX_AO_COUNTER_HI    0x204u
++#define FP6_CX_TIMER_SAMPLES    16u
++static int fp6_gmu_cx_timer_ready;
++
++#if defined(FP6_GMU_TEST)
++extern uint64_t fp6_gmu_test_counter(void);
++extern uint64_t fp6_gmu_test_frequency(void);
++#else
++static uint64_t
++fp6_gmu_arch_counter(void)
++{
++	uint64_t value;
++	__asm__ volatile("isb; mrs %0, cntpct_el0" : "=r"(value) :: "memory");
++	return value;
++}
++
++static uint64_t
++fp6_gmu_arch_frequency(void)
++{
++	uint64_t value;
++	__asm__ volatile("mrs %0, cntfrq_el0" : "=r"(value));
++	return value;
++}
++#define fp6_gmu_test_counter()   fp6_gmu_arch_counter()
++#define fp6_gmu_test_frequency() fp6_gmu_arch_frequency()
++#endif
++
++static int
++fp6_gmu_cx_counter_read(vm_offset_t cx, uint64_t *value)
++{
++	uint32_t hi = fp6_smmu_read32(cx, FP6_CX_AO_COUNTER_HI);
++	uint32_t lo = fp6_smmu_read32(cx, FP6_CX_AO_COUNTER_LO);
++	uint32_t hi2 = fp6_smmu_read32(cx, FP6_CX_AO_COUNTER_HI);
++	if (hi == 0xffffffffu || lo == 0xffffffffu || hi2 == 0xffffffffu)
++		return 0;
++	if (hi != hi2) {
++		lo = fp6_smmu_read32(cx, FP6_CX_AO_COUNTER_LO);
++		hi = hi2;
++		if (lo == 0xffffffffu) return 0;
++	}
++	*value = ((uint64_t)hi << 32) | lo;
++	return 1;
++}
++
++/* Linux gen8_cx_timer_init, with bounded sample and post-seed checks. */
++static int
++fp6_gmu_cx_timer_sync(void)
++{
++	if (fp6_gmu_cx_timer_ready) return 1;
++	vm_offset_t cx = ml_io_map(FP6_CX_MISC_PA, FP6_CX_MISC_SIZE);
++	uint64_t frequency = fp6_gmu_test_frequency();
++	if (!cx || frequency < 1000000u || frequency > 100000000u) {
++		printf("QCOM GMU: CX timer refused mapping=0x%llx CNTFRQ=%llu\n",
++		    (unsigned long long)cx, (unsigned long long)frequency);
++		return 0;
++	}
++	uint64_t skew_sum = 0, skew_min = ~0ULL, skew_max = 0;
++	unsigned valid = 0;
++	boolean_t irq_was_enabled = ml_set_interrupts_enabled(FALSE);
++	for (unsigned i = 0; i < FP6_CX_TIMER_SAMPLES; i++) {
++		uint64_t t1 = fp6_gmu_test_counter();
++		uint64_t t2 = fp6_gmu_test_counter();
++		if (t2 < t1) continue;
++		fp6_smmu_write32(cx, FP6_CX_AO_COUNTER_LO, (uint32_t)t2);
++		fp6_smmu_write32(cx, FP6_CX_AO_COUNTER_HI, (uint32_t)(t2 >> 32));
++		__asm__ volatile("dsb sy" ::: "memory");
++		uint64_t t3 = fp6_gmu_test_counter();
++		if (t3 < t2) continue;
++		uint64_t read_cost = t2 - t1;
++		uint64_t write_cost = t3 - t2;
++		if (write_cost <= read_cost || write_cost - read_cost > frequency / 20u)
++			continue;
++		uint64_t sample = write_cost - read_cost;
++		skew_sum += sample;
++		if (sample < skew_min) skew_min = sample;
++		if (sample > skew_max) skew_max = sample;
++		valid++;
++	}
++	(void)ml_set_interrupts_enabled(irq_was_enabled);
++	if (valid < 12u) {
++		printf("QCOM GMU: CX timer refused valid=%u/%u CNTFRQ=%llu\n",
++		    valid, FP6_CX_TIMER_SAMPLES, (unsigned long long)frequency);
++		return 0;
++	}
++	uint64_t skew = (skew_sum + valid / 2u) / valid;
++	irq_was_enabled = ml_set_interrupts_enabled(FALSE);
++	uint64_t now = fp6_gmu_test_counter();
++	uint64_t seed = now + skew;
++	fp6_smmu_write32(cx, FP6_CX_AO_COUNTER_LO, (uint32_t)seed);
++	fp6_smmu_write32(cx, FP6_CX_AO_COUNTER_HI, (uint32_t)(seed >> 32));
++	__asm__ volatile("dsb sy" ::: "memory");
++	(void)ml_set_interrupts_enabled(irq_was_enabled);
++
++	uint64_t cx_before, cpu_before, cx_after, cpu_after;
++	if (!fp6_gmu_cx_counter_read(cx, &cx_before)) return 0;
++	cpu_before = fp6_gmu_test_counter();
++	uint64_t initial_error = cx_before > cpu_before ? cx_before - cpu_before : cpu_before - cx_before;
++	if (initial_error > frequency / 1000u) {
++		printf("QCOM GMU: CX timer seed offset too large CPU=0x%llx CX=0x%llx error=%llu\n",
++		    (unsigned long long)cpu_before, (unsigned long long)cx_before,
++		    (unsigned long long)initial_error);
++		return 0;
++	}
++	delay(1000);
++	if (!fp6_gmu_cx_counter_read(cx, &cx_after)) return 0;
++	cpu_after = fp6_gmu_test_counter();
++	if (cpu_after <= cpu_before || cx_after <= cx_before) return 0;
++	uint64_t cpu_delta = cpu_after - cpu_before;
++	uint64_t cx_delta = cx_after - cx_before;
++	uint64_t delta_error = cpu_delta > cx_delta ? cpu_delta - cx_delta : cx_delta - cpu_delta;
++	if (delta_error > frequency / 5000u + 64u) {
++		printf("QCOM GMU: CX timer rate mismatch CPU=%llu CX=%llu error=%llu\n",
++		    (unsigned long long)cpu_delta, (unsigned long long)cx_delta,
++		    (unsigned long long)delta_error);
++		return 0;
++	}
++	fp6_gmu_cx_timer_ready = 1;
++	printf("QCOM GMU: CX timer synced CNTFRQ=%llu samples=%u skew=%llu min=%llu max=%llu seed=0x%llx offset=%llu delta=%llu/%llu\n",
++	    (unsigned long long)frequency, valid, (unsigned long long)skew,
++	    (unsigned long long)skew_min, (unsigned long long)skew_max,
++	    (unsigned long long)seed, (unsigned long long)initial_error,
++	    (unsigned long long)cpu_delta,
++	    (unsigned long long)cx_delta);
++	return 1;
++}
++
++/* Qualcomm's optional GPU_INIT_CX_REGS SCM service. Request ALWAYS_EN and
++ * TSENSE only; BCL/CLX remain off until those features are implemented. */
++static int
++fp6_gmu_scm_init_cx(void)
++{
++	uint64_t status = ~0ULL, value = 0;
++	fp6_scm_invoke(0x42000101u, 1u, 0x02002801u, &status, &value);
++	if (status != 0 || value == 0) {
++		printf("QCOM GMU: SCM GPU_INIT_CX_REGS unavailable; continuing without optional service status=0x%llx result=0x%llx\n",
++		    (unsigned long long)status, (unsigned long long)value);
++		return 1;
++	}
++	fp6_scm_invoke(0x42002801u, 1u, 0x9u, &status, &value);
++	if (status != 0) {
++		printf("QCOM GMU: SCM GPU_INIT_CX_REGS failed status=0x%llx\n",
++		    (unsigned long long)status);
++		return 0;
++	}
++	printf("QCOM GMU: SCM GPU_INIT_CX_REGS accepted request=0x9 (ALWAYS_EN|TSENSE)\n");
++	return 1;
++}
++
+ static int
+ fp6_gmu_boot_wanted(void)
+ {
+@@ -2981,6 +3134,10 @@ fp6_gmu_first_boot(vm_offset_t smmu, uint32_t cb_off, uint32_t smr_off)
+ 		printf("QCOM GMU: first boot refused: CM3 not held in reset\n");
+ 		return;
+ 	}
++	if (!fp6_gmu_cx_timer_ready || !fp6_gmu_scm_init_cx()) {
++		printf("QCOM GMU: first boot refused: CX timer/SCM prerequisite failed\n");
++		return;
++	}
+ 	/* Route SID 5 to the persistent context (S2CR still points at it). */
+ 	fp6_smmu_write32(smmu, smr_off, (1u << 31) | FP6_SMMU_GMU_SID);
+ 	if (fp6_smmu_read32(smmu, smr_off) != ((1u << 31) | FP6_SMMU_GMU_SID)) {
+@@ -3070,6 +3227,9 @@ static int fp6_gmu_persistent_upload(vm_offset_t base, uint32_t cb_off,
+  if (fp6_gmu_kernel_ready(NULL)) {
+   printf("QCOM GMU: upload refused: CM3 reset not held\n"); return 0;
+  }
++ if (fp6_gmu_boot_wanted() && !fp6_gmu_cx_timer_sync()) {
++  printf("QCOM GMU: upload refused: CX timer synchronization failed\n"); return 0;
++ }
+  static const struct fp6_gmu_domain_ops memory = { fp6_gmu_kernel_alloc, fp6_gmu_kernel_publish };
+  if (fp6_gmu_domain_init(&fp6_gmu_domain, &memory, NULL)) return 0;
+  for (unsigned i = 0; i < FP6_GMU_FW_PREALLOCATION_COUNT; i++) {

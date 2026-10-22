@@ -44,7 +44,7 @@
 - Patches 0148/0149 add stage-specific clock diagnostics and Linux-aligned setup: MX SVS_L1 floor `0xc0` for GPU PLL calibration, enabling outputs on a compatible inherited Lucid OLE PLL without changing its rate/divider, and waiting for RCG root-on before changing CFG. Unreadable/unsupported live PLL state still refuses; the PLL FSM path remains unsupported because gpucc-volcano exports no software vote register.
 - Patch 0149 adds a 16 KiB trace buffer/header, checks firmware fault bits before success bits, and bounds even successful CM3/HFI initialization by asserting reset and verifying it. It retains DMA pages, SID/context and clock votes after the probe, including if reset readback fails, because reset alone does not show bus transactions drained.
 - Source review used Fairphone Linux kernel `9535e0f0885d3d4b91c38054541e16019d1e64bd` and modules `54c948d9b30c2ba01835e64c36b68b80692554ac`. `python3 tests/test_gpu_probe.py`, its ASan/UBSan run, and `python3 tests/test_fp6_gmu_boot.py` pass. CI verifies compilation of the patched XNU tree; it does not run these host tests.
-- The phone has now booted 0148/0149 successfully through GMU firmware initialization and HFI_CTRL_INIT; see the phone console values above. No HFI messages have been sent and no GPU work has run yet. Pending Linux first-start prerequisites are CX timer synchronization, SCM CX setup and a minimum DDR bandwidth vote. Full HFI needs perf/BW tables and MEM_ALLOC request handling. GPU MMU/OOB/SQE startup and a known-value memory-write test remain. UniXNU NativeAdreno/NativeMetal contains A740-specific register and GMEM assumptions and cannot be treated as A810 support.
+- The phone has now booted 0148/0149 successfully through GMU firmware initialization and HFI_CTRL_INIT; see the phone console values above. No HFI messages have been sent and no GPU work has run yet. Patch 0150 adds modeled CX timer synchronization and optional SCM CX setup; it has not been built by CI or run on the phone yet. A minimum DDR bandwidth vote remains unimplemented. Full HFI needs perf/BW tables and MEM_ALLOC request handling. GPU MMU/OOB/SQE startup and a known-value memory-write test remain. UniXNU NativeAdreno/NativeMetal contains A740-specific register and GMEM assumptions and cannot be treated as A810 support.
 
 ## Patch 0145 phone log: software table walk passes (2026-10-22)
 
@@ -79,9 +79,30 @@
 
 The target is FP6 Adreno 810 Gen8.3. Patches 0148/0149 booted on the phone: the corrected GPU PLL/GMU clocks came up, 159 persistent pages were checked/uploaded, GMU firmware reported `FW_INIT_RESULT=0x100`, HFI controller initialization reported `HFI_CTRL_STATUS=1`, and CM3 reset was verified afterward. The photo records early GPU lines; the later USB capture started after that segment. GMU DMA and HFI command processing are still unproven.
 
-Next, add the Linux first-start CX timer sync, SCM CX initialization and minimum DDR bandwidth vote. Then implement and test HFI perf/BW tables, HWSCHED/KPROF/CORE_FW_START/START and memory allocation/counter request handling. After HFI runs and idles safely, bring up GPU MMU/OOB, Gen8 SQE/AQE and scheduler; prove a bounded GPU write to mapped memory and then a simple draw/readback. Finally expose allocation, mapping/cache, submission and fence operations through an IOKit ABI and adapt an A810-correct Turnip/Metal frontend and IOSurface presentation. The local NativeAdreno path carries A740 hardware assumptions. Metal rendering remains unimplemented.
+Next, validate patch 0150 through CI and one phone boot. Then implement the minimum DDR vote and validate it before HFI messages. Full HFI needs perf/BW tables and MEM_ALLOC request handling. After HFI runs and idles safely, bring up GPU MMU/OOB, Gen8 SQE/AQE and scheduler; prove a bounded GPU write to mapped memory and then a simple draw/readback. Finally expose allocation, mapping/cache, submission and fence operations through an IOKit ABI and adapt an A810-correct Turnip/Metal frontend and IOSurface presentation. The local NativeAdreno path carries A740 hardware assumptions. Metal rendering remains unimplemented.
 
 See [FP6 GMU first boot](docs/FP6_GMU_FIRST_BOOT.md), [FP6 Adreno Metal audit](docs/FP6_ADRENO_METAL_AUDIT.md) and [FP6 SMMU power](docs/FP6_SMMU_POWER.md).
+
+## Patch 0150: CX timer and SCM CX preflight (2026-10-22)
+
+- Source inspection: Fairphone Linux `adreno_gen8.c` initializes the CX AO
+  timer with 16 samples using `cntpct` and writes to `cx_misc` offsets
+  `0x200/0x204`; first GMU start calls optional SCM CX setup with ALWAYS_EN and
+  TSENSE. Patch 0150 ports the sample/seed operation, adds bounded readback
+  and rate checks, and requests only those two features (`0x9`), leaving BCL
+  and CLX disabled.
+- The opt-in `fp6gmuboot=1` path synchronizes the timer before firmware upload.
+  SCM availability and initialization are checked before SID publication and
+  CM3 release. An unavailable SCM service is treated as optional; an available
+  service returning an error aborts before the GMU is routed as an SMMU master.
+- Host-model timer/SCM fault-injection tests, normal and ASan/UBSan runs, the
+  GPU probe host harness and a local AArch64 single-file syntax compile pass.
+  The compile used system Clang against the latest CI build tree because the
+  configured Swift Clang path is absent. This is not a full CI build.
+- No phone boot has tested patch 0150. Next: finish the full host suite,
+  commit/push and check CI; only then package and run the isolated phone test.
+  Minimum DDR bandwidth/BCM voting remains unresolved, so 0150 alone is not
+  expected to enable safe HFI traffic.
 
 ## FP6 GPU SMMU: TCR2 passes, FSR FORMAT bits (2026-10-21)
 

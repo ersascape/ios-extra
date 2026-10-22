@@ -144,10 +144,15 @@ The dedicated host test injects successful HFI, rejected reset, combined
 ready/fault bits and firmware/HFI timeouts; it also checks the trace header.
 These are modeled results, not phone observations.
 
-Remaining differences from the Fairphone first-boot sequence include CX timer
-synchronization (`adreno_gen8.c:gen8_cx_timer_init`), SCM CX register setup
-(`gen8_scm_gpu_init_cx_regs`) and minimum DDR bandwidth voting before CM3
-release (`adreno_gen8_hwsched.c:gen8_hwsched_gmu_first_boot`). GMU interrupt
+Patch 0150 implements the CX timer synchronization
+(`adreno_gen8.c:gen8_cx_timer_init`) and optional SCM CX register setup
+(`gen8_scm_gpu_init_cx_regs`). The timer uses the Linux 16-sample
+`cntpct`/write-latency algorithm, seeds the `cx_misc` AO counter, then adds
+readback/rate checks. SCM availability is queried and the port requests
+ALWAYS_EN|TSENSE (`0x9`); BCL and CLX are not requested. These are source and
+host-model results until a CI build and phone observation are recorded.
+Minimum DDR bandwidth voting before CM3 release remains unimplemented
+(`gen8_hwsched_gmu_first_boot`). GMU interrupt
 masks do not mask the SMMU global fault interrupt. The read-only GIC inspection
 in 0146 must not be described as interrupt containment.
 

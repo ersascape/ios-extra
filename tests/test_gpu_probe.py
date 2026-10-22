@@ -77,6 +77,8 @@ class GPUProbeTests(unittest.TestCase):
                                   '#define STARTUP_RANK_LAST 4\n',
                 'arm/caches_internal.h': '#define TRUE 1\ntypedef unsigned long long addr64_t;\n'
                                          'void clean_dcache64(addr64_t, unsigned, int);\n',
+                'arm/machine_routines.h': 'typedef int boolean_t;\n#define FALSE 0\n'
+                                          'boolean_t ml_set_interrupts_enabled(boolean_t);\n',
                 'vm/pmap.h': 'typedef unsigned long long addr64_t;\ntypedef unsigned int ppnum_t;\n'
                              'typedef void *pmap_t;\nextern pmap_t kernel_pmap;\n'
                              '#define ptoa_64(x) ((unsigned long long)(x) << 14)\n',
@@ -136,8 +138,13 @@ static int probe_printf(const char *, ...);
 #define ARM64_BOARD_CONFIG_SWEET 1
 #define ARM64_BOARD_CONFIG_FP6 1
 #define FP6_SCM_TEST 1
+#define FP6_GMU_TEST 1
 #include "sweet_gpu.c"
 #undef printf
+
+uint64_t fp6_gmu_test_counter(void) { static uint64_t ticks=1000000; return ticks+=20; }
+uint64_t fp6_gmu_test_frequency(void) { return 19200000; }
+boolean_t ml_set_interrupts_enabled(boolean_t enable) { static boolean_t old=1; boolean_t v=old; old=enable; return v; }
 
 static uint32_t gcc[0x90000 / 4], cc[0x9000 / 4];
 static uint32_t fp6_gpucc[0x9800 / 4], fp6_gpucc_before[0x9800 / 4];
