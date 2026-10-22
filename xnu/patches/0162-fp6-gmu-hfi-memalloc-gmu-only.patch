@@ -17,7 +17,7 @@ index 5b298d7..3b8134c 100644
  #ifndef FP6_GMU_DOMAIN_H
  #define FP6_GMU_DOMAIN_H
 diff --git a/bsd/dev/sweet_gpu.c b/bsd/dev/sweet_gpu.c
-index ed75e45..1d17316 100644
+index ed75e45..38cba21 100644
 --- a/bsd/dev/sweet_gpu.c
 +++ b/bsd/dev/sweet_gpu.c
 @@ -2866,9 +2866,10 @@ static int fp6_gmu_kernel_published(void *ctx)
@@ -130,12 +130,13 @@ index ed75e45..1d17316 100644
 -fp6_gmu_hfi_send_req(vm_offset_t g, uint8_t *mem, uint32_t *msg, unsigned dwords,
 -	    unsigned *sequence)
 +fp6_gmu_hfi_mem_alloc(vm_offset_t smmu, uint32_t cb_off, vm_offset_t g,
-+		uint8_t *mem, const uint32_t *request, unsigned version,
++		uint8_t *mem, const uint32_t *request, unsigned mem_version,
 +		unsigned *sequence)
 +{
 +	unsigned off = 2u;
 +	uint32_t desc[9] = {0};
-+	unsigned words = version ? 9u : 8u;
++	uint32_t response[11] = {0};
++	unsigned words = mem_version ? 9u : 8u;
 +	for (unsigned i = 0; i < words; i++) desc[i] = request[off + i];
 +	uint32_t kind = desc[3], flags = desc[2], handle = desc[5];
 +	uint32_t size = desc[7], align = desc[8];
@@ -143,7 +144,7 @@ index ed75e45..1d17316 100644
 +	    (flags & (FP6_HFI_MEMFLAG_GFX_ACC | FP6_HFI_MEMFLAG_GFX_SECURE)) ||
 +	    kind == FP6_HFI_MEMKIND_HW_FENCE || kind == FP6_HFI_MEMKIND_MMIO_IPC_CORE) {
 +		printf("QCOM GMU: HFI MEM_ALLOC unsupported version=%u flags=0x%x kind=%u handle=%u bytes=%u align=0x%x; CM3 reset required\n",
-+		    version, flags, kind, handle, size, align);
++		    mem_version, flags, kind, handle, size, align);
 +		return 0;
 +	}
 +	for (unsigned i = 0; i < fp6_hfi_mem_alloc_count; i++) {
@@ -181,7 +182,6 @@ index ed75e45..1d17316 100644
 +	    kind, flags, handle, va, (uint32_t)rounded,
 +	    (flags & FP6_HFI_MEMFLAG_GMU_CACHEABLE) != 0);
 +reply:
-+	uint32_t response[11] = {0};
 +	response[0] = (1u << 16) | 20u; /* HFI_MSG_ACK / F2H_MSG_MEM_ALLOC */
 +	response[1] = request[0];       /* req_hdr echoes the GMU event header */
 +	memcpy(&response[2], desc, sizeof(desc));

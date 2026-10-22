@@ -18,9 +18,13 @@
   firmware acceptance remain unobserved. The user is using Android, so no
   device commands were run.
 - Patch 0162, docs and test changes are still local pending review/commit. Next:
-  run `git diff --check`, verify patch application and targeted tests, then one
-  CI build and package. Defer the phone test until the user says Android work is
-  done. This does not enable GPU command execution.
+  CI run `39786196862` failed because Apple Clang rejects a C declaration
+  directly after a label in the HFI reply helper. The response buffer is now
+  declared before the label; the shadowing parameter was renamed. Normal and
+  ASan/UBSan GMU/GPU host tests pass again, the arm64 object compile reports
+  `0 of 1 files failed`, and `git diff --check` is clean. The corrected follow-up
+  is being pushed for one retry build. Defer the phone test until the user says
+  Android work is done. This does not enable GPU command execution.
 
 ## FP6 HFI service-message milestone (0161, 2026-10-22)
 

@@ -17,9 +17,13 @@
   `39775328855` reports `0 of 1 files failed`; patch application check passes.
 - The request values above are test-fixture values, not phone observations.
   The phone's actual descriptor and firmware response are still unknown. The
-  change is local and not yet built by CI or tested on hardware; phone commands
-  are deferred while the user is testing Android. It does not demonstrate GPU
-  DMA, command execution, rendering, or Metal.
+  first CI attempt, `39786196862`, failed because Apple Clang rejects a C
+  declaration immediately after the `reply:` label. The response array was
+  moved to the function's initial declarations. Normal and ASan/UBSan host
+  tests pass again and arm64 object compile reports `0 of 1 files failed` after
+  the fix; retry CI is pending. No hardware test has been made, and phone
+  commands are deferred while the user is testing Android. It does not
+  demonstrate GPU DMA, command execution, rendering, or Metal.
 
 ## FP6 patch 0160 source/host review (2026-10-22)
 

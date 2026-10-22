@@ -54,9 +54,12 @@ large-alignment requests still reset CM3 safely. Normal and ASan/UBSan host
 protocol tests pass, including one successful synthetic GMU-only request and a
 GPU-access refusal; the changed source compiles to an arm64 object against CI
 buildtree `39775328855` (`0 of 1 files failed`). This does not reveal the phone's
-actual descriptor or prove firmware acceptance. No 0162 CI build or phone test
-exists. The user is testing Android, so continue local review and defer all
-device commands. No GPU execution has been demonstrated.
+actual descriptor or prove firmware acceptance. CI run `39786196862` failed on
+Apple Clang's rejection of a declaration immediately after a C label. The
+response buffer is now declared before the label, with targeted normal and
+sanitized tests and object compile passing again; the corrected commit is
+pending its retry CI build. No 0162 phone test exists. The user is testing
+Android, so defer all device commands. No GPU execution has been demonstrated.
 
 - Work in this checkout on `main`; remote is `ersascape/ios-extra`. The goal is
   FP6 Adreno 810 GMU firmware/HFI, then bounded GPU execution and an A810 Metal

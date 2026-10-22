@@ -46,9 +46,11 @@ GMU DMA, GPU command, rendering or Metal work has succeeded yet.
   permanent kernel backing and a live SMMU page-table append/TLBI/sync. Host
   normal and ASan/UBSan tests cover a synthetic successful request and a
   GPU-access refusal. Arm64 object compile against buildtree `39775328855`
-  reports 0/1 failures. The actual phone descriptor and firmware acceptance
-  are unknown; no CI build or phone test exists. User is testing Android, so
-  defer device commands.
+  reports 0/1 failures. CI run `39786196862` failed because Apple Clang rejects
+  the original reply label followed by a declaration; the response array was
+  moved ahead of the label. Targeted checks pass after the fix; retry CI is
+  pending. The actual phone descriptor and firmware acceptance are unknown;
+  no phone test exists. User is testing Android, so defer device commands.
 - Patch 0159 adds a bounded HFI `CORE_FW_START` request/ACK exchange based on
   Fairphone Linux Gen8. CI `39766804611` passed and the packaged image booted
   once. The phone reported `irq=0x4 fw=0x900` after the request; bit 2 is DBGQ
