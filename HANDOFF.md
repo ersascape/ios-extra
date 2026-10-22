@@ -65,12 +65,15 @@ Metal output has been measured.
 
 Source review confirms Linux omits the HFI preemption control and skips
 `gen8_preemption_init()` in its one-ring path when preemption is disabled.
-Candidate patch 0171 adds opt-in `fp6gmunopreempt=1`, preserving default A810
-preemption. Host, sanitizer, full-suite and local arm64 compile checks pass; CI
-and phone validation are pending. It changes only the HFI feature request and
-does not start GPU rings. Build/package once, then use the image to measure
-whether GMU still requests secure kind 5 or reaches the HFI START ACK. Current
-phone state is not fastboot; do not reboot it unannounced. Check
+Patch 0171 adds opt-in `fp6gmunopreempt=1`, preserving default A810
+preemption. Host, sanitizer, full-suite and local arm64 compile checks pass.
+Commit `3d05098ff1095f58ceec2769340f51a315f45f98` passed CI `39845816435`.
+Image `/tmp/ios-extra-run-39845816435/package/fp6-hfi-no-preempt-0171.img`,
+SHA-256 `83e366c83190e98a62b0621c63726f263e0e142ddb3242138767fb471bffd37d`, is
+packaged and round-trip verified. It changes only the HFI feature request and
+does not start GPU rings. Phone test is pending; current `fastboot devices`
+count is zero. The image measures whether GMU still requests secure kind 5 or
+reaches HFI START ACK. Do not reboot the phone unannounced. Check
 `fastboot devices` before asking the user, and require exactly one device before
 the helper's single temporary boot. Continue using the ramdisk and `/tmp` logs.
 No flash, `fastboot getvar`, or EDL commands.

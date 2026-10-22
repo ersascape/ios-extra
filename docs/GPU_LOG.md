@@ -1875,11 +1875,17 @@ Fairphone Gen8 source review: `enable_preemption()` sends no HFI feature control
 when preemption is disabled. `gen8_ringbuffer_init()` then configures one ring
 and returns before `gen8_preemption_init()` allocates secure CSW records. The
 phone's secure kind-5 request followed the HFI preemption-enable ACK, so a
-no-preemption probe is a source-backed next experiment. Candidate patch 0171
-adds opt-in `fp6gmunopreempt=1` and skips only that HFI request; the default
-preemption behavior remains unchanged. Focused normal and ASan/UBSan tests,
-full host suite, and local arm64 compile pass. CI/phone results are pending.
-The patch does not yet start a GPU ring or prove execution.
+no-preemption probe is a source-backed next experiment. Patch 0171 adds opt-in `fp6gmunopreempt=1` and skips only that HFI request;
+default preemption remains unchanged. Focused normal and ASan/UBSan tests, full
+host suite, and local arm64 compile pass. Commit
+`3d05098ff1095f58ceec2769340f51a315f45f98` passed CI `39845816435`; kernel
+SHA-256 `314f570a70c67b73bff5eca32f867ed7bc05ad87d73baa3090f15bcca7195487`.
+The packaged header-v2 image is
+`/tmp/ios-extra-run-39845816435/package/fp6-hfi-no-preempt-0171.img`, SHA-256
+`83e366c83190e98a62b0621c63726f263e0e142ddb3242138767fb471bffd37d`; it uses
+the verified Volcano DTB, matching CI ADT and workflow init. Phone test is
+pending because fastboot currently reports zero devices. The patch does not yet
+start a GPU ring or prove execution.
 
 # FP6 guarded CB0 reinitialization and secure HFI allocation boundary 0170 (2026-10-23)
 

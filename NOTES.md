@@ -14,9 +14,18 @@
   A810 behavior is unchanged. Host tests assert the opt-in emits no command and
   the default still sends level-1 preemption data `0xD`. Focused normal and
   ASan/UBSan tests pass, the full suite passes 13 tests with 5 dependency
-  skips, and local arm64 compilation reports `0 of 1 files failed`. CI and
-  phone validation are pending. The next phone image will still be an HFI probe;
-  GPU ring initialization/execution is a later required implementation step.
+  skips, and local arm64 compilation reports `0 of 1 files failed`. Commit
+  `3d05098ff1095f58ceec2769340f51a315f45f98` passed CI run `39845816435`; the
+  XNU build succeeded and hosted image packaging was skipped because
+  `FP6_STOCK_DTB_URL` is unset. Kernel SHA-256
+  `314f570a70c67b73bff5eca32f867ed7bc05ad87d73baa3090f15bcca7195487`.
+  Packaged the matching CI ADT and verified Volcano DTB with the workflow init;
+  header-v2 round-trip passed. Image
+  `/tmp/ios-extra-run-39845816435/package/fp6-hfi-no-preempt-0171.img`,
+  SHA-256 `83e366c83190e98a62b0621c63726f263e0e142ddb3242138767fb471bffd37d`.
+  Args include `fp6gmunopreempt=1`. The phone check returned zero devices in
+  fastboot; no 0171 phone result yet. This image is still an HFI probe; GPU ring
+  initialization/execution remains later work.
 
 ## FP6 CB0 takeover and HFI allocation boundary 0170 (2026-10-23)
 
