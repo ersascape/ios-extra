@@ -56,10 +56,15 @@ GPU-access refusal; the changed source compiles to an arm64 object against CI
 buildtree `39775328855` (`0 of 1 files failed`). This does not reveal the phone's
 actual descriptor or prove firmware acceptance. CI run `39786196862` failed on
 Apple Clang's rejection of a declaration immediately after a C label. The
-response buffer is now declared before the label, with targeted normal and
-sanitized tests and object compile passing again; the corrected commit is
-pending its retry CI build. No 0162 phone test exists. The user is testing
-Android, so defer all device commands. No GPU execution has been demonstrated.
+response buffer is now declared before the label. Corrected commit `4a14fe7`
+passed CI `39787950216`; verified kernel SHA256 is
+`6d35acc9772c0b0cc740d409505016fd23c5267d230a923a830ca15561678934`. Automatic
+image packaging skipped because `FP6_STOCK_DTB_URL` is unset, so the kernel was
+locally packaged with the verified product ADT/stock DTB as
+`/tmp/ios-extra-run-39787950216/package/fp6-gmu-hfi-memalloc-0162.img`, SHA256
+`30fc97daccfa67230e2f2bedac463591b2f310e285b9ac0c2d1fbc1730ed502d`. Header-v2
+round-trip passed. No 0162 phone test exists. The user is testing Android, so
+defer all device commands. No GPU execution has been demonstrated.
 
 - Work in this checkout on `main`; remote is `ersascape/ios-extra`. The goal is
   FP6 Adreno 810 GMU firmware/HFI, then bounded GPU execution and an A810 Metal

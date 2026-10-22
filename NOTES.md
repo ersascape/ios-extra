@@ -17,14 +17,26 @@
   host/compiler checks only; the phone's actual MEM_ALLOC descriptor and
   firmware acceptance remain unobserved. The user is using Android, so no
   device commands were run.
-- Patch 0162, docs and test changes are still local pending review/commit. Next:
-  CI run `39786196862` failed because Apple Clang rejects a C declaration
-  directly after a label in the HFI reply helper. The response buffer is now
-  declared before the label; the shadowing parameter was renamed. Normal and
-  ASan/UBSan GMU/GPU host tests pass again, the arm64 object compile reports
-  `0 of 1 files failed`, and `git diff --check` is clean. The corrected follow-up
-  is being pushed for one retry build. Defer the phone test until the user says
-  Android work is done. This does not enable GPU command execution.
+- Commit `1c0bf94` first failed CI `39786196862`: Apple Clang rejected a C
+  declaration immediately after a label. Commit `4a14fe7` moved the response
+  array before the label and renamed the shadowing parameter. The retry CI
+  `39787950216` passed its XNU build; its automatic package step skipped because
+  `FP6_STOCK_DTB_URL` is unset. The kernel SHA-256 is
+  `6d35acc9772c0b0cc740d409505016fd23c5267d230a923a830ca15561678934`;
+  SHA256SUMS passed. The CI buildtree SHA-256 is
+  `d1d4d850193c4b64a1604c5a0dc83997247294222df0ac20e66b4653dc58ebf1`, and
+  its `sweet_gpu.c` and GMU-domain header match the locally reviewed candidate.
+- Locally packaged with product ADT SHA-256
+  `4da4226e6b9ac393ff22b66a304d9172d6be2bfd6d558348a47379c51aab1d80` and stock
+  Volcano DTB SHA-256 `8198534128258bfe7b05bbb5b227affc181aa49b376884c08eae8564fce124e3`.
+  Header-v2 round-trip passed. Image:
+  `/tmp/ios-extra-run-39787950216/package/fp6-gmu-hfi-memalloc-0162.img`,
+  SHA-256 `30fc97daccfa67230e2f2bedac463591b2f310e285b9ac0c2d1fbc1730ed502d`.
+  It has `fp6gmuload=1 fp6gmuboot=1` arguments and is not phone-tested.
+- Next: wait for the user's Android work to finish, then use this exact image for
+  one bounded phone observation and capture the actual MEM_ALLOC descriptor.
+  The synthetic kind-2 request is not evidence that hardware will request or
+  accept this mapping. GPU command execution remains unproven.
 
 ## FP6 HFI service-message milestone (0161, 2026-10-22)
 

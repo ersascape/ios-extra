@@ -48,9 +48,15 @@ GMU DMA, GPU command, rendering or Metal work has succeeded yet.
   GPU-access refusal. Arm64 object compile against buildtree `39775328855`
   reports 0/1 failures. CI run `39786196862` failed because Apple Clang rejects
   the original reply label followed by a declaration; the response array was
-  moved ahead of the label. Targeted checks pass after the fix; retry CI is
-  pending. The actual phone descriptor and firmware acceptance are unknown;
-  no phone test exists. User is testing Android, so defer device commands.
+  moved ahead of the label. Corrected commit `4a14fe7` passed CI
+  `39787950216`; kernel SHA-256 is
+  `6d35acc9772c0b0cc740d409505016fd23c5267d230a923a830ca15561678934`.
+  Locally packaged image
+  `/tmp/ios-extra-run-39787950216/package/fp6-gmu-hfi-memalloc-0162.img` has
+  SHA-256 `30fc97daccfa67230e2f2bedac463591b2f310e285b9ac0c2d1fbc1730ed502d`
+  and passed header-v2 round-trip. The actual phone descriptor and firmware
+  acceptance are unknown; no phone test exists. User is testing Android, so
+  defer device commands.
 - Patch 0159 adds a bounded HFI `CORE_FW_START` request/ACK exchange based on
   Fairphone Linux Gen8. CI `39766804611` passed and the packaged image booted
   once. The phone reported `irq=0x4 fw=0x900` after the request; bit 2 is DBGQ
@@ -113,9 +119,8 @@ for that fixed request; the host test rejects zero-width SH0 while allowing fixe
 ACV. Patch 0158 is validated by CI and on hardware. Do not relax fail-closed
 behavior or guess a TCS vote.
 
-Next: finish review and commit 0162, then run one CI build and package. Wait for
-the user's Android work before any device test. Once the phone can be tested,
-capture the real MEM_ALLOC descriptor and determine whether this GMU-only subset
-is sufficient; widen it only for observed request types and flags. Then continue
-to a bounded GPU memory write/readback. Rendering and NativeMetal integration
-remain later milestones.
+Next: when the user finishes Android testing, use the packaged 0162 image for
+one bounded phone observation. Capture the real MEM_ALLOC descriptor and
+determine whether this GMU-only subset is sufficient; widen it only for observed
+request types and flags. Then continue to a bounded GPU memory write/readback.
+Rendering and NativeMetal integration remain later milestones.

@@ -21,7 +21,13 @@
   declaration immediately after the `reply:` label. The response array was
   moved to the function's initial declarations. Normal and ASan/UBSan host
   tests pass again and arm64 object compile reports `0 of 1 files failed` after
-  the fix; retry CI is pending. No hardware test has been made, and phone
+  the fix. Corrected commit `4a14fe7` passed CI `39787950216`; kernel SHA256
+  is `6d35acc9772c0b0cc740d409505016fd23c5267d230a923a830ca15561678934`.
+  CI packaging skipped because `FP6_STOCK_DTB_URL` is unset. The kernel was
+  locally packaged with the verified product ADT and stock Volcano DTB at
+  `/tmp/ios-extra-run-39787950216/package/fp6-gmu-hfi-memalloc-0162.img`,
+  SHA256 `30fc97daccfa67230e2f2bedac463591b2f310e285b9ac0c2d1fbc1730ed502d`;
+  header-v2 round-trip passed. No hardware test has been made, and phone
   commands are deferred while the user is testing Android. It does not
   demonstrate GPU DMA, command execution, rendering, or Metal.
 
