@@ -1,5 +1,24 @@
 # ios-extra — current state
 
+## FP6 Linux cmd-db lookup phone retest (2026-10-22)
+
+- Patch 0156 commit `8c8c00233ce086caf4ef840f02948d8e9520153c` passed CI
+  `39758346968`; kernel SHA256
+  `72a9a9d0166fd390caf96beeec39d4e08671f3285e18acadbbb58b0229cd5683`.
+  The temporary image package used the verified ADT and Volcano DTB, header-v2
+  round-trip passed, and SHA256 is
+  `1cf437c943cb94edbaaa5e0a0f6e62709f57c2d61bab4f9e3a2e2065c55f97fa`.
+- The `fastboot boot` USB capture has 92 packets. Log
+  `/tmp/ios-extra-run-39758346968/logs/phone-0156-cmdb-linux-lookup.txt`, SHA256
+  `b40b04abf1a055af6b0906434b68b1550f1978b2b6914edbd1f67fc9621a3e84`; pcap
+  SHA256 `2d44cac32e7e86131ea4fea5ac735d1b4510278acc1866b6229bc838d237e0e4`.
+- Mirroring Linux's ordered name search did not resolve ACV: the log still reports
+  missing ACV metadata. CM3 remains held in reset and no TCS vote was issued.
+  Candidate patch 0157 adds bounded read-only header summaries and ACV/A-name
+  entry/aux diagnostics only when metadata lookup fails; it does not relax the
+  guard. Its ASan/UBSan host test checks that missing ACV cannot send a vote.
+  Patch 0157 is not built or phone-tested yet.
+
 ## FP6 BCM address-ID correction phone result (2026-10-22)
 
 - Patch 0155 commit `8462f999359f501ec523daaf1852693e3f384db6` passed CI run

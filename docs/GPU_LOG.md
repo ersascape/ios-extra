@@ -1,5 +1,20 @@
 # GPU bring-up log (chronological, newest first)
 
+## FP6 patch 0156 Linux cmd-db lookup retest (CI + phone)
+
+- CI `39758346968` passed for commit `8c8c00233ce086caf4ef840f02948d8e9520153c`;
+  kernel SHA256 `72a9a9d0166fd390caf96beeec39d4e08671f3285e18acadbbb58b0229cd5683`.
+  Locally packaged image SHA256
+  `1cf437c943cb94edbaaa5e0a0f6e62709f57c2d61bab4f9e3a2e2065c55f97fa`.
+- One temporary boot captured 92 UDP packets. Log SHA256
+  `b40b04abf1a055af6b0906434b68b1550f1978b2b6914edbd1f67fc9621a3e84`;
+  pcap SHA256 `2d44cac32e7e86131ea4fea5ac735d1b4510278acc1866b6229bc838d237e0e4`.
+- Linux-style scan of all populated cmd-db slave headers still fails on ACV.
+  The fail-closed path sends no vote and keeps CM3 reset. Candidate patch 0157
+  adds bounded read-only header and ACV/A-name record/aux diagnostics on lookup
+  failure, plus a host assertion that missing ACV never submits an RSC command.
+  ASan/UBSan passes; CI/phone validation pending.
+
 ## FP6 patch 0155 BCM address-ID correction (CI + phone)
 
 - Commit `8462f999359f501ec523daaf1852693e3f384db6` passed CI `39755620038`;

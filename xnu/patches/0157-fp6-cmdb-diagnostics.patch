@@ -1,0 +1,60 @@
+# FP6 bounded cmd-db diagnostics on missing BCM metadata (0157)
+diff --git a/bsd/dev/sweet_gpu.c b/bsd/dev/sweet_gpu.c
+--- a/bsd/dev/sweet_gpu.c
++++ b/bsd/dev/sweet_gpu.c
+@@ -3126,6 +3126,47 @@
+ 	uint8_t vcd, slave_id;
+ };
+ 
++static void
++fp6_cmd_db_dump_name(vm_offset_t db, uint32_t wanted)
++{
++	if (fp6_smmu_read32(db, 4) != 0x0c0330dbu) {
++		printf("QCOM GMU: cmd-db diagnostic invalid magic\n");
++		return;
++	}
++	for (unsigned h = 8, slot = 0; h < 136; h += 16, slot++) {
++		uint32_t a = fp6_smmu_read32(db, h);
++		unsigned sid = a & 0xffffu;
++		if (!sid) break;
++		uint32_t b = fp6_smmu_read32(db, h + 4);
++		unsigned entries = 144u + (a >> 16);
++		unsigned aux = 144u + (b & 0xffffu);
++		unsigned count = b >> 16;
++		printf("QCOM GMU: cmd-db header slot=%u sid=%u count=%u entries=0x%x aux=0x%x\n",
++		    slot, sid, count, entries, aux);
++		if (entries > 0x20000u || count > (0x20000u - entries) / 24u || aux > 0x20000u)
++			continue;
++		for (unsigned n = 0; n < count; n++) {
++			unsigned e = entries + n * 24u;
++			uint32_t id0 = fp6_smmu_read32(db, e);
++			if (id0 != wanted && (id0 & 0xffu) != 'A' && (id0 & 0xffu) != 'a')
++				continue;
++			uint32_t id1 = fp6_smmu_read32(db, e + 4);
++			uint32_t tail = fp6_smmu_read32(db, e + 20);
++			unsigned len = tail & 0xffffu;
++			unsigned off = aux + (tail >> 16);
++			uint32_t addr = fp6_smmu_read32(db, e + 16);
++			uint32_t unit = 0, fields = 0;
++			if (len >= 8 && off <= 0x20000u && len <= 0x20000u - off) {
++				unit = fp6_smmu_read32(db, off);
++				fields = fp6_smmu_read32(db, off + 4);
++			}
++			printf("QCOM GMU: cmd-db candidate sid=%u id=%08x:%08x addr=%08x len=%u aux=0x%x unit=%u width=%u vcd=%u\n",
++			    sid, id0, id1, addr, len, off, unit, fields & 0xffffu,
++			    (fields >> 16) & 0xffu);
++		}
++	}
++}
++
+ static int
+ fp6_cmd_db_bcm(vm_offset_t db, uint32_t name0, struct fp6_bcm_meta *meta)
+ {
+@@ -3188,6 +3229,7 @@
+ 	for (unsigned i = 0; i < sizeof(req) / sizeof(req[0]); i++) {
+ 		if (!fp6_cmd_db_bcm(db, req[i].name0, &m[i])) {
+ 			printf("QCOM GMU: bootstrap BCM metadata missing name=%s\n", req[i].name);
++			fp6_cmd_db_dump_name(db, req[i].name0);
+ 			return 0;
+ 		}
+ 		if (((m[i].addr >> 16) & 0xfu) != m[i].slave_id ||

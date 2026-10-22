@@ -33,41 +33,38 @@ GMU DMA, GPU command, rendering or Metal work has succeeded yet.
   completion and fail-closed reset behavior. Patch 0155 corrects the BCM address
   ID check. On hardware, SH0/MC0 metadata passes but ACV is not found. No vote
   command was issued in that run.
-- Candidate patch 0156 mirrors Linux `cmd_db_get_header()` by scanning populated
-  slave headers in order and tracking the selected header ID. It requires SH0/MC0
-  to resolve as BCM ID 5 and validates address/header consistency and auxiliary
-  data. Host fixture places ACV in the following ARC header. ASan/UBSan passes;
-  patch dry-run passes against the exact CI 39755620038 buildtree. Patch 0156 is
-  not built or phone-tested yet.
+- Patch 0156 mirrored Linux `cmd_db_get_header()` but the 39758346968 phone run
+  still reports ACV missing. Candidate patch 0157 adds bounded read-only header
+  summaries and ACV/A-name entry and aux diagnostics on lookup failure. The
+  ASan/UBSan host test verifies a missing ACV cannot submit an RSC vote. Patch
+  0157 is not built or phone-tested yet.
 
 ## Latest build and phone evidence
 
-- CI `39755620038`, commit `8462f999359f501ec523daaf1852693e3f384db6`, passed
+- CI `39758346968`, commit `8c8c00233ce086caf4ef840f02948d8e9520153c`, passed
   the XNU build and FP6 boot job. CI packaging was skipped because
-  `FP6_STOCK_DTB_URL` is unset. Kernel SHA256 is recorded above.
+  `FP6_STOCK_DTB_URL` is unset. Kernel SHA256
+  `72a9a9d0166fd390caf96beeec39d4e08671f3285e18acadbbb58b0229cd5683`.
 - Locally packaged with verified product ADT and stock Volcano DTB. Header-v2
   round-trip passed. Image:
-  `/tmp/ios-extra-run-39755620038/package/fp6-gmu-bcm-address-id.img`, SHA256
-  `0d4ff5ab9ee7aef5a1139841bcf6a909ed20d0be7ac73c65b43cf7899bbbf24a`.
+  `/tmp/ios-extra-run-39758346968/package/fp6-gmu-cmdb-linux-lookup.img`, SHA256
+  `1cf437c943cb94edbaaa5e0a0f6e62709f57c2d61bab4f9e3a2e2065c55f97fa`.
 - One temporary boot reached USB ECM and captured 93 UDP packets. Decoded log
-  `/tmp/ios-extra-run-39755620038/logs/phone-0155-bcm-address-id.txt`, SHA256
-  `6a7bb87ec85d75558f95e9b1e81e6ec5d75e13657054ce097c0ed47a56e7ca0e`; pcap
-  SHA256 `d437f9b66424434075057c7951f4fa7a40967c6f57f2f1e9e78d3d99b72b2ea7`.
+  `/tmp/ios-extra-run-39758346968/logs/phone-0156-cmdb-linux-lookup.txt`, SHA256
+  `b40b04abf1a055af6b0906434b68b1550f1978b2b6914edbd1f67fc9621a3e84`; pcap
+  SHA256 `2d44cac32e7e86131ea4fea5ac735d1b4510278acc1866b6229bc838d237e0e4`.
 - SMMU walk, floors, clocks, timer, persistent-page checks, and firmware upload
-  succeeded as in prior runs. The log then reports missing ACV metadata and
-  stops before CM3 release. Thus this boot did not execute GMU firmware or test
-  HFI/GPU DMA. The optional SCM `GPU_INIT_CX_REGS` service remains unavailable.
+  succeeded as in prior runs. Linux-style cmd-db lookup still reports missing
+  ACV metadata and stops before CM3 release. Thus this boot did not execute GMU
+  firmware or test HFI/GPU DMA. Optional SCM `GPU_INIT_CX_REGS` remains unavailable.
 
 ## Next debugging step
 
-Patch 0155 corrected post-lookup address validation; the phone shows SH0/MC0
-pass and ACV missing. Linux `cmd_db_get_header()` searches populated slave
-headers in order, but the old parser filtered to ID 5. Candidate patch 0156 now
-mirrors Linux name lookup, records the selected header ID, requires SH0/MC0 to
-be BCM ID 5, and validates address/header consistency and aux data. Its host
-fixture places ACV in ARC header 3; ASan/UBSan passes and the patch dry-runs on
-CI buildtree `39755620038`. Patch 0156 is not yet built or phone-tested. Do not
-relax fail-closed behavior or send a guessed TCS vote.
+Patch 0156 mirrored Linux's ordered cmd-db name search but the phone still
+reports ACV missing. Candidate patch 0157 adds bounded read-only summaries of
+cmd-db headers and ACV/A-name entry/aux data on lookup failure. Its host test
+checks missing ACV cannot submit an RSC command. Patch 0157 needs CI and phone
+validation. Do not relax fail-closed behavior or guess a TCS vote.
 
 Patch 0156 has passed host/source checks. Commit and push this focused candidate,
 wait for CI, package with the known local ADT/DTB, then perform one temporary boot
