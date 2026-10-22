@@ -51,8 +51,23 @@
   CI run `39821513140` (build and FP6 packaging jobs succeeded). The new
   header-v2 image is `/tmp/ios-extra-run-39821513140/package/fp6-gmu-hfi-ack-0166.img`,
   SHA-256 `4d06ee27cd0c25778841923c04c2e61e5aaddb0421cd0e5de794e2cfb2d33ee7`.
-  Its USB capture authorization timed out; the test helper refused to issue
-  `fastboot boot`, so patch 0166 has no phone result yet.
+  Rootless USB capture uses the existing autoconnecting `fp6-usb-log` profile
+  and a bounded unprivileged UDP listener. After fixing the interface rename
+  race, the 0166 RAM-disk image was booted once with the user-mode helper; fastboot
+  reported success and the phone answered ping. Captured phone log:
+  `/tmp/ios-extra-run-39821513140/logs/phone-0166-hfi-request-id-ack-usercap2.txt`,
+  SHA-256 `e8b772c189f5815f5cb1c42d95afc49411870ca600956e3355b9688e2886bc91`
+  (raw UDP capture has the same hash at `.udp`). All six request-ID ACKs passed:
+  GPU perf TABLE, DDR/CNOC TABLE, three configuration requests, and preemption;
+  DDR bootstrap vote was acknowledged, firmware remained `FW_INIT_RESULT=0x100`
+  and `HFI_CTRL_STATUS=1`. The firmware then requested global GPU memory
+  (`kind=2`, handle 2, VA `0x1ff8000000000`, PA `0x903e5c000`). Startup stopped
+  because CB0 or the selected fault-routed SID0 group failed the driver's
+  cleanliness check. No GPU memory map, DMA, command execution, draw, or Metal
+  was verified. Exact HFI lines and host setup are in `docs/GPU_LOG.md`.
+  The next source step is to log each CB0/group field at that refusal and safely
+  handle a stale W1C FSR only if CB0 is disabled and every translation control
+  is otherwise clean; then rebuild once and repeat the bounded boot.
 
 ## GMU cacheability source check (2026-10-22)
 

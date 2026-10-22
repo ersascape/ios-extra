@@ -40,8 +40,9 @@ device proof.
 
 ## Active FP6 GPU state (2026-10-22)
 
-Patch 0165 is the current source candidate; it extends the 0164 GPU-access
-allocation path through post-`CORE_FW_START` HFI startup. Patch 0164 commit
+Patch 0166 is the current built candidate; it extends the 0164 GPU-access
+allocation path through post-`CORE_FW_START` HFI startup and accepts both
+request-ID and generic-ID ACKs. Patch 0164 commit
 `cacda42725fd0945a6a8df96bf28e27b8d8a2868` passed CI run `39807392802`. Kernel SHA256
 `34e4835aa437df8ecd101fe0b98aba7b18e5a80094ab71ad860976dec0cc7539`.
 A local header-v2 image with the workflow RAM-disk init, matching CI ADT and
@@ -76,10 +77,18 @@ validation. Commit `af030f8aabc5eeff3f1e0da673b0579ab70976f3` passed CI run
 `39821513140`. Image
 `/tmp/ios-extra-run-39821513140/package/fp6-gmu-hfi-ack-0166.img`, SHA-256
 `4d06ee27cd0c25778841923c04c2e61e5aaddb0421cd0e5de794e2cfb2d33ee7`, uses the
-verified DTB, ADT and the bounded HFI probe args. Its follow-up test helper
-timed out at the one `pkexec` USB-capture authorization and refused to boot;
-there is no 0166 phone log. Do not rerun it until the user can complete the
-authorization prompt. The decoded 0165 log and pcap are under
+verified DTB, ADT and the bounded HFI probe args. The user-mode USB listener
+captured one 0166 boot at
+`/tmp/ios-extra-run-39821513140/logs/phone-0166-hfi-request-id-ack-usercap2.txt`
+(SHA-256 `e8b772c189f5815f5cb1c42d95afc49411870ca600956e3355b9688e2886bc91`).
+It measured successful ACKs for GPU perf TABLE, DDR/CNOC TABLE, configuration,
+and preemption, plus an acknowledged DDR bootstrap vote. FW_INIT_RESULT remained
+`0x100` and HFI_CTRL_STATUS was `1`. The first GPU global allocation request
+arrived, but CB0/fault-routed SID0 cleanliness check refused mapping; firmware
+was reset cleanly. No DMA, GPU command, draw or Metal result. Next: instrument
+the individual CB0 and SID0 fields; if only a stale W1C FSR is set, clear it
+only with SCTLR disabled and all translation controls otherwise clean. Then
+rebuild and repeat one bounded boot. The decoded 0165 log and pcap are under
 `/tmp/ios-extra-run-39814973566/logs/phone-0165-gmu-hfi-start-resume.*`.
 The user explicitly requested flashing the Tegu rootfs from
 `/home/ersa/Dev/ios-extra/research/fp6-rootfs-tegu-20261021/` to the existing
@@ -87,9 +96,7 @@ The user explicitly requested flashing the Tegu rootfs from
 `a1c6f7da616520841c4d56ac2a147940c5c93a0b4406cb1c9ae6832d64338f7c`) was
 written successfully in 16 fastboot chunks; transcript is
 `/tmp/fastboot-flash-fp6-rootfs-20261022.log`. This overwrote prior userdata.
-Do not repeat the flash. For the next phone test, use the already packaged 0166
-image and USB helper after the user can complete the `pkexec` authorization.
-Do not touch other partitions or use `fastboot getvar`.
+Do not repeat the flash. Do not touch other partitions or use `fastboot getvar`.
 
 Earlier phone evidence remains: patch 0159's CORE_FW_START path asserted with
 `irq=0x4 fw=0x900` and the bounded path verified CM3 reset. The 0165 phone test

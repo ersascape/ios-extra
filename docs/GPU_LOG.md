@@ -10,11 +10,25 @@
   RAM-disk image uses the same ADT, verified Volcano DTB and command line as
   0165: `/tmp/ios-extra-run-39821513140/package/fp6-gmu-hfi-ack-0166.img`,
   SHA-256 `4d06ee27cd0c25778841923c04c2e61e5aaddb0421cd0e5de794e2cfb2d33ee7`.
-- The follow-up phone boot did not occur. `gpu-phone-test.py` timed out waiting
-  for the one `pkexec` USB capture authorization and explicitly refused to run
-  `fastboot boot`. Therefore 0166's real ACK payload validation is unmeasured;
-  the 0165 log remains the latest phone evidence. No GPU command, DMA readback,
-  draw, or Metal result is available.
+- Phone test used the bounded user-mode ECM logger, avoiding the pkexec timeout.
+  It booted successfully, answered ping, and captured
+  `/tmp/ios-extra-run-39821513140/logs/phone-0166-hfi-request-id-ack-usercap2.txt`
+  (SHA-256 `e8b772c189f5815f5cb1c42d95afc49411870ca600956e3355b9688e2886bc91`).
+  Six request-ID ACKs passed: GPU perf TABLE, DDR/CNOC TABLE, config requests
+  IDs 11/11/14, and preemption ID 11; the initial DDR BCM vote was acknowledged.
+  Firmware state was `FW_INIT_RESULT=0x100`, `HFI_CTRL_STATUS=1`; version was
+  `0x20070001`. Context-queue capability was not queried because the DTCM HFI
+  version read as zero in this boot.
+- The first GPU global allocation event reached XNU with kind 2, handle 2,
+  VA `0x1ff8000000000`, PA `0x903e5c000`. `fp6_gpu_global_context_enable()`
+  refused before writing because CB0 or its selected fault-routed SID0 group
+  was not clean. The earlier inventory counted `0/22` banks active, but did not
+  include CB0 FSR or TTBR1 in its activity predicate; therefore the exact field
+  is unknown from this log. The bounded probe then reset CM3 and verified reset.
+  This is the new blocker; no global map, DMA, GPU command, draw, or Metal result
+  was reached. Next change should print all CB0 fields and selected group values,
+  then permit clearing only a stale W1C FSR if SCTLR is disabled and all mapping
+  controls are zero. Keep refusing any active/unknown translation context.
 
 ## FP6 post-CORE_FW_START HFI candidate 0165 (2026-10-22)
 

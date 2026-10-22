@@ -1,7 +1,8 @@
 #!/usr/bin/env python3
-"""Extract the phone's UDP kernel log (192.168.7.2 -> port 5140) from a pcap.
+"""Extract the phone's UDP kernel log (192.168.7.2 -> port 5140) from a pcap,
+or from a user-mode capture's concatenated UDP payload file.
 
-  gpu-decode-pcap.py CAPTURE.pcap [--out LOG.txt] [--show REGEX] [--all]
+  gpu-decode-pcap.py CAPTURE [--raw-udp] [--out LOG.txt] [--show REGEX] [--all]
 
 Writes the reassembled text log next to the capture (or --out) and prints the
 interesting lines: `SWEET GPU:` lines (deduplicated unless --all; the USB logger
@@ -59,11 +60,14 @@ def main():
     parser = argparse.ArgumentParser(description=__doc__,
                                      formatter_class=argparse.RawDescriptionHelpFormatter)
     parser.add_argument('pcap', type=Path)
+    parser.add_argument('--raw-udp', action='store_true',
+                        help='input is concatenated UDP payloads, not a pcap')
     parser.add_argument('--out', type=Path)
     parser.add_argument('--show', help='extra regex of lines to print')
     parser.add_argument('--all', action='store_true', help='do not deduplicate printed lines')
     args = parser.parse_args()
-    parts = list(udp_payloads(args.pcap.read_bytes()))
+    data = args.pcap.read_bytes()
+    parts = [data] if args.raw_udp else list(udp_payloads(data))
     out = args.out or args.pcap.with_suffix('.txt')
     out.write_bytes(b''.join(parts))
     print('captured UDP packets:', len(parts), 'log bytes:', out.stat().st_size, file=sys.stderr)
