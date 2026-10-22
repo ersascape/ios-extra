@@ -26,6 +26,13 @@
   Args include `fp6gmunopreempt=1`. The phone check returned zero devices in
   fastboot; no 0171 phone result yet. This image is still an HFI probe; GPU ring
   initialization/execution remains later work.
+- Linux Gen8.3 source inspection confirms `adreno_get_firmware()` strips the
+  first four bytes of `gen80300_sqe.fw`, stages the remainder in a GPU-readable
+  allocation, then programs the SQE instruction base and starts SQE before CP
+  initialization. The pinned raw artifact is 84,564 bytes, SHA-256
+  `38fd00147e8b752dd29c53a0badac8f94b1dbd89dc06f5b1c372d3428cd1b906`, kept in
+  `/tmp` only. This is not a phone result. `fastboot devices` still reports
+  zero devices, so the packaged 0171 probe remains pending.
 
 ## FP6 CB0 takeover and HFI allocation boundary 0170 (2026-10-23)
 

@@ -241,6 +241,26 @@ prove correct Gen8 machine code, resource ABI, full AIR coverage or execution.
 The build script explicitly records host-only output and no generated ISA
 execution.
 
+## Gen8.3 SQE firmware staging details (source review, 2026-10-23)
+
+Fairphone's `adreno_get_firmware()` reads the raw firmware with
+`request_firmware()`, allocates a GPU-readable global buffer of `fw->size - 4`,
+copies bytes starting at offset 4, and records the microcode version from the
+four-word header. `gen80300_sqe.fw` is selected by the A810-compatible
+`qcom,adreno-gpu-gen8-3-0` catalog entry. The SQE payload must therefore be
+staged without its first four header bytes; the complete file is not the
+instruction payload. Linux then programs `GEN8_CP_SQE_INSTR_BASE_LO/HI`, sets
+`GEN8_CP_SQE_CNTL` to start the engine, and sends CP initialization through the
+ring. The hardware-scheduler path also programs the SQE base before scheduler
+boot. A future XNU implementation needs a GPU-visible, correctly mapped payload
+allocation and explicit cache visibility before those register writes; merely
+including the firmware blob or writing the base registers is insufficient.
+
+The pinned FairBlobs raw artifact inspected locally was 84,564 bytes, SHA-256
+`38fd00147e8b752dd29c53a0badac8f94b1dbd89dc06f5b1c372d3428cd1b906`; it stays
+in `/tmp` and is not committed. This is source/artifact inspection only: the
+phone has not run SQE, and GPU execution remains unproven.
+
 The existing Darwin patch uses NativeAdreno ABI version 1. Direct discovery
 uses `NativeAdrenoGpuPublished`; its system-plugin route defaults to
 `IOAcceleratorES` open type `0x4147` and a tunnel selector. These publication and

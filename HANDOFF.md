@@ -78,6 +78,13 @@ reaches HFI START ACK. Do not reboot the phone unannounced. Check
 the helper's single temporary boot. Continue using the ramdisk and `/tmp` logs.
 No flash, `fastboot getvar`, or EDL commands.
 
+The 2026-10-23 Linux SQE source review is recorded in
+`docs/FP6_ADRENO_METAL_AUDIT.md`: KGSL strips the first four bytes of the raw
+`gen80300_sqe.fw` header, copies the remaining payload into GPU-readable memory,
+programs the SQE base, starts SQE, then sends CP init. The local pinned artifact
+is only in `/tmp`; do not add it to Git. This is a source finding, not a measured
+GPU start.
+
 Historical patch-by-patch evidence and earlier image identities are in
 `NOTES.md` and `docs/GPU_LOG.md`. The Linux bring-up/source audit is in
 `docs/FP6_ADRENO_METAL_AUDIT.md`; `docs/GPU_GMU_BOOT.md` is A618-specific.
