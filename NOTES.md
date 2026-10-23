@@ -1,5 +1,25 @@
 # ios-extra — current state
 
+## FP6 display level 3 and brightness sources (2026-10-23)
+
+Source/host only for level 3; no phone result yet. Patch 0210 adds `fp6dpusnap=3`:
+the level-2 reads, a one-time dump of pingpong 0 (`+0x6a000`, offsets from mainline
+`dpu_hw_pingpong.c`: TEAR_CHECK_EN, SYNC_*, RD/WR_PTR_IRQ, LINE_COUNT, AUTOREFRESH,
+DSC_MODE), then eight samples 250 ms apart of INTF_1 `FRAME_COUNT`/`LINE_COUNT`, PP0
+line counters and CTL0 `START`/`FLUSH`, to see whether the display is still being driven
+after XNU takes over. Reads only; the host test asserts no register writes anywhere in
+the probe. Host tests and arm64 compile pass; CI and phone pending.
+
+Brightness (nothing implemented yet): the local UniXNU and UniXNU-sheng sources have no
+brightness or backlight code (`drivers/NativeMobileDisplay` is a firmware-framebuffer
+presenter whose README says "Display vblank is not implemented"; the only backlight
+mention is a Linux reference-boot script for the sheng LCD). The FP6 panel dtsi shows
+brightness as the standard DCS `WRDISBV` (`0x51`, 12-bit) written over DSI: the init
+sequences contain `51 0D BB`, `51 0F FE` and `51 09 D9` (3515, 4094, 2521), and
+`qcom,mdss-dsi-panel-peak-brightness = <14000000>`. That is a panel write; per the
+display safety rule it needs explicit user approval for the specific step and a
+conservative cap.
+
 ## Display safety constraint and panel confirmation (2026-10-23)
 
 The user confirmed the panel is the BOE NT37705 (the `dsi-panel-nt37705-boe-amoled-cmd.dtsi`

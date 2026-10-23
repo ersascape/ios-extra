@@ -1,0 +1,39 @@
+diff --git a/bsd/dev/sweet_gpu.c b/bsd/dev/sweet_gpu.c
+--- a/bsd/dev/sweet_gpu.c
++++ b/bsd/dev/sweet_gpu.c
+@@ -5898,6 +5898,16 @@
+ 	{ "PROG_FETCH", 0x170 }, { "MUX", 0x25c }, { "STATUS", 0x26c },
+ };
+ 
++/* Level 3: pingpong 0 (mdss_mdp pp-off first entry +0x6a000, the primary LM's TE/tear-check
++ * block) from mainline dpu_hw_pingpong.c. Read-only. */
++static const struct fp6_dpu_reg fp6_dpu_pp_regs[] = {
++	{ "TEAR_CHECK_EN", 0x000 }, { "SYNC_VSYNC", 0x004 }, { "SYNC_HEIGHT", 0x008 },
++	{ "SYNC_WRCOUNT", 0x00c }, { "VSYNC_INIT", 0x010 }, { "INT_COUNT", 0x014 },
++	{ "SYNC_THRESH", 0x018 }, { "START_POS", 0x01c }, { "RD_PTR_IRQ", 0x020 },
++	{ "WR_PTR_IRQ", 0x024 }, { "OUT_LINE_COUNT", 0x028 }, { "LINE_COUNT", 0x02c },
++	{ "AUTOREFRESH", 0x030 }, { "DSC_MODE", 0x0a0 },
++};
++
+ static void
+ fp6_dpu_dump(const char *block, vm_offset_t base, uint32_t block_off,
+ 		const struct fp6_dpu_reg *regs, unsigned count)
+@@ -5948,6 +5958,18 @@
+ 		fp6_dpu_dump(sspp_name[i], mdp, sspp_off[i], fp6_dpu_sspp_regs,
+ 		    sizeof(fp6_dpu_sspp_regs) / sizeof(fp6_dpu_sspp_regs[0]));
+ 	fp6_dpu_dump("INTF1(DSI)", mdp, 0x36000u, fp6_dpu_intf_regs, sizeof(fp6_dpu_intf_regs) / sizeof(fp6_dpu_intf_regs[0]));
++	if (level >= 3) {
++		fp6_dpu_dump("PP0", mdp, 0x6a000u, fp6_dpu_pp_regs, sizeof(fp6_dpu_pp_regs) / sizeof(fp6_dpu_pp_regs[0]));
++		/* Is the display still being driven? Eight samples 250 ms apart of the INTF_1 frame and
++		 * line counters, the pingpong line counters and CTL0 START/FLUSH. Reads only. */
++		for (unsigned i = 0; i < 8u; i++) {
++			printf("QCOM DPU: t=%ums INTF1 FRAME_COUNT=0x%08x LINE_COUNT=0x%08x PP0 LINE_COUNT=0x%08x OUT_LINE_COUNT=0x%08x CTL0 START=0x%08x FLUSH=0x%08x\n",
++			    i * 250u, fp6_smmu_read32(mdp, 0x36000u + 0x0acu), fp6_smmu_read32(mdp, 0x36000u + 0x0b0u),
++			    fp6_smmu_read32(mdp, 0x6a000u + 0x02cu), fp6_smmu_read32(mdp, 0x6a000u + 0x028u),
++			    fp6_smmu_read32(mdp, 0x16000u + 0x01cu), fp6_smmu_read32(mdp, 0x16000u + 0x018u));
++			if (i + 1u < 8u) delay(250000);
++		}
++	}
+ 	printf("QCOM DPU: snapshot complete (no writes)\n");
+ }
+ 

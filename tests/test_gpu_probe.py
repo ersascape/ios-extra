@@ -90,6 +90,8 @@ class GPUProbeTests(unittest.TestCase):
             dpu = source[dpu_start:source.index('fp6_smmu_inventory(void)\n{', dpu_start)]
             self.assertNotRegex(dpu, r'fp6_smmu_write(32|64)\(',
                                 'the display snapshot must not write any register')
+            self.assertIn('if (level >= 3)', dpu, 'refresh sampling is its own opt-in level')
+            self.assertNotIn('smmu_write', dpu, 'the display probe must stay read-only at every level')
             self.assertLess(dpu.index('GDSCR'), dpu.index('FP6_MDSS_PA, FP6_MDSS_SIZE'),
                             'the MDSS power domain must be checked before the MDP block is mapped')
             self.assertIn('PE_parse_boot_argn("fp6gpuscanout"', source,
