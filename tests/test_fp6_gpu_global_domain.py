@@ -53,12 +53,23 @@ int main(void) {
      FP6_GPU_GLOBAL_GFX_WRITE)==0); /* idempotent descriptor replay */
  assert(fp6_gpu_global_map(d,edge+0x1000,0x1000,0x904000000ULL,0));
  assert(fp6_gpu_global_walk(d,edge+0x1000)==0x903001000ULL);
+ assert((pte[511] & (3ULL << 53)) == (3ULL << 53)); /* data remains XN */
+ uint64_t exec_va;
+ assert(!fp6_gpu_global_va(d,0x1000,12,&exec_va,&rounded));
+ assert(!fp6_gpu_global_map(d,exec_va,0x1000,0x906000000ULL,
+     FP6_GPU_GLOBAL_GFX_PRIV | FP6_GPU_GLOBAL_GFX_EXEC));
+ uint64_t exec_canonical=fp6_gpu_global_canonical(exec_va);
+ unsigned exec_l3=(unsigned)((exec_canonical >> 21) & 511u);
+ unsigned exec_page=(unsigned)((exec_canonical >> 12) & 511u);
+ uint64_t *exec_ptes=(uint64_t *)(void *)d->l3[exec_l3].va;
+ assert((exec_ptes[exec_page] & (3ULL << 53)) == 0);
+ assert(fp6_gpu_global_walk(d,exec_va)==0x906000000ULL);
  assert(fp6_gpu_global_walk(d,FP6_GPU_GLOBAL_BASE+FP6_GPU_GLOBAL_SIZE)==~0ULL);
  assert(!fp6_gpu_global_publish(d) && d->frozen && npublish==13);
  /* HFI MEM_ALLOC is serviced after initial publication while firmware waits.
   * Appending a new mapping must preserve existing PTEs and permit republish. */
  assert(!fp6_gpu_global_va(d,0x1000,12,&va0,&rounded));
- assert(va0==FP6_GPU_GLOBAL_BASE+0x13000 && rounded==0x1000);
+ assert(va0==FP6_GPU_GLOBAL_BASE+0x14000 && rounded==0x1000);
  assert(!fp6_gpu_global_map(d,va0,0x1000,0x905000000ULL,0));
  assert(fp6_gpu_global_walk(d,va0)==0x905000000ULL);
  assert(!fp6_gpu_global_publish(d) && d->frozen && npublish==26);
@@ -69,10 +80,18 @@ int main(void) {
 with tempfile.TemporaryDirectory() as td:
     work = pathlib.Path(td)
     (work / "gpu_domain.h").write_text(header)
+    (work / "bsd/dev").mkdir(parents=True)
+    (work / "bsd/dev/fp6_gpu_global_domain.h").write_text(header)
+    subprocess.run([
+        "git", "apply", "--include=bsd/dev/fp6_gpu_global_domain.h",
+        str(ROOT / "xnu/patches/0185-fp6-sqe-executable-mapping.patch"),
+    ], cwd=work, check=True)
+    header = (work / "bsd/dev/fp6_gpu_global_domain.h").read_text()
+    (work / "gpu_domain.h").write_text(header)
     (work / "test.c").write_text(source)
     subprocess.run([
         "cc", "-std=c11", "-Wall", "-Wextra", "-Werror",
         str(work / "test.c"), "-o", str(work / "test"),
     ], check=True)
     subprocess.run([str(work / "test")], check=True)
-print("PASS: GPU global VA allocation, TTBR1 walk, PTE attributes and publication")
+print("PASS: GPU global VA allocation, TTBR1 walk, data XN and SQE executable PTEs")

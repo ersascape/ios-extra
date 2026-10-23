@@ -106,11 +106,18 @@ S1CBNDX value differs from the CB0 register bank where FSR was sampled; its
 meaning for this stream/context configuration remains to be verified. No
 `CP_MEM_WRITE` was submitted, and there is no GPU write/readback or draw result.
 
-The next diagnostic should capture CBFRSYNRA0 (faulting SID), CB0 SCTLR,
-TTBR0, TCR, CBAR/CBA2R and the walk descriptors for this SQE VA, then check
-the GPU stream-to-context route. Do not yet infer that the absent Linux
-`gen8_start()`/power-up list caused the SMMU fault; that sequence remains a
-candidate once the fetch fault's context and descriptor state are understood.
+Source comparison changes the leading diagnosis: ARM defines FSYNR0.IND as
+instruction rather than data, and Linux defines FSR bit 3 as PF (permission
+fault). The global GPU PTE helper currently sets both PXN and UXN on every
+mapping, including SQE firmware; the other GPU data allocations should remain
+execute-never. Patch 0185 adds an explicit executable permission and applies it
+only to SQE pages. Its host TTBR1 test verifies SQE XN bits clear and data XN
+bits stay set; the full 13-test suite (5 skipped), GPU-probe ASan/UBSan test,
+and local arm64 compile against the 0184 CI buildtree pass. CI and phone
+validation are pending. This is a source-supported fix hypothesis, not yet a
+device-confirmed resolution. If the next phone log still faults, capture
+CBFRSYNRA0, live CB0 registers and the SQE walk descriptors; also resolve the
+reported S1CBNDX=4 / CB0 attribution difference before further startup changes.
 
 ## FP6 GMU OOB ACK result 0179 (2026-10-23)
 

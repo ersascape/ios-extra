@@ -327,6 +327,16 @@ CBFRSYNRA0, CB0 SCTLR/TTBR0/TCR and CBAR/CBA2R, then compare the live stream
 route and SQE page-table descriptors. Do not yet attribute the fault to the
 omitted `gen8_start()` or power-up-list setup. `CP_MEM_WRITE` was refused, and
 there is still no GPU write/readback, draw, or Metal output.
+
+Patch 0185 targets the first testable cause: ARM defines FSYNR0.IND as
+instruction rather than data, while Linux defines FSR bit 3 as a permission
+fault. The GPU global PTE helper sets PXN and UXN on all pages. Patch 0185
+adds an explicit execute flag for SQE firmware pages only; data buffers stay
+execute-never. Host PTE tests and arm64 compilation against the 0184 CI
+buildtree pass. CI and phone validation are pending, so this remains a
+source-supported hypothesis rather than a confirmed fix. If the fault
+persists, inspect CBFRSYNRA0, live CB0 configuration and SQE descriptors.
+
 Even a passing memory word would prove only the first GPU command write, not
 draw/readback or Metal.
 

@@ -95,9 +95,18 @@ registers). The mapped SQE VA therefore is not yet proven usable by the GPU.
 CP memory write remains refused before submission; no GPU write/readback or
 draw has succeeded.
 
-Next diagnostic: snapshot CBFRSYNRA0, CB0 SCTLR/TTBR0/TCR, CBAR/CBA2R and the
-SQE page-table descriptors. Compare the live stream route and context-bank
-selection before changing the Linux `gen8_start()` or power-up-list sequence.
+Source comparison gives a targeted permission hypothesis. ARM defines
+FSYNR0.IND as “Instruction, not Data”; Linux's ARM SMMU v2 register definitions
+place it at bit 6. The same definitions identify FSR bit 3 as PF, a permission
+fault. The SQE address is instruction memory, but the GPU global-domain helper
+currently marks every leaf PXN+UXN (`3 << 53`). Patch 0185 adds an executable
+mapping flag and applies it only to SQE firmware leaves; command, power-up and
+result buffers keep both XN bits. The host domain test now checks these two
+distinct PTE policies. Full suite (13 tests, 5 skipped), GPU-probe ASan/UBSan,
+patch application and local arm64 compilation against the 0184 CI buildtree
+pass. CI and phone validation are pending. This is a reasoned fix hypothesis;
+it is not device-confirmed yet. `S1CBNDX=4` while FSR was read from CB0 and the
+additional UUT bit remain to be explained if the fault persists.
 
 ## FP6 default HFI votes and GPU OOB ACK result 0179 (2026-10-23)
 

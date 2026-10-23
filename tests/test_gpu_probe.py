@@ -42,6 +42,8 @@ class GPUProbeTests(unittest.TestCase):
                           'SQE must be backed pagewise for a contiguous GPU VA')
             self.assertIn('fp6_exec_sqe[i].pa, FP6_HFI_MEMFLAG_GFX_PRIV', source,
                           'each SQE page must be separately published into TTBR1')
+            self.assertIn('FP6_GPU_GLOBAL_GFX_EXEC', source,
+                          'SQE firmware pages must be executable in the GPU SMMU')
             self.assertIn('va != fp6_exec_sqe_va + (uint64_t)i * 4096u', source,
                           'SQE pages must form one contiguous GPU virtual range')
             self.assertLess(
@@ -76,13 +78,18 @@ class GPUProbeTests(unittest.TestCase):
             domain_header = '\n'.join(line[1:] for line in domain_patch.splitlines()
                                        if line.startswith('+') and not line.startswith('+++'))
             patch_0163 = ROOT / 'xnu/patches/0163-fp6-gpu-global-domain.patch'
-            (work / 'fp6_gpu_global_domain.h').write_text(
-                added_header(patch_0163, 'bsd/dev/fp6_gpu_global_domain.h'))
             domain_dir = work / 'bsd/dev'
             domain_dir.mkdir(parents=True, exist_ok=True)
+            (domain_dir / 'fp6_gpu_global_domain.h').write_text(
+                added_header(patch_0163, 'bsd/dev/fp6_gpu_global_domain.h'))
             (domain_dir / 'fp6_gmu_domain.h').write_text(domain_header)
             subprocess.run(['git', 'apply', '--include=bsd/dev/fp6_gmu_domain.h',
                             str(patch_0163)], cwd=work, check=True)
+            subprocess.run(['git', 'apply', '--include=bsd/dev/fp6_gpu_global_domain.h',
+                            str(ROOT / 'xnu/patches/0185-fp6-sqe-executable-mapping.patch')],
+                           cwd=work, check=True)
+            shutil.copyfile(domain_dir / 'fp6_gpu_global_domain.h',
+                            work / 'fp6_gpu_global_domain.h')
             shutil.copyfile(domain_dir / 'fp6_gmu_domain.h', work / 'fp6_gmu_domain.h')
             (work / 'fp6_gmu_fw.h').write_text(
                 'struct fp6_gmu_fw_preallocation { uint32_t address,size,type; };\n'

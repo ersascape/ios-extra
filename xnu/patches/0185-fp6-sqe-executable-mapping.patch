@@ -1,0 +1,36 @@
+--- a/bsd/dev/fp6_gpu_global_domain.h
++++ b/bsd/dev/fp6_gpu_global_domain.h
+@@ -13,6 +13,7 @@
+ #define FP6_GPU_GLOBAL_MAPS       32u
+ #define FP6_GPU_GLOBAL_GFX_PRIV   (1u << 1)
+ #define FP6_GPU_GLOBAL_GFX_WRITE  (1u << 2)
++#define FP6_GPU_GLOBAL_GFX_EXEC   (1u << 3)
+ #define FP6_GPU_GLOBAL_PTE_XN     (3ULL << 53)
+ struct fp6_gpu_global_page { uint8_t *va; uint64_t pa; };
+ struct fp6_gpu_global_ops {
+@@ -144,9 +145,11 @@
+   uint64_t *pte = &((uint64_t *)(void *)d->l3[l2i].va)[l3i];
+   if (*pte) goto fail;
+   /* QCOM ARM64 LPAE S1: default GPU-read-only, unprivileged, outer-shareable,
+-   * access-flagged, non-global and execute-never. */
++   * access-flagged and non-global. Executable mappings are reserved for
++   * firmware instruction memory such as the SQE; all data mappings stay XN. */
+   *pte = (pa + a - address) | 3u | (1ULL << 11) | (1ULL << 10) |
+-      (2ULL << 8) | FP6_GPU_GLOBAL_PTE_XN |
++      (2ULL << 8) |
++      ((flags & FP6_GPU_GLOBAL_GFX_EXEC) ? 0 : FP6_GPU_GLOBAL_PTE_XN) |
+       ((flags & FP6_GPU_GLOBAL_GFX_WRITE) ? 0 : (2ULL << 6)) |
+       ((flags & FP6_GPU_GLOBAL_GFX_PRIV) ? 0 : (1ULL << 6));
+  }
+--- a/bsd/dev/sweet_gpu.c
++++ b/bsd/dev/sweet_gpu.c
+@@ -4308,7 +4308,8 @@
+ 		memcpy(fp6_exec_sqe[i].va, fp6_sqe_fw + offset, bytes);
+ 		(void)fp6_gpu_kernel_publish(NULL, fp6_exec_sqe[i].va, 4096u);
+ 		if (!fp6_gpu_global_map_live(fp6_gpu_smmu_base, va, 4096u,
+-		    fp6_exec_sqe[i].pa, FP6_HFI_MEMFLAG_GFX_PRIV)) {
++		    fp6_exec_sqe[i].pa, FP6_HFI_MEMFLAG_GFX_PRIV |
++		    FP6_GPU_GLOBAL_GFX_EXEC)) {
+ 			printf("QCOM GPU EXEC: SQE SMMU page map failed page=%u VA=0x%llx PA=0x%llx\n",
+ 			    i, (unsigned long long)va, (unsigned long long)fp6_exec_sqe[i].pa);
+ 			return 0;
