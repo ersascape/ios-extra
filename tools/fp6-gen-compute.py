@@ -49,22 +49,24 @@ def find_bo(bos, addr):
     raise SystemExit('no BO holds 0x%x' % addr)
 
 
-def relocs(stream, addr):
-    """(lo_index, hi_index) pairs for every dword equal to addr.
+def pointer_slots(stream, bos):
+    """{address: [(lo_index, hi_index), ...]} for every pointer operand into a BO.
 
-    CP_LOAD_STATE6 stores lo, hi back to back; CP_CONTEXT_REG_BUNCH stores
-    reg, lo, reg+1, hi, so hi sits two dwords after lo.
+    CP_LOAD_STATE6, CP_EVENT_WRITE7 and CP_WAIT_REG_MEM store lo, hi back to
+    back; CP_CONTEXT_REG_BUNCH stores reg, lo, reg+1, hi. Anything else that
+    merely looks like an address (masks, values) is not a pointer slot.
     """
-    out = []
-    for i, w in enumerate(stream):
-        if w != addr:
+    def inside(v):
+        return any(b <= v < b + sz for b, sz, _ in bos)
+
+    out = {}
+    for i, w in enumerate(stream[:-2]):
+        if not inside(w):
             continue
         if stream[i + 1] == 0:
-            out.append((i, i + 1))
-        elif stream[i + 2] == 0 and stream[i + 1] < 0x10000:
-            out.append((i, i + 2))
-        else:
-            raise SystemExit('cannot place high dword for reloc at %d' % i)
+            out.setdefault(w, []).append((i, i + 1))
+        elif i and stream[i - 1] < 0x10000 and stream[i + 1] < 0x10000 and stream[i + 2] == 0:
+            out.setdefault(w, []).append((i, i + 2))
     return out
 
 
@@ -88,24 +90,19 @@ def main():
     start = cmd_addr - base
     stream = words(blob[start:start + cmd_dwords * 4])
 
-    # Shader BO and UAV descriptor BO: the BOs the stream names via LOAD_STATE6.
-    named = {}
-    for b_base, b_size, _ in bos:
-        n = relocs(stream, b_base)
-        if n:
-            named[b_base] = n
-    if len(named) != 3:
-        raise SystemExit('expected shader, UAV descriptor and control BOs, found %s' % sorted(named))
+    named = pointer_slots(stream, bos)
     contents = {a: p for a, _, p in bos}
-    # The descriptor has TYPE=TEX_BUFFER (bits 17..19 == 4) and a nonzero count.
-    uav_addr = next(a for a in named
-                    if (words(contents[a])[1] >> 17) & 7 == 4 and words(contents[a])[2])
-    # The control BO is zero-filled (CP_EVENT_WRITE7 targets it); the shader is not.
-    others = [a for a in named if a != uav_addr]
-    shader_addr = next(a for a in others if any(contents[a]))
-    control_addr = next(a for a in others if a != shader_addr)
-    shader_blob = next(p for a, _, p in bos if a == shader_addr)
-    uav_blob = next(p for a, _, p in bos if a == uav_addr)
+    if len(named) != 4:
+        raise SystemExit('expected shader, UAV, scratch and control pointers, found %s'
+                         % sorted(hex(v) for v in named))
+    # The UAV descriptor has TYPE=TEX_BUFFER (bits 17..19 == 4) and a nonzero count.
+    uav_addr = next(a for a in named if a in contents
+                    and (words(contents[a])[1] >> 17) & 7 == 4 and words(contents[a])[2])
+    shader_addr = next(a for a in named if a in contents and a != uav_addr and any(contents[a]))
+    rest = sorted(a for a in named if a not in (uav_addr, shader_addr))
+    scratch_addr, control_addr = rest  # lower address is the in-pool event scratch
+    shader_blob = contents[shader_addr]
+    uav_blob = contents[uav_addr]
     sw = words(shader_blob)
     last = max(i for i, w in enumerate(sw) if w)
     shader = sw[:((last // 16) + 1) * 16]
@@ -123,13 +120,15 @@ def main():
            '#define FP6_GPU_COMPUTE_TEST_H',
            '#define FP6_CS_SHIM_SHADER 0x%08xu' % shader_addr,
            '#define FP6_CS_SHIM_UAV    0x%08xu' % uav_addr,
+           '#define FP6_CS_SHIM_SCRATCH 0x%08xu' % scratch_addr,
            '#define FP6_CS_SHIM_CONTROL 0x%08xu' % control_addr,
            '#define FP6_CS_ELEMENTS    %uu' % elements,
            emit_array('fp6_cs_stream', stream),
            emit_array('fp6_cs_shader', shader),
            emit_array('fp6_cs_uav_template', desc),
            emit_array('fp6_cs_data_init', buf)]
-    for label, addr in (('shader', shader_addr), ('uav', uav_addr), ('control', control_addr)):
+    for label, addr in (('shader', shader_addr), ('uav', uav_addr),
+                        ('scratch', scratch_addr), ('control', control_addr)):
         pairs = named[addr]
         flat = [v for pair in pairs for v in pair]
         out.append('#define FP6_CS_%s_RELOCS %uu' % (label.upper(), len(pairs)))
@@ -139,12 +138,12 @@ def main():
     text = '\n'.join(out) + '\n'
     # uint16_t tables do not need 8-digit literals.
     import re
-    text = re.sub(r'(fp6_cs_(?:shader|uav|control)_reloc\[\d+\] = \{[^}]*\})',
+    text = re.sub(r'(fp6_cs_(?:shader|uav|scratch|control)_reloc\[\d+\] = \{[^}]*\})',
                   lambda m: re.sub(r'0x0000([0-9a-f]{4})u', r'0x\1', m.group(1)), text)
     open(sys.argv[2], 'w').write(text)
-    print('stream=%d dwords shader=%d dwords relocs shader=%d uav=%d control=%d elements=%d'
+    print('stream=%d dwords shader=%d dwords relocs shader=%d uav=%d scratch=%d control=%d elements=%d'
           % (len(stream), len(shader), len(named[shader_addr]), len(named[uav_addr]),
-             len(named[control_addr]), elements))
+             len(named[scratch_addr]), len(named[control_addr]), elements))
 
 
 if __name__ == '__main__':

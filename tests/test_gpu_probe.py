@@ -76,6 +76,8 @@ class GPUProbeTests(unittest.TestCase):
                           'host ring write must target a firmware kind-1 ring only')
             self.assertIn('PE_parse_boot_argn("fp6gpucompute"', source,
                           'compute dispatch must remain explicitly opt-in')
+            self.assertIn('fp6_cs_patch(stream, fp6_cs_scratch_reloc', source,
+                          'every pointer operand in the stream, including the event scratch, must be relocated')
             self.assertIn('fp6_cs_patch(stream, fp6_cs_control_reloc', source,
                           'Mesa shim IOVAs must be relocated, including the completion fence')
             self.assertIn('(uint64_t)wptr + FP6_CS_RING_DWORDS >= size', source,
@@ -220,9 +222,15 @@ class GPUProbeTests(unittest.TestCase):
                 '#define FP6_SQE_FW_VERSION 0x01100067u\n'
                 '#define FP6_SQE_FW_SIZE 16u\n'
                 'static const unsigned char fp6_sqe_fw[FP6_SQE_FW_SIZE] = {0};\n')
-            (work / 'fp6_gpu_compute_test.h').write_text(added_header(
+            header_dir = work / 'hdr' / 'bsd' / 'dev'
+            header_dir.mkdir(parents=True)
+            (header_dir / 'fp6_gpu_compute_test.h').write_text(added_header(
                 ROOT / 'xnu/patches/0194-fp6-compute-dispatch-probe.patch',
                 'bsd/dev/fp6_gpu_compute_test.h'))
+            subprocess.run(['git', 'apply', '--include=bsd/dev/fp6_gpu_compute_test.h',
+                            str(ROOT / 'xnu/patches/0195-fp6-compute-scratch-fence-relocation.patch')],
+                           cwd=work / 'hdr', check=True)
+            shutil.copyfile(header_dir / 'fp6_gpu_compute_test.h', work / 'fp6_gpu_compute_test.h')
             (work / 'test.c').write_text(HARNESS)
             build = subprocess.run([shutil.which('cc') or 'cc', '-std=c11', '-Wall',
                                     '-Wextra', '-Werror', *os.environ.get('IOS_EXTRA_CFLAGS', '').split(), '-I', str(work),

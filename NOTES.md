@@ -1,5 +1,28 @@
 # ios-extra — current state
 
+## FP6 first compute dispatch attempt 0194 (2026-10-23)
+
+**Phone measured:** CI `39939343713` (head `bd17debb316baf898b21426ea57a4c74eab55147`)
+passed; build-tree source and header matched. Image
+`/tmp/ios-extra-run-39939343713/package/fp6-compute-0194.img` (SHA256
+`74f32010e68dafe9fd6f98d279f91264281fa0273221019c95bf1dc1d826545e`; cmdline adds
+`fp6gpuring=1 fp6gpucompute=1`) booted once via `fastboot boot`; no flash, EDL
+or `getvar`. 92 packets; log `/tmp/ios-extra-run-39939343713/logs/phone-0194-compute.txt`.
+
+The stream is Mesa's own A810 (`FD_GPU_ID=810`, chip `0x44010000`) computerator
+dispatch of `buf-init.asm`, captured through the freedreno noop drm-shim
+(`FD_RD_DUMP`) and converted by `tools/fp6-gen-compute.py`. The host ring accepted
+157 dwords (WPTR fence not dropped) and the CP consumed most of them, but the
+dispatch did not complete: the completion fence stayed `0xdeadbeef`, the data
+buffer stayed `1..8`, GPU busy stayed set, and CB0 FSR became `0x80000402`
+(translation fault) with FAR `0xffffe000`, FSYNR0 `0x00040030` (write,
+unprivileged). That is a Mesa shim IOVA the generator had not relocated: the
+stream's `CP_EVENT_WRITE7` (dword 134) and `CP_WAIT_REG_MEM` (dword 139) use a
+scratch seqno address inside Mesa's pool BO, not a BO base. This is a data
+generation defect, not evidence about the shader, descriptor or A810 compute
+state. Patch 0195 relocates those pointers; its host tests and arm64 compile
+pass, CI and phone pending.
+
 ## FP6 host-driven ringbuffer 0192 (2026-10-23)
 
 **Phone measured:** CI `39934932431` (head `2cda1cc7ac04ed88c71e1ab1a2f6d7dbe3b72412`)

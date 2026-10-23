@@ -1,0 +1,78 @@
+diff --git a/bsd/dev/fp6_gpu_compute_test.h b/bsd/dev/fp6_gpu_compute_test.h
+--- a/bsd/dev/fp6_gpu_compute_test.h
++++ b/bsd/dev/fp6_gpu_compute_test.h
+@@ -6,6 +6,7 @@
+ #define FP6_GPU_COMPUTE_TEST_H
+ #define FP6_CS_SHIM_SHADER 0xffbfe000u
+ #define FP6_CS_SHIM_UAV    0xff7fd000u
++#define FP6_CS_SHIM_SCRATCH 0xffffe000u
+ #define FP6_CS_SHIM_CONTROL 0xfffff000u
+ #define FP6_CS_ELEMENTS    8u
+ static const uint32_t fp6_cs_stream[151] = {
+@@ -48,6 +49,10 @@
+ static const uint16_t fp6_cs_uav_reloc[4] = {
+ 	0x005c, 0x005d, 0x0060, 0x0062,
+ };
++#define FP6_CS_SCRATCH_RELOCS 2u
++static const uint16_t fp6_cs_scratch_reloc[4] = {
++	0x0086, 0x0087, 0x008b, 0x008c,
++};
+ #define FP6_CS_CONTROL_RELOCS 1u
+ static const uint16_t fp6_cs_control_reloc[2] = {
+ 	0x0094, 0x0095,
+diff --git a/bsd/dev/sweet_gpu.c b/bsd/dev/sweet_gpu.c
+--- a/bsd/dev/sweet_gpu.c
++++ b/bsd/dev/sweet_gpu.c
+@@ -4618,7 +4618,8 @@
+ static struct fp6_gpu_global_page fp6_cs_shader_page, fp6_cs_uav_page, fp6_cs_data_page;
+ static uint64_t fp6_cs_shader_va, fp6_cs_uav_va, fp6_cs_data_va;
+ static int fp6_cs_pages_ready;
+-#define FP6_CS_FENCE_OFFSET 0x40u /* dwords 16..; result page word 0 is untouched */
++#define FP6_CS_FENCE_OFFSET 0x40u   /* dword index in the result page; word 0 is untouched */
++#define FP6_CS_SCRATCH_OFFSET 0x80u /* in-pool seqno the stream writes, then polls for 1 */
+ #define FP6_CS_RING_DWORDS (2u + 1u + 151u + 1u + 2u)
+ 
+ static void
+@@ -4692,6 +4693,8 @@
+ 	memcpy(stream, fp6_cs_stream, sizeof(stream));
+ 	fp6_cs_patch(stream, fp6_cs_shader_reloc, FP6_CS_SHADER_RELOCS, fp6_cs_shader_va);
+ 	fp6_cs_patch(stream, fp6_cs_uav_reloc, FP6_CS_UAV_RELOCS, fp6_cs_uav_va);
++	fp6_cs_patch(stream, fp6_cs_scratch_reloc, FP6_CS_SCRATCH_RELOCS,
++	    fp6_exec_result_va + 4u * FP6_CS_SCRATCH_OFFSET);
+ 	fp6_cs_patch(stream, fp6_cs_control_reloc, FP6_CS_CONTROL_RELOCS,
+ 	    fp6_exec_result_va + 4u * FP6_CS_FENCE_OFFSET);
+ 	unsigned n = 0;
+@@ -4708,7 +4711,9 @@
+ 		return 0;
+ 	}
+ 	volatile uint32_t *fence = (volatile uint32_t *)(void *)(fp6_exec_result.va + 4u * FP6_CS_FENCE_OFFSET);
++	volatile uint32_t *scratch = (volatile uint32_t *)(void *)(fp6_exec_result.va + 4u * FP6_CS_SCRATCH_OFFSET);
+ 	*fence = 0xdeadbeefu;
++	*scratch = 0xdeadbeefu;
+ 	(void)fp6_gpu_kernel_publish(NULL, fp6_exec_result.va, 4096u);
+ 	volatile uint32_t *slot = (volatile uint32_t *)(void *)(ring->backing.va + 4u * wptr);
+ 	for (unsigned i = 0; i < n; i++) slot[i] = cmd[i];
+@@ -4720,10 +4725,11 @@
+ 		dropped = fp6_smmu_read32(g, FP6_GMU_AHB_FENCE_STATUS) & 1u;
+ 		if (!dropped) break;
+ 	}
+-	uint32_t seen = 0, now_rptr = 0;
++	uint32_t seen = 0, scratch_seen = 0, now_rptr = 0;
+ 	for (unsigned i = 0; i < 5000u; i++) {
+ 		fp6_gpu_invalidate_cpu_cache(fp6_exec_result.va, 4096u);
+ 		seen = *fence;
++		scratch_seen = *scratch;
+ 		now_rptr = fp6_smmu_read32(gpu, FP6_GPU_CP_RB_RPTR_BR);
+ 		if (seen == 1u && now_rptr == wptr + n) break;
+ 		delay(100);
+@@ -4733,8 +4739,8 @@
+ 	unsigned good = 0;
+ 	for (unsigned i = 0; i < FP6_CS_ELEMENTS; i++)
+ 		good += data[i] == fp6_cs_data_init[i] + 5u;
+-	printf("QCOM GPU COMPUTE: submit dwords=%u dropped=%u fence=0x%08x rptr=%u/%u data=%u,%u,%u,%u,%u,%u,%u,%u correct=%u/%u CB0_FSR=0x%08x\n",
+-	    n, dropped, seen, now_rptr, wptr + n, data[0], data[1], data[2], data[3], data[4], data[5],
++	printf("QCOM GPU COMPUTE: submit dwords=%u dropped=%u fence=0x%08x scratch=0x%08x rptr=%u/%u data=%u,%u,%u,%u,%u,%u,%u,%u correct=%u/%u CB0_FSR=0x%08x\n",
++	    n, dropped, seen, scratch_seen, now_rptr, wptr + n, data[0], data[1], data[2], data[3], data[4], data[5],
+ 	    data[6], data[7], good, FP6_CS_ELEMENTS,
+ 	    fp6_smmu_read32(fp6_gpu_smmu_base, fp6_gpu_cb_off + FP6_SMMU_CB_FSR));
+ 	fp6_gpu_exec_snapshot(g, gpu, "after-compute");
