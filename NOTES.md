@@ -1,5 +1,33 @@
 # ios-extra — current state
 
+## FP6 first GPU draw: Turnip A810 triangle replay 0204 (2026-10-23)
+
+**Phone measured:** CI `39965021309` (head `02caa494caaf21df497f7488b12c46177912cf2f`)
+passed; source and header matched. Image
+`/tmp/ios-extra-run-39965021309/package/fp6-replay-nocbd-0204.img` (SHA256
+`3961c59a68ccc15887488691835e8bcf835b17a11bedeba0f3fa059a2309c61f`; cmdline adds
+`fp6gpureplaystep=1 fp6gpureplaycb=1`) booted once via `fastboot boot`; no flash,
+EDL or `getvar`. 107 packets; log
+`/tmp/ios-extra-run-39965021309/logs/phone-0204-nocbd.txt`.
+
+With `CONCURRENT_BIN_DISABLE` cleared in the stream's three `CP_THREAD_CONTROL`
+packets (patching what Turnip itself patches at submit time), all 121 packet
+prefixes of the Mesa Turnip A810 draw (offscreen 64x64 RGBA8 triangle, sysmem,
+no UBWC, fake 608 KiB GMEM) completed: fence `0x600dcafe`, BR and BV read
+pointers equal to the target, `RBBM_STATUS=0x00000001` (idle), CB0 FSR `0x400`
+(no fault), final RPTR 3885/3885. CBD set on this part is therefore what stalled
+the BR thread at the following barrier (set: stall at prefix 64, cleared: no
+stall anywhere). The result buffers hold 1024 words of exactly `0xff4080ff` (the
+fragment colour): 512 in each of two 16 KiB buffers (`0x100026000` image BO and
+`0x10002a000`, the vkCmdCopyImageToBuffer target), which equals the triangle's
+area (32x32/2). The run still printed "check=0/1" because my own threshold
+(300..700 total) counted both buffers; that is a test defect, not a GPU result.
+Not yet inspected: the pixel layout (shape), whether it is correct beyond the
+count, UBWC, GMEM-mode rendering, CCU offsets beyond the 576 KiB part, and
+anything with the original (CBD-set) stream, which still hangs. Patch 0205 counts
+per 16 KiB image, passes on one holding 480..544 and prints each image as 64x64
+ASCII in the log; host tests and arm64 compile pass, CI and phone pending.
+
 ## FP6 draw stall is CONCURRENT_BIN_DISABLE, footer ruled out 0203 (2026-10-23)
 
 **Phone measured:** CI `39953899789` (head `007bce94e2fc296d74833001d7fc39fb74826379`)

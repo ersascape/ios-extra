@@ -1,0 +1,60 @@
+diff --git a/bsd/dev/sweet_gpu.c b/bsd/dev/sweet_gpu.c
+--- a/bsd/dev/sweet_gpu.c
++++ b/bsd/dev/sweet_gpu.c
+@@ -5090,19 +5090,47 @@
+ 			    d[0], d[1], d[2], d[3], d[4], d[5], d[6], d[7]);
+ 		}
+ 	} else {
+-		for (unsigned i = 0; i < r->npages; i++) {
+-			struct fp6_gpu_global_page *page = &fp6_as_pages[first_page + i];
+-			if (r->pages[i].npairs) continue; /* only buffers the capture left zero */
+-			fp6_gpu_invalidate_cpu_cache(page->va, 4096u);
+-			const volatile uint32_t *d = (const volatile uint32_t *)(const void *)page->va;
++		/* Group consecutive zero pages into 16 KiB runs (one 64x64 RGBA8 image each), count
++		 * the triangle colour in each, and draw every run that has any as 64x64 ASCII
++		 * ('#' = 0xff4080ff, '.' = zero, 'x' = other). One image should hold ~512 pixels. */
++		unsigned images = 0;
++		for (unsigned i = 0; i + 4u <= r->npages;) {
++			if (r->pages[i].npairs || r->pages[i + 1].npairs || r->pages[i + 2].npairs ||
++			    r->pages[i + 3].npairs ||
++			    r->pages[i + 1].va != r->pages[i].va + 0x1000u ||
++			    r->pages[i + 2].va != r->pages[i].va + 0x2000u ||
++			    r->pages[i + 3].va != r->pages[i].va + 0x3000u) {
++				i++;
++				continue; /* not four contiguous zero pages */
++			}
++			const volatile uint32_t *img[4];
+ 			unsigned here = 0;
+-			for (unsigned k = 0; k < 1024u; k++) here += d[k] == 0xff4080ffu;
+-			if (here) printf("QCOM GPU REPLAY: %s page va=0x%llx has %u pixels of 0xff4080ff\n",
+-			    r->name, (unsigned long long)r->pages[i].va, here);
++			for (unsigned q = 0; q < 4u; q++) {
++				struct fp6_gpu_global_page *page = &fp6_as_pages[first_page + i + q];
++				fp6_gpu_invalidate_cpu_cache(page->va, 4096u);
++				img[q] = (const volatile uint32_t *)(const void *)page->va;
++				for (unsigned k = 0; k < 1024u; k++) here += img[q][k] == 0xff4080ffu;
++			}
++			printf("QCOM GPU REPLAY: %s image va=0x%llx has %u pixels of 0xff4080ff\n", r->name,
++			    (unsigned long long)r->pages[i].va, here);
+ 			colored += here;
++			if (here >= 480u && here <= 544u) good = 1;
++			if (here) {
++				char row[66];
++				for (unsigned y = 0; y < 64u; y++) {
++					for (unsigned x = 0; x < 64u; x++) {
++						uint32_t v = img[y / 16u][(y % 16u) * 64u + x];
++						row[x] = v == 0xff4080ffu ? '#' : (v ? 'x' : '.');
++					}
++					row[64] = 0;
++					printf("QCOM GPU IMG %02u %s\n", y, row);
++				}
++			}
++			images++;
++			i += 4u;
+ 		}
+ 		total = 1;
+-		good = colored >= 300u && colored <= 700u;
++		(void)images;
+ 	}
+ 	printf("QCOM GPU REPLAY: %s dropped=%u fence=0x%08x rptr=%u/%u check=%u/%u colored=%u CB0_FSR=0x%08x\n",
+ 	    r->name, dropped, seen, now_rptr, target, good, total, colored,
