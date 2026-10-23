@@ -1,15 +1,36 @@
 # ios-extra — current state
 
-## FP6 Linux-default HFI power votes candidate 0179 (2026-10-23)
+## FP6 GMU OOB ACK result 0179 (2026-10-23)
 
 Source audit found that Linux `gen8_hwsched_hfi_start()` sends HFI `START`,
 then `gen8_hwsched_setup_default_votes()` before returning to the GPU OOB path.
 That helper sends two blocking `GX_BW_PERF_VOTE` messages: the default GPU
 performance level and the default bus vote. XNU previously went from the
 acknowledged `START` directly to GPU OOB, omitting both. FP6 stock DT selects
-GPU pwrlevel 8 (`362 MHz`) and bus level 2. Candidate patch 0179 adds the
-separate ACK-checked HFI votes matching those defaults; it has host and local
-arm64 compile validation, but no CI or phone result yet.
+GPU pwrlevel 8 (`362 MHz`) and bus level 2. Patch 0179 added the separate
+ACK-checked HFI votes matching those defaults.
+
+Commit `1d0bfe045e105e8ffe753d43d9f322cd7f1a6941` passed CI run
+`39904438450`. The exact CI kernel, ADT and matching local stock DTB were
+packaged with the workflow static init as
+`/tmp/ios-extra-run-39904438450/package/fp6-gmu-default-votes-0179.img`
+(SHA256 `36d4d2150fa3d4e92ce0642d4d86cf3033ca28e3f7bb237d9f26cac353b1bee9`).
+One temporary `fastboot boot` completed successfully; user-mode USB capture
+produced the decoded log and raw UDP at
+`/tmp/ios-extra-run-39904438450/logs/phone-0179-gmu-default-votes.txt` and
+`.udp` (SHA256 `be7282865691c6363f5bea82c8dfca2336006ed856c836b401b9afe86468f3fa`).
+No flash or EDL was used.
+
+**Phone measured:** firmware init and HFI setup succeeded; HFI `START` was
+ACKed at sequence 7. The default GPU vote (pwrlevel 8, perf index 2) and bus
+vote (level 2, AB invalid) were each ACKed at sequences 13 and 14. GPU OOB
+then ACKed: `GMU2HOST_INTR_INFO=0x80000000`; the read-only `RBBM_STATUS` was
+`0x00000001`. This is the first measured completion of the GPU OOB request and
+first GPU status-register read in this sequence. The probe requested OOB clear,
+submitted no GPU command, then verified CM3 reset while retaining SID/context/
+clock votes. Thus GMU/HFI startup and requested GX power-up now cross the OOB
+boundary; GPU command execution, GPU-master DMA/write-readback, draw/readback
+and Metal remain unmeasured.
 
 Independent source reading also found a GMU clock timing difference to resolve:
 stock DT lists GMU 350/650 MHz; Linux starts first boot at `freqs[1]` (650 MHz)
@@ -18,6 +39,8 @@ and changes to `freqs[0]` (350 MHz) after HFI start. XNU currently selects
 established as the OOB cause. Keep it as the next source/measurement question.
 
 ## FP6 GMU OOB latest measured result 0178 (2026-10-23)
+
+Superseded by the 0179 phone result above.
 
 - Patch 0178 commit `7b13c1483a57d39abb63db3df9eb5b678635589d` passed CI
   `39901607539`. CI kernel SHA256 is

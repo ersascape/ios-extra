@@ -1,12 +1,34 @@
-## FP6 default HFI power-vote candidate 0179 (2026-10-23)
+## FP6 default HFI votes and GPU OOB ACK result 0179 (2026-10-23)
 
 Source comparison with Fairphone Gen8 HWSched found that Linux sends the
 default GPU DCVS vote and default bandwidth vote after HFI `START` and before
 GPU OOB. The selected stock DT profile is pwrlevel 8 / 362 MHz / bus level 2.
 XNU omitted these two HFI requests. Patch 0179 adds them as separate
 ACK-checked `GX_BW_PERF_VOTE` requests. Host GPU tests, the full host suite, the
-ASan/UBSan GPU harness and local arm64 compile pass. CI and phone validation
-are pending; no device behavior is claimed yet.
+ASan/UBSan GPU harness and local arm64 compile passed.
+
+Commit `1d0bfe045e105e8ffe753d43d9f322cd7f1a6941` passed CI
+`39904438450`. The exact CI kernel and ADT with the verified local stock DTB
+and workflow static init were packaged as
+`/tmp/ios-extra-run-39904438450/package/fp6-gmu-default-votes-0179.img`
+(SHA256 `36d4d2150fa3d4e92ce0642d4d86cf3033ca28e3f7bb237d9f26cac353b1bee9`).
+One temporary `fastboot boot` succeeded. User-mode USB capture log and raw UDP
+are `/tmp/ios-extra-run-39904438450/logs/phone-0179-gmu-default-votes.txt`
+and `.udp`, both SHA256 `be7282865691c6363f5bea82c8dfca2336006ed856c836b401b9afe86468f3fa`.
+No flash or EDL was used.
+
+**Phone measured:** GMU firmware init and HFI setup succeeded. HFI `START`
+request id 10 / sequence 7 ACKed. The default GPU vote ACKed at sequence 13
+(pwrlevel 8, perf index 2); the default bus vote ACKed at sequence 14
+(bus-level 2, AB invalid). The following GPU OOB request received ACK bit 31:
+`GMU2HOST_INTR_INFO=0x80000000`. A read-only GPU `RBBM_STATUS` read returned
+`0x00000001`. The bounded probe then requested OOB clear without submitting a
+GPU command and verified CM3 reset, retaining SID/context/clock votes.
+
+This is the first measured OOB completion and first GPU status-register read
+in this bring-up. It confirms progress through GMU/HFI initialization and the
+GPU OOB power request. It does not yet establish GPU command execution, GPU
+master DMA, memory write/readback, draw/readback, or Metal output.
 
 The same audit found Linux starts the GMU clock at 650 MHz and changes it to
 350 MHz after HFI, while XNU currently runs 350 MHz from before CM3 release.
