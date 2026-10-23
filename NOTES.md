@@ -1,5 +1,33 @@
 # ios-extra — current state
 
+## FP6 panel description found: downstream devicetrees (2026-10-23)
+
+Correction to the previous entry: the panel node *is* available. The Lineage kernel
+checkout `/home/ersa/Dev/android_kernel_fairphone_sm7635` has
+`arch/arm64/boot/dts/vendor -> ../../../../../sm7635-devicetrees`, a symlink to a
+directory that is not on this machine; that repository is
+`github.com/LineageOS/android_kernel_fairphone_sm7635-devicetrees` (branch
+`lineage-23.2`, `f32428ad60a7bf1ad04f9a8a001f27842e65fd79`), shallow-cloned read-only
+into scratch (not committed). `qcom/fp6.dts` and `fp6-sku-60x-overlay.dts` are the
+FP6 trees (the SKU overlays are copies of the Qualcomm MTP overlay and include no
+display file themselves), and `qcom/display/display/` holds the SDE and panel files.
+Source reading only; nothing here is a phone measurement.
+
+The only panel file matching 1116x2484 is
+`qcom/display/display/dsi-panel-nt37705-boe-amoled-cmd.dtsi`
+(`qcom,mdss-dsi-panel-name = "nt37705 amoled command mode dsi panel"`): OLED, DSI
+command mode, bpp 30 (10-bit), `rgb_swap_rgb`, 4 lanes (`lane_map_0123`),
+`dma-trigger = trigger_sw`, `mdp-trigger = none`, TE pin used (`te-pin-select = 1`,
+`te-check-enable`, `wr-mem-start = 0x2c`, `wr-mem-continue = 0x3c`), reset sequence
+`<1 10> <0 5> <1 10>`, 66x146 mm, five timings of 1116x2484 at 120, 60, 90, 30 and
+10 Hz (`timing@0..4`), DSC 1.1 with 558x12 slices, 2 slices per packet, 10 bits per
+component, `bit-per-pixel = 8`, block prediction, and ten large `on-command`
+sequences (the Novatek panel init). This agrees with the level-2 register dump
+(command mode, DSC active, 1116x2484). Not established: which of the five timings the
+bootloader selected, and that this is the exact panel file used by the shipped FP6
+(it is the only 1116x2484 match). The DSI controller and PHY nodes in the stock DT
+(`dsi-ctrl-hw-v2.8`, `dsi-phy-v5.2`) cover the host side.
+
 ## FP6 display snapshot level 2 measured 0209 (2026-10-23)
 
 **Phone measured:** CI `39979637952` (head `bdc38ee407ec47e78f26bb026885560d7824e154`)
