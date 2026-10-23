@@ -1,3 +1,23 @@
+## Gen8 GPU power-on OOB probe candidate 0172 (2026-10-23)
+
+Patch 0172 continues after the phone-measured HFI `START` ACK. Fairphone's
+`gen8_hwsched_gpu_boot()` issues `gen8_gmu_oob_set(oob_gpu)` before its first
+`gen8_start()` register setup. The matching Gen8 driver constants yield request
+bit 30 at GMU `HOST2GMU_INTR_SET`, response bit 31 at `GMU2HOST_INTR_INFO`, and
+ACK clear at `GMU2HOST_INTR_CLR`. XNU now performs this bounded request, maps the
+stock `0x03d00000` GPU-core window, reads only `GEN8_RBBM_STATUS` at byte offset
+`0x48`, requests the Linux OOB clear, then returns to the existing CM3 reset
+containment. On timeout it still asserts CM3 reset and retains SMMU/context and
+clock votes.
+
+The source probe cross-compiles as arm64 against CI buildtree `39845816435`
+(`0 of 1 files failed`) and applies to that patched source. No CI run, packaged
+image or phone measurement exists yet. Expected useful evidence is whether
+GMU ACKs the GPU power request and the actual RBBM status value; neither result
+will prove command execution. The next implementation still must cover Gen8
+core initialization, staged SQE firmware, the GPU-visible power-up register
+list, HFI `ISSUE_CMD_RAW` CP init and GPU write/readback.
+
 ## FP6 request-ID HFI ACK follow-up 0166 (2026-10-22)
 
 - Patch 0166 accepts HFI ACK type responses identified by either the original

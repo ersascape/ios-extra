@@ -1,0 +1,49 @@
+--- a/bsd/dev/sweet_gpu.c
++++ b/bsd/dev/sweet_gpu.c
+@@ -3157,6 +3157,22 @@
+  return d->frozen && !d->failed && !fp6_gmu_kernel_ready(ctx) ? 0 : -1;
+ }
+ 
++static int fp6_gmu_poll(vm_offset_t, uint32_t, uint32_t, uint32_t, uint32_t *);
++
++/* KGSL gen8_gmu_oob_set(oob_gpu): GPU OOB uses bit 30 and ACK bit 31.
++ * This requests GX power and waits for the GMU's completion before any GPU
++ * core MMIO read. Keep the SMMU context and votes retained on timeout. */
++static int
++fp6_gmu_gpu_oob(vm_offset_t g, uint32_t *intr_info)
++{
++	fp6_smmu_write32(g, 0x47650u, 1u << 30);
++	uint32_t v = 0;
++	int ack = fp6_gmu_poll(g, 0x47648u, 1u << 31, 1u << 31, &v);
++	*intr_info = v;
++	if (ack) fp6_smmu_write32(g, 0x47644u, 1u << 31);
++	return ack;
++}
++
+ /*
+  * Gen8 GMU first boot (docs/FP6_GMU_FIRST_BOOT.md; KGSL hwsched order),
+  * opt-in fp6gmuboot=1 after a successful fp6gmuload=1 upload. Polled: every
+@@ -4304,8 +4320,22 @@
+ 		if (hfi) {
+ 			uint8_t *hfi_mem = fp6_gmu_range_va(fp6_gmu_hfi_va);
+ 			if (!hfi_mem || !fp6_gmu_hfi_start_sequence(smmu, cb_off, g,
+-			    fp6_smmu_read32(g, 0x3dfecu), hfi_mem))
++			    fp6_smmu_read32(g, 0x3dfecu), hfi_mem)) {
+ 				printf("QCOM GMU: HFI startup sequence stopped; GMU will be reset\n");
++			} else {
++				vm_offset_t gpu = ml_io_map(0x03d00000u, 0x40000u);
++				uint32_t info = 0;
++				if (!gpu) {
++					printf("QCOM GMU: GPU OOB probe refused: core MMIO map unavailable\n");
++				} else if (!fp6_gmu_gpu_oob(g, &info)) {
++					printf("QCOM GMU: GPU OOB timeout intr_info=0x%08x; CM3 reset will be asserted\n", info);
++				} else {
++					uint32_t rbbm = fp6_smmu_read32(gpu, 0x048u); /* GEN8_RBBM_STATUS */
++					printf("QCOM GMU: GPU OOB ACK intr_info=0x%08x RBBM_STATUS=0x%08x; status read only\n", info, rbbm);
++					fp6_smmu_write32(g, 0x47650u, 1u << 31); /* Linux oob_clear(oob_gpu) */
++					printf("QCOM GMU: GPU OOB clear requested; no GPU command submitted\n");
++				}
++			}
+ 		}
+ 	}
+ 	/* No HFI command service exists yet. Stop on success as well as failure.
