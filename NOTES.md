@@ -65,12 +65,12 @@ Superseded by the 0179 phone result above.
   (`GFX_PWR_CLK_STATUS=3`), and CM3 reset was verified. SMMU/context/clock votes
   were retained. No GPU command, DMA, memory write/readback, draw or Metal output.
 - 0178 proves that correcting the HFI START/OOB order alone does not fix the
-  timeout. Source inspection of the Gen8.3/A810 profile shows it does not
-  advertise `ADRENO_GMU_WARMBOOT`, so Linux's warmboot scratch commands are
-  disabled for this profile. Linux still calls default-vote setup after HFI
-  START; whether it emits DCVS values depends on runtime power-limit state.
-  Resolve that FP6 configuration and compare XNU's vote table before adding
-  commands. 0177's ACK-bit unmask remains enabled.
+  timeout. The A810 profile does not advertise `ADRENO_GMU_WARMBOOT`, selecting
+  coldboot rather than warmboot resume. Linux coldboot still sends HFI
+  `WARMBOOT_SET_SCRATCH`, raw Gen8 CP init, then `WARMBOOT_QUERY_SCRATCH`; these
+  transactions are required before boot completes. Patch 0179 now measures the
+  default votes and OOB ACK. The full command path and SQE firmware hash are in
+  `docs/FP6_ADRENO_METAL_AUDIT.md`.
 
 ## FP6 HFI response-queue phone result 0176 (2026-10-23)
 

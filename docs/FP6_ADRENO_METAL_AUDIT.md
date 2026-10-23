@@ -291,14 +291,49 @@ The pinned FairBlobs raw artifact inspected locally was 84,564 bytes, SHA-256
 in `/tmp` and is not committed. This is source/artifact inspection only: the
 phone has not run SQE, and GPU execution remains unproven.
 
-The next code entry point is the existing HFI-success branch in
-`fp6_gmu_first_boot()`. It currently resets CM3 immediately after HFI `START`.
-The GPU path must instead retain the running GMU, build the A810 core power-up
-register list and mapped SQE payload, perform the Gen8 GPU register/IRQ/OOB
-setup, and send the coldboot HWSCHED CP init over HFI. Preserve a bounded reset
-and keep all published mappings permanently if any startup wait fails. The
-0171 phone log is the baseline proving both `CORE_FW_START` and `START` ACKs and
-the no-preemption allocation set; it proves no GPU command execution.
+### A810 coldboot command order checked against current Linux source
+
+The measured 0179 OOB ACK means the next path begins after GMU/HFI startup. The
+SM7635 source makes the remaining order explicit:
+
+1. `gen8_hwsched_gpu_boot()` starts the GPU MMU, acquires GPU OOB, runs
+   `gen8_start()`, enables GPU IRQs and programs the SQE instruction base.
+2. The coldboot branch sends `HFI_WARMBOOT_SET_SCRATCH` for `gpu_boot_scratch`,
+   then `gen8_hwsched_cp_init()`, then `HFI_WARMBOOT_QUERY_SCRATCH`. The A810
+   profile omits the `ADRENO_GMU_WARMBOOT` feature, which selects coldboot over
+   warmboot resume; it does **not** remove these HFI scratch transactions from
+   coldboot.
+3. `gen8_hwsched_cp_init()` sends `H2F_MSG_ISSUE_CMD_RAW` with the exact Gen8
+   `CP_THREAD_CONTROL` + `CP_ME_INIT` packet, waits up to 200 ms for
+   `GEN8_GMUAO_GPU_CX_BUSY_STATUS[23]` to clear, authenticates ZAP and switches
+   to unsecure mode (or clears `RBBM_SECVID_TRUST_CNTL` if ZAP is not loaded).
+   Its CP init register-list address must refer to a GPU-visible, initialized
+   power-up list.
+
+The A810 core profile advertises IFPC, content protection, preemption and ACD;
+it does not advertise AQE or LPAC. It sets GMEM to 576 KiB, highest bank bit
+15, hub clock 200 MHz and hang-detect cycles `0xcfffff`. Disabling HFI
+preemption for the diagnostic does not disable IFPC or remove the need to
+respect the core profile's power-up state.
+
+Re-fetched the exact SQE input to `/tmp/gen80300_sqe.fw` from the FairBlobs
+commit pinned by the adjacent ZAP staging script (`e58a5be8fa0fb6bc5a5f2e29cc01c036ccf75710`):
+84,564 bytes, SHA-256
+`38fd00147e8b752dd29c53a0badac8f94b1dbd89dc06f5b1c372d3428cd1b906`. Linux
+copies bytes `[4:]` (84,560 bytes, 21,140 dwords) to GPU-readable memory; the
+four-byte header is not part of the SQE instruction stream. This is still
+source/artifact verification only, not evidence of SQE execution on the phone.
+
+The next code entry point is the successful OOB branch in
+`fp6_gmu_first_boot()`. Patch 0179 measures GMU/HFI, both default votes, GPU
+OOB ACK and a readable GPU status register, then currently clears OOB and
+resets CM3. The next implementation must retain the live GPU long enough to
+stage the SQE payload and correctly mapped power-up register list, apply the
+A810 `gen8_start()` register setup and GPU IRQ configuration, execute the
+coldboot HFI scratch / CP init / ZAP / unsecure sequence, and establish a
+bounded command completion. Preserve reset containment and permanently retain
+all published mappings if any startup wait fails. The 0179 phone log is the
+baseline; it proves no GPU command execution.
 
 The existing Darwin patch uses NativeAdreno ABI version 1. Direct discovery
 uses `NativeAdrenoGpuPublished`; its system-plugin route defaults to

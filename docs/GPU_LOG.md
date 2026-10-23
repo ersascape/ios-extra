@@ -67,11 +67,12 @@ appeared. HFI queues were empty after processing (`DBGQ ri=0/wi=0`,
 verified. The order correction alone is not the fix. No GPU command, DMA,
 memory write/readback, draw or Metal output occurred.
 
-Source inspection of the Gen8.3/A810 profile shows it does not advertise
-`ADRENO_GMU_WARMBOOT`; Linux's warmboot scratch commands are therefore disabled
-for this profile. Linux still invokes default-vote setup after HFI START; its
-DCVS messages depend on runtime power-limit state. Verify those FP6 defaults and
-the GMU clock/OOB prerequisites before changing the HFI sequence again.
+The A810 profile omits `ADRENO_GMU_WARMBOOT`, so Linux selects coldboot instead
+of warmboot resume. The coldboot path still sends HFI `WARMBOOT_SET_SCRATCH`,
+raw Gen8 CP init, then `WARMBOOT_QUERY_SCRATCH`; those transactions remain
+required. The default-vote and OOB boundary is now phone-tested in 0179 above.
+The exact coldboot sequence and pinned SQE payload hash are recorded in
+`docs/FP6_ADRENO_METAL_AUDIT.md`.
 
 ## OOB ACK mask result 0177 (2026-10-23)
 
