@@ -44,6 +44,38 @@ FP6 observation.
 6. An IOKit client ABI for BO alloc/map, queue create, submit and fence wait that
    Turnip's `tu_knl_darwin.cc` can target for Gen8.3.
 
+## Snapintosh (Gen8 reference, inspected 2026-10-23)
+
+Source inspection of public MIT repos, shallow-cloned outside this tree
+(`Acelogic/Snapintosh` `2c60b47`, `Snapintosh/SnapAdreno` `3985c26`,
+`SnapMetal` `40a1864`, `air2ir3` `55865cc`). It boots Apple macOS 27 under an EL2
+monitor on a Snapdragon X2 Elite (Adreno X2-90, a8xx, chip `0x44070041`), so it
+targets macOS, not iOS, and a different a8xx part than the A810.
+
+- **Kernel (`SnapAdreno`):** an IOGPU accelerator plus an IOMobileFramebuffer
+  display driver. The GPU is powered and the GMU booted by an external host tool;
+  the monitor/kext adopts a state with the GMU running, GPU OOB held, SQE
+  started and one ring whose read/write pointers agree.
+- **Submission:** a single ringbuffer, not hwsched context queues. Packets are
+  written to the ring, `CP_RB_WPTR` is a fenced write (retry once if
+  `GMU_AHB_FENCE_STATUS` bit 0 reports a dropped write), ring wrap is padded
+  with `CP_NOP`, and the fence is a `CP_MEM_WRITE`. On a8xx it brackets work with
+  `CP_THREAD_CONTROL` (BR thread, sync) and `CP_WAIT_FOR_IDLE`.
+- **Metal (`SnapMetal`, `AdrenoMetal.bundle`):** a Metal device/command-buffer/
+  encoder implementation emitting hand-written Adreno PM4, talking to the kext
+  through IOGPU. 20k lines.
+- **Shaders (`air2ir3`):** AIR → NIR → Mesa ir3 for a8xx via a pinned, patched
+  Mesa; cache and binding ABI documented. Needs macOS tooling for its tests.
+- **Licensing:** the repos are MIT, but the kext build also compiles
+  `compat/adreno-ib-tables.h`, which is GPL-2.0-only (Linux-derived), making a
+  built kext GPL-2.0. Read for design; do not copy that table into this tree.
+
+Open question this raises for FP6: the GMU firmware here is the downstream
+hwsched build (`gen80300_gmu.bin`); whether it also accepts a host-driven ring
+the way Snapintosh's setup does is unmeasured. A small phone experiment (program
+`CP_RB_*`, write one `CP_MEM_WRITE` to a host ring, fenced `CP_RB_WPTR`) would
+answer it before committing to the context-queue path in step 1–3 above.
+
 ## Metal-side work, in dependency order
 
 - AirNir: lift the `fd_dev_gen == 7` gate only together with an A8xx device
