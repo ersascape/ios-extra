@@ -1,5 +1,28 @@
 # ios-extra — current state
 
+## FP6 first GPU shader execution: compute dispatch 0195 (2026-10-23)
+
+**Phone measured:** CI `39940824622` (head `465ba7a`) passed; build-tree source and
+header matched. Image `/tmp/ios-extra-run-39940824622/package/fp6-compute-0195.img`
+(SHA256 `056313c9629e9283a5b075c46e751c1929cd888781d54ebfafa09ec8a0a151dd`; cmdline
+adds `fp6gpuring=1 fp6gpucompute=1`) booted once via `fastboot boot`; no flash,
+EDL or `getvar`. 95 packets; log
+`/tmp/ios-extra-run-39940824622/logs/phone-0195-compute.txt`.
+
+With the scratch pointers relocated (0195), the 157-dword stream (Mesa A810
+computerator `buf-init.asm`: eight invocations, each reads a word, adds 5, writes
+it back) ran through the firmware BR ring. Measured: WPTR doorbell not dropped,
+completion fence `0x00000001`, scratch seqno `0x00000001`, RPTR reached WPTR
+(175/175), CB0 FSR `0x400` (no fault), GPU idle afterwards, and the data buffer
+read back by the CPU changed from `1..8` to `6,7,8,9,10,11,12,13`
+(`correct=8/8`). CM3 reset was verified. This is the first measured shader
+execution and UAV buffer read/modify/write on the FP6 Adreno 810. It validates
+the A8XX compute state Mesa emits for the A810 profile, the A8XX buffer
+descriptor encoding, the shim-IOVA relocation scheme, and ring submission.
+Not measured: graphics draw, multiple dispatches, resource sync between
+submissions, constants/UBOs, textures, per-process address spaces, the CP
+power-up list, power management between submissions, Metal.
+
 ## FP6 first compute dispatch attempt 0194 (2026-10-23)
 
 **Phone measured:** CI `39939343713` (head `bd17debb316baf898b21426ea57a4c74eab55147`)
