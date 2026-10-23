@@ -1,13 +1,41 @@
-## FP6 HFI START order correction candidate 0178 (2026-10-23)
+## FP6 HFI START-before-OOB result 0178 (2026-10-23)
 
 The Qualcomm Gen8 Linux source order is `gen8_hwsched_hfi_start()` sending HFI
 `START`, followed by `gen8_hwsched_gpu_boot()` requesting GPU OOB. This corrects
 the earlier mistaken claim that OOB-before-START in patch 0174 matched Linux.
 Patch 0178 restores Linux's order and retains patch 0177's GMU2HOST ACK bit 31
-unmask. The host regression check asserts START precedes the OOB call. The exact
-source compiles to an arm64 object against the patch 0177 CI buildtree, and the
-host suite passes (13 tests, 5 skipped). Patch 0178 has no CI result or phone
-measurement yet.
+unmask. The host regression check asserts START precedes the OOB call. The
+exact source compiled to an arm64 object against the 0177 CI buildtree; normal
+and ASan/UBSan GPU probe tests passed, and the full host suite passed (13 tests,
+5 skipped).
+
+Commit `7b13c1483a57d39abb63db3df9eb5b678635589d` passed CI `39901607539`.
+CI kernel SHA256 is
+`31a576142f70b0c10257a80b411fc8bfc8b2ab97dbc8c2753fd7f9cb55d1aabf`; ADT
+SHA256 is `78b5c4022739f417881702d761b43bf2ca8ec10ebd00fe9584ce01c37b93a583`.
+CI image packaging skipped because its stock-DTB URL is unset. The exact
+kernel/ADT were packaged locally with the verified DTB and workflow static init
+as `/tmp/ios-extra-run-39901607539/package-correct/fp6-gmu-hfi-start-before-oob-0178.img`
+(SHA256 `be2f2e9217db28ad2c1c53b70706614351c41dbbd5ced34aee1fe0cdf9e72618`).
+One temporary `fastboot boot` succeeded; user-mode USB capture received 96
+packets and ping succeeded. No flash or EDL was used. Decoded log and raw UDP
+are `/tmp/ios-extra-run-39901607539/logs/phone-0178-hfi-start-before-oob.txt`
+and `.udp`, both SHA256
+`fe5ab3ff3e0ed8634bc4e8d1d7e60cf2113a6db4b60f380bf91f9e599cd10b64`.
+
+Phone measured: HFI `START` request id 10, sequence 7, was ACKed before GPU
+OOB. OOB timed out. HOST2GMU bit 30 was seen transiently, but no GMU2HOST ACK
+appeared. HFI queues were empty after processing (`DBGQ ri=0/wi=0`,
+`MSGQ ri=88/wi=88`); firmware remained alive (`FW_INIT_RESULT=0x100`,
+`FW_BUSY=0`), GX stayed off (`GFX_PWR_CLK_STATUS=3`), and CM3 reset was
+verified. The order correction alone is not the fix. No GPU command, DMA,
+memory write/readback, draw or Metal output occurred.
+
+Source inspection of the Gen8.3/A810 profile shows it does not advertise
+`ADRENO_GMU_WARMBOOT`; Linux's warmboot scratch commands are therefore disabled
+for this profile. Linux still invokes default-vote setup after HFI START; its
+DCVS messages depend on runtime power-limit state. Verify those FP6 defaults and
+the GMU clock/OOB prerequisites before changing the HFI sequence again.
 
 ## OOB ACK mask result 0177 (2026-10-23)
 

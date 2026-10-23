@@ -1,30 +1,36 @@
 # ios-extra — current state
 
-## FP6 GMU OOB latest measured result 0177 and next candidate 0178 (2026-10-23)
+## FP6 GMU OOB latest measured result 0178 (2026-10-23)
 
-- Patch 0177 commit `d2ea6d0f76ca3e30b4b6a5beaf81fa1e44c4e200` passed CI
-  `39899820723`; the exact CI kernel and ADT were packaged with the verified
-  stock DTB and bounded ramdisk as
-  `/tmp/ios-extra-run-39899820723/package/fp6-gmu-unmask-oob-0177.img`
-  (SHA256 `0cefafad21267dab70be6b9efadaf315a59344fc7594684d03416e1483da2404`).
-  One temporary `fastboot boot` succeeded with user-mode USB capture and ping;
-  no flash or EDL was used. The 102-packet decoded log and raw UDP capture are
-  `/tmp/ios-extra-run-39899820723/logs/phone-0177-gmu-unmask-oob.txt` and `.udp`,
-  both SHA256 `f25bd1db526c22126d5474441b45b58d5abcfd232c40b0e458d2f2cc8ceecb2d`.
-- **Phone measured:** unmasking only GMU2HOST OOB ACK bit 31 did not resolve
-  the timeout. HOST2GMU OOB request bit 30 was seen transiently
-  (`raw_seen=0x40000000`), but no GMU2HOST ACK appeared. HFI debug and message
-  queues were empty, firmware remained alive, GX stayed off, and CM3 reset was
-  verified. No GPU command, DMA, memory write/readback, draw or Metal output.
-- A source-order audit corrected a prior claim: Qualcomm Gen8 Linux sends HFI
-  `START` in `gen8_hwsched_hfi_start()` before `gen8_hwsched_gpu_boot()` requests
-  GPU OOB. Patch 0174 moved `START` after OOB and therefore did **not** match
-  Linux; its phone result is still useful evidence that OOB timed out in that
-  ordering. Patch 0178 restores Linux's HFI `START`-before-OOB sequence while
-  retaining the 0177 ACK unmask. The exact patched source compiles to an arm64
-  object against the 0177 CI build tree; `tests/test_gpu_probe.py` and the full
-  host suite pass (13 tests, 5 skipped). Patch 0178 has not yet had CI or phone
-  validation; no image exists for it. Latest phone log is under `/tmp` above.
+- Patch 0178 commit `7b13c1483a57d39abb63db3df9eb5b678635589d` passed CI
+  `39901607539`. CI kernel SHA256 is
+  `31a576142f70b0c10257a80b411fc8bfc8b2ab97dbc8c2753fd7f9cb55d1aabf`; ADT
+  SHA256 is `78b5c4022739f417881702d761b43bf2ca8ec10ebd00fe9584ce01c37b93a583`.
+  Buildtree `sweet_gpu.c` matches the locally tested source exactly. Because
+  CI's stock-DTB URL is unset, I packaged the exact CI kernel/ADT with verified
+  local DTB and the workflow's static init as
+  `/tmp/ios-extra-run-39901607539/package-correct/fp6-gmu-hfi-start-before-oob-0178.img`
+  (SHA256 `be2f2e9217db28ad2c1c53b70706614351c41dbbd5ced34aee1fe0cdf9e72618`).
+- One temporary `fastboot boot` succeeded; user-mode USB capture received 96
+  packets and the phone answered ping. No flash or EDL was used. Decoded log
+  and raw UDP are
+  `/tmp/ios-extra-run-39901607539/logs/phone-0178-hfi-start-before-oob.txt` and
+  `.udp`, both SHA256
+  `fe5ab3ff3e0ed8634bc4e8d1d7e60cf2113a6db4b60f380bf91f9e599cd10b64`.
+- **Phone measured:** HFI `START` (request id 10, sequence 7) was ACKed before
+  the GPU OOB request. OOB still timed out: HOST2GMU bit 30 was seen
+  transiently, but no GMU2HOST ACK appeared (`intr_seen=0`). HFI debug/message
+  queues were empty after processing (`DBGQ ri=0/wi=0`, `MSGQ ri=88/wi=88`),
+  firmware remained alive (`FW_INIT_RESULT=0x100`, `FW_BUSY=0`), GX stayed off
+  (`GFX_PWR_CLK_STATUS=3`), and CM3 reset was verified. SMMU/context/clock votes
+  were retained. No GPU command, DMA, memory write/readback, draw or Metal output.
+- 0178 proves that correcting the HFI START/OOB order alone does not fix the
+  timeout. Source inspection of the Gen8.3/A810 profile shows it does not
+  advertise `ADRENO_GMU_WARMBOOT`, so Linux's warmboot scratch commands are
+  disabled for this profile. Linux still calls default-vote setup after HFI
+  START; whether it emits DCVS values depends on runtime power-limit state.
+  Resolve that FP6 configuration and compare XNU's vote table before adding
+  commands. 0177's ACK-bit unmask remains enabled.
 
 ## FP6 HFI response-queue phone result 0176 (2026-10-23)
 
