@@ -43,6 +43,21 @@ GX off by Linux's Gen8 predicate. The failure point is not established. Patch
 0174 tests the Linux ordering of GPU OOB before HFI `START`; do not treat this
 run as GPU power-on.
 
+## OOB-before-HFI-START result 0174 (2026-10-23)
+
+Patch 0174 moved HFI `START` to after GPU OOB, matching Linux's Gen8 GPU boot
+order. CI run `39894842246` passed. The correctly flagged temporary image
+booted successfully and ran the bounded sequence. HFI performance/BW tables,
+feature controls, core firmware start and context queue query ACKed; the GPU
+OOB request still timed out, so HFI `START` was not sent. Timeout status was
+`GMU2HOST_INTR_INFO=0`, `GFX_PWR_CLK_STATUS=3`, `FW_INIT_RESULT=0x100`,
+`FW_BUSY=0`, `CB0_FSR=0x400`, `sGFSR=0`. CM3 reset was verified and context and
+clock votes retained. This rules out ordering alone; no GPU execution occurred.
+The first temporary image from this CI run omitted the opt-in GMU flags and
+only booted init; the actual measurement used a repackaged image from the same
+kernel with the known flags. Full log and packet capture are under
+`/tmp/ios-extra-run-39894842246/logs/`.
+
 ## Gen8 GPU power-on OOB probe 0172 (2026-10-23)
 
 Commit `dc61567a02f8877fb9cbbdc80e9c05cb6cafe1a5` passed CI run

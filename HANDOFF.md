@@ -40,30 +40,31 @@ device proof.
 
 ## Current FP6 GPU state (2026-10-23)
 
-Patch 0173 is the latest phone run. Commit
-`0a1c0c10779d19ce2d17dd4d6fb442979f841565` passed CI `39891466280`; the CI
-kernel SHA-256 is `37b2f290b7f6132cc4bb5b8b551bc1c753600966514ef00b0e84273f2a1cfa3e`.
-The exact kernel/ADT, verified stock DTB and bounded ramdisk were packaged as
-`/tmp/ios-extra-run-39891466280/package/fp6-hfi-version-oob-0173.img/fp6-hfi-version-oob-0173.img`
-(SHA-256 `c962435ac5f920da54c09697e43087468f933f9cc2da70c522c9486d2207166b`).
-One temporary user-capture `fastboot boot` succeeded; no flash or EDL command
-was used. USB log and raw UDP are in `/tmp/ios-extra-run-39891466280/logs/`,
-both SHA-256 `7104517924257c8a343ce46ac9244519d8ac37e2d351137e14ec9700b2513214`.
+Patch 0174 is the latest phone run. Commit
+`ee5ef11c6a7964d5c771b0a50bd651e0860af5bd` passed CI `39894842246`; CI kernel
+SHA256 is `417107e3ae5717680f684e4eec2b9b716458fad579177a971bcdf926f16d3f32`.
+The first temporary image omitted GMU boot arguments and only reached init; a
+second package of the same kernel added the known SMMU/GMU flags and ran the
+probe. Its image is
+`/tmp/ios-extra-run-39894842246/package/fp6-oob-hfi-order-0174-gmu/fp6-oob-hfi-order-0174-gmu.img`
+(SHA256 `f7b6d29cf0a73e5be60481b0d415fa9bf48489f2474ca3938e19c8f3a6b5426f`).
+USB log and raw UDP are under `/tmp/ios-extra-run-39894842246/logs/`, SHA256
+`db8b95e99d8b9914fb0ace6c2d6b06cfe6dee221251bc7a37c964c4d7b876b3f`.
+No flash or EDL command was used.
 
-Phone measured: corrected HFI version handling queried context queues and got
-`context queues=1`; HFI `START` was ACKed. GPU OOB bit 30 timed out with
-HOST2GMU raw info 0 before/after, `GMU2HOST_INTR_INFO=0`,
-`GFX_PWR_CLK_STATUS=3`, `RPMH_POWER_STATE=0xf`, `FW_INIT_RESULT=0x100`,
-`FW_BUSY=0`, and `sGFSR=0`. Linux's Gen8 predicate treats status bit 0 or 1
-as GX off, so this does not demonstrate power-on. CM3 reset was verified;
-SMMU/context/clock votes were retained. No GPU MMIO read beyond status, DMA,
-command execution, readback, draw or Metal output occurred. CB0 FSR briefly
-sampled `0x400` at firmware-init logging and was zero at the OOB timeout.
-The next candidate is patch 0174, which matches Linux's ordering by requesting
-GPU OOB before sending HFI `START`. The raw HOST2GMU samples in 0173 cannot rule
-out a transient request latch. Verify the CI result and use one bounded phone
-run to measure whether OOB ACK precedes HFI `START`; do not assume the phone is
-in fastboot after a boot.
+Phone measured: SMMU table walk passed; DDR vote and HFI perf/BW, feature,
+core-FW and context-queue requests ACKed (`context queues=1`). Moving GPU OOB
+before HFI `START` to match Linux did not fix the timeout; `START` was not sent.
+At timeout `intr_info=0`, `GFX_PWR_CLK_STATUS=3` (GX off by Linux's predicate),
+`FW_INIT_RESULT=0x100`, `FW_BUSY=0`, `CB0_FSR=0x400`, `sGFSR=0`; CM3 reset was
+verified and SMMU/context/clock votes retained. No GPU core status, DMA,
+command, readback, draw or Metal output occurred. See `NOTES.md` and
+`docs/GPU_LOG.md` for exact evidence.
+
+Patch 0175 adds bounded sampling of the OOB request/interrupt registers and an
+HFI debug-queue dump on timeout. CI build and phone test are pending. The phone
+is currently not in fastboot; check again before requesting fastboot or running
+the next test.
 
 ## Historical FP6 GPU state at patch 0170 (2026-10-23)
 

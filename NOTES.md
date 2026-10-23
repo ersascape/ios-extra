@@ -1,5 +1,44 @@
 # ios-extra — current state
 
+## FP6 GMU OOB transient diagnostics candidate 0175 (2026-10-23)
+
+- Patch `0175-fp6-gmu-oob-transient-diagnostics.patch` samples the HOST2GMU
+  raw latch and GMU2HOST interrupt state throughout the existing bounded
+  100 ms OOB poll, then dumps the HFI debug queue on timeout. This distinguishes
+  a request that transiently latched or was consumed from one that never
+  appeared in the sampled register path, and may expose firmware error/debug
+  messages. It does not change the OOB request, power sequence, or GPU access.
+- The patch applies cleanly to the exact post-0174 CI source from run
+  `39894842246`; no CI build or phone test has run for 0175 yet.
+
+## FP6 Gen8 GPU OOB/HFI ordering phone result 0174 (2026-10-23)
+
+- Commit `ee5ef11c6a7964d5c771b0a50bd651e0860af5bd` passed CI run
+  `39894842246` (build and FP6 package-init jobs green; hosted boot-image
+  packaging skipped because `FP6_STOCK_DTB_URL` is unset). The CI kernel SHA256
+  is `417107e3ae5717680f684e4eec2b9b716458fad579177a971bcdf926f16d3f32`.
+  Packaged the exact kernel and ADT with the verified stock DTB and bounded
+  ramdisk. The first image omitted opt-in GMU boot arguments, so it only booted
+  to init and did not run the GPU probe. Repackaged the same build with the
+  proven SMMU/GMU flags; no source rebuild was needed.
+- One temporary boot of the correctly flagged image succeeded with user-mode
+  USB capture; no flash or EDL was used. The image is
+  `/tmp/ios-extra-run-39894842246/package/fp6-oob-hfi-order-0174-gmu/fp6-oob-hfi-order-0174-gmu.img`
+  (SHA256 `f7b6d29cf0a73e5be60481b0d415fa9bf48489f2474ca3938e19c8f3a6b5426f`).
+  Log and raw UDP are
+  `/tmp/ios-extra-run-39894842246/logs/phone-0174-oob-hfi-order-gmu.txt` and
+  `.udp`, SHA256 `db8b95e99d8b9914fb0ace6c2d6b06cfe6dee221251bc7a37c964c4d7b876b3f`
+  (105 packets).
+- **Phone measured:** SMMU table walk passed; DDR BCM vote, HFI perf/BW tables,
+  feature controls, core-FW start, and context-queue query all ACKed
+  (`context queues=1`). With GPU OOB moved before HFI `START`, OOB still timed
+  out; therefore HFI `START` was not sent. At timeout `intr_info=0`,
+  `gfx_pwr_clk=3` (GX off per Linux's Gen8 predicate), `fw_init=0x100`,
+  `fw_busy=0`, `CB0_FSR=0x400`, `sGFSR=0`; CM3 reset was verified and
+  SMMU/context/clock votes retained. This rules out request ordering alone as
+  the fix. No GPU core status, command, DMA, write/readback, draw or Metal
+  output was reached. The phone is not currently in fastboot.
+
 ## FP6 Gen8 GPU OOB/HFI ordering candidate 0174 (2026-10-23)
 
 - Source comparison found a meaningful ordering mismatch with Fairphone's
@@ -9,11 +48,7 @@
   final HFI request to after a successful OOB ACK and carries the actual HFI
   sequence number forward. It also avoids reading GPU status if the reordered
   HFI `START` fails.
-- The patch applies cleanly to the exact post-0173 `sweet_gpu.c` from CI
-  buildtree `39891466280`. It has not been compiled or run on the phone yet.
-  Expected discriminating result: either OOB ACK now appears before HFI `START`
-  ACK, or OOB still times out without sending HFI `START`; the latter would
-  rule out this ordering mismatch as the OOB blocker.
+- This candidate was built and tested; see the 0174 phone result above.
 
 ## FP6 HFI version correction and OOB diagnostics result 0173 (2026-10-23)
 
