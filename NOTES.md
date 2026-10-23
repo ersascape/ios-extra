@@ -1,5 +1,22 @@
 # ios-extra — current state
 
+## FP6 GPU texture repeat test: a persistent failure, not a cold start (2026-10-23)
+
+**Phone measured:** CI `40000677292` (head `54369bceec0805d1ed195001cc27205c4b6c64fb`, patch 0216)
+passed. Image `/tmp/ios-extra-run-40000677292/package/fp6-texrepeat-0216.img` (SHA256
+`5a13dc0c6bd837687a32cf61f66b993437c0cd59895019465bf5227995189773`; cmdline adds
+`fp6gpureplayonly=tex fp6gpureplayrepeat=3`) booted once via `fastboot boot`; no flash, EDL or `getvar`.
+Log `/tmp/ios-extra-run-40000677292/logs/phone-0216-texrepeat.txt`. Each of texlinear, texdouble and
+texture ran three times in fresh address spaces; all reached their fence.
+
+Differing samples per run: texlinear 24, 21, 21; texdouble 21, 22, 22; texture 21, 21, 24. Drawing the
+quad twice (texdouble) did not help, so it is not a cold start of the first draw. The failing set is
+nearly the same each time (18 to 21 pixels common to all three runs, 22 to 26 in the union), so the
+failure is mostly deterministic with a small variable part. Still unexplained. Next candidates, in order:
+compare Turnip's bindless texture path with Snapintosh's `CP_LOAD_STATE6_FRAG` indirect T#/S# path on
+the same descriptor, and bisect the draw state register by register against the oracle
+(`tools/fp6-pm4-state.py`).
+
 ## FP6 GPU: fitting the sysmem layout into 576 KiB did not fix texture sampling (2026-10-23)
 
 **Phone measured:** CI `39998754954` (head `39e5063b7bf9e576c304900b8768850b29e69bc8`, patch
