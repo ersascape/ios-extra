@@ -1,5 +1,32 @@
 # ios-extra — current state
 
+## FP6 TTBR0 capture replay, first draw attempt 0198 (2026-10-23)
+
+**Phone measured:** CI `39946365030` (head `79244af8d1ccf75430b80164a3a8bf61a9ec274c`)
+passed; build-tree source and header matched. Image
+`/tmp/ios-extra-run-39946365030/package/fp6-replay-0198.img` (SHA256
+`c281d47fd96911e76e985c2495387888238642de5970f303ebc1a4467c762ba6`; cmdline adds
+`fp6gpucompute=1 fp6gpureplay=1`) booted once via `fastboot boot`; no flash, EDL or
+`getvar`. 107 packets; log `/tmp/ios-extra-run-39946365030/logs/phone-0198-replay.txt`.
+
+The 0197 batch still passed first (`all 5 kernels passed`). The draw capture
+(Mesa Turnip, A810 profile, `TU_GMEM=622592 TU_DEBUG=sysmem,noubwc`: 8 BOs,
+343-dword stream with one IB, one draw, one blit) was replayed at its original
+IOVAs: a TTBR0 address space of 56 pages / 4 tables built, TTBR0 and TCR
+(`0xa0102010`) activated with readback, the ring accepted the submission
+(doorbell not dropped, CB0 FSR `0x400`, no translation fault). The CP consumed
+7 of 14 dwords (rptr 842/849) and stopped; the fence never fired and the GPU
+stayed busy (`0x70880004`). This is a hang inside the draw's indirect buffer, not
+a fault. The runner stopped at the first failure and had placed `draw` before
+`buf_init`, so the compute replay that validates TTBR0 translation did not run:
+TTBR0 translation itself is therefore not yet proven. Patch 0199 runs compute
+captures first and dumps per-pipe CP IB1/IB2 position and ROQ occupancy on a
+stall; its host tests and arm64 compile pass, CI and phone pending.
+
+Source note: Mesa's A8XX sysmem CCU layout for the A810 profile needs about
+608 KiB of GMEM against the 576 KiB part; the capture was made with a larger fake
+GMEM size, so those CCU offsets may be what the hardware rejects.
+
 ## FP6 batched compute kernels 0197 (2026-10-23)
 
 **Phone measured:** CI `39943744175` (head `e8b9e3d9a055e3fb7df3a14f9ec591934658aaed`)

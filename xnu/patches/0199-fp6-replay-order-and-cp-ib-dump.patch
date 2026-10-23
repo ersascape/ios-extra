@@ -1,0 +1,70 @@
+diff --git a/bsd/dev/sweet_gpu.c b/bsd/dev/sweet_gpu.c
+--- a/bsd/dev/sweet_gpu.c
++++ b/bsd/dev/sweet_gpu.c
+@@ -4900,6 +4900,25 @@
+ 	return 0;
+ }
+ 
++/* Where is the CP when a replay stalls? Per-pipe IB1/IB2 base, remaining and initial
++ * size plus ROQ occupancy (dword register numbers times four, via the CP aperture). */
++static void
++fp6_gpu_cp_ib_dump(vm_offset_t gpu)
++{
++	for (uint32_t pipe = 1u; pipe <= 2u; pipe++) {
++		fp6_smmu_write32(gpu, FP6_GPU_CP_APERTURE_CNTL_HOST, pipe << 12);
++		printf("QCOM GPU REPLAY: pipe=%u IB1=0x%08x%08x rem=%u init=%u IB2=0x%08x%08x rem=%u init=%u ROQ rb=%u ib1=%u ib2=%u\n",
++		    pipe,
++		    fp6_smmu_read32(gpu, 0x2404u), fp6_smmu_read32(gpu, 0x2400u),
++		    fp6_smmu_read32(gpu, 0x2408u), fp6_smmu_read32(gpu, 0x240cu),
++		    fp6_smmu_read32(gpu, 0x2414u), fp6_smmu_read32(gpu, 0x2410u),
++		    fp6_smmu_read32(gpu, 0x2418u), fp6_smmu_read32(gpu, 0x241cu),
++		    fp6_smmu_read32(gpu, 0x2460u), fp6_smmu_read32(gpu, 0x2464u),
++		    fp6_smmu_read32(gpu, 0x2468u));
++	}
++	fp6_smmu_write32(gpu, FP6_GPU_CP_APERTURE_CNTL_HOST, 0u);
++}
++
+ #define FP6_REPLAY_FENCE_OFFSET 0x100u /* dword index in the result page */
+ #define FP6_REPLAY_FENCE_VALUE 0x600dcafeu
+ 
+@@ -5008,14 +5027,16 @@
+ 	    fp6_smmu_read32(fp6_gpu_smmu_base, fp6_gpu_cb_off + FP6_SMMU_CB_FSR));
+ 	if (seen != FP6_REPLAY_FENCE_VALUE || good != total) {
+ 		fp6_gpu_exec_snapshot(g, gpu, "after-replay");
++		fp6_gpu_cp_ib_dump(gpu);
+ 		return 0;
+ 	}
+ 	fp6_replay_done[index] = 1;
+ 	return 1;
+ }
+ 
+-/* fp6gpureplay=1 replays every capture once, in table order, stopping at the
+- * first failure. */
++/* fp6gpureplay=1 replays every capture once, stopping at the first failure. Compute
++ * captures run before graphics ones so a failed draw cannot hide whether the
++ * TTBR0 address space itself works. */
+ static int
+ fp6_gpu_replay_probe(vm_offset_t g, vm_offset_t gpu)
+ {
+@@ -5028,11 +5049,16 @@
+ 		printf("QCOM GPU REPLAY: refused; execution pages unavailable\n");
+ 		return 0;
+ 	}
+-	for (unsigned i = 0; i < FP6_REPLAY_COUNT; i++) {
+-		if (!fp6_replay_run(g, gpu, i)) {
+-			printf("QCOM GPU REPLAY: %s failed; %u of %u captures passed\n", fp6_replays[i].name, i,
+-			    (unsigned)FP6_REPLAY_COUNT);
+-			return 0;
++	unsigned passed = 0;
++	for (unsigned pass = 0; pass < 2u; pass++) {
++		for (unsigned i = 0; i < FP6_REPLAY_COUNT; i++) {
++			if ((fp6_replays[i].check == FP6_REPLAY_CHECK_COLOR) != (pass == 1u)) continue;
++			if (!fp6_replay_run(g, gpu, i)) {
++				printf("QCOM GPU REPLAY: %s failed; %u of %u captures passed\n", fp6_replays[i].name,
++				    passed, (unsigned)FP6_REPLAY_COUNT);
++				return 0;
++			}
++			passed++;
+ 		}
+ 	}
+ 	printf("QCOM GPU REPLAY: all %u captures passed\n", (unsigned)FP6_REPLAY_COUNT);
