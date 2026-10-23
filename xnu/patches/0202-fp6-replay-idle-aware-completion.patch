@@ -1,0 +1,65 @@
+diff --git a/bsd/dev/sweet_gpu.c b/bsd/dev/sweet_gpu.c
+--- a/bsd/dev/sweet_gpu.c
++++ b/bsd/dev/sweet_gpu.c
+@@ -4922,6 +4922,8 @@
+ #define FP6_REPLAY_FENCE_OFFSET 0x100u /* dword index in the result page */
+ #define FP6_REPLAY_FENCE_VALUE 0x600dcafeu
+ 
++static uint32_t fp6_replay_last_rbbm, fp6_replay_last_bv_rptr;
++
+ /* Submit one CP_INDIRECT_BUFFER of the first ib_dwords of the capture's stream
+  * followed by a fence write; returns 1 once the fence and RPTR catch up. */
+ static int
+@@ -4977,9 +4979,11 @@
+ 	*seen_out = 0;
+ 	*rptr_out = rptr;
+ 	*target_out = wptr + n;
+-	if (!ring || rptr != wptr || (uint64_t)wptr + n >= size || size * 4u > ring->desc[7]) {
+-		printf("QCOM GPU REPLAY: %s ring unavailable (ring=%u size=%llu rptr=%u wptr=%u)\n",
+-		    r->name, ring != NULL, (unsigned long long)size, rptr, wptr);
++	/* The BR read pointer can lag after BV/BR sync work; an idle GPU is quiescent. */
++	if (!ring || (rptr != wptr && fp6_smmu_read32(gpu, 0x48u) != 1u) ||
++	    (uint64_t)wptr + n >= size || size * 4u > ring->desc[7]) {
++		printf("QCOM GPU REPLAY: %s ring unavailable (ring=%u size=%llu rptr=%u wptr=%u rbbm=0x%08x)\n",
++		    r->name, ring != NULL, (unsigned long long)size, rptr, wptr, fp6_smmu_read32(gpu, 0x48u));
+ 		return 0;
+ 	}
+ 	volatile uint32_t *fence = (volatile uint32_t *)(void *)(fp6_exec_result.va + 4u * FP6_REPLAY_FENCE_OFFSET);
+@@ -4995,18 +4999,21 @@
+ 		dropped = fp6_smmu_read32(g, FP6_GMU_AHB_FENCE_STATUS) & 1u;
+ 		if (!dropped) break;
+ 	}
+-	uint32_t seen = 0, now_rptr = 0;
++	uint32_t seen = 0, now_rptr = 0, rbbm = 0;
+ 	for (unsigned i = 0; i < 10000u; i++) {
+ 		fp6_gpu_invalidate_cpu_cache(fp6_exec_result.va, 4096u);
+ 		seen = *fence;
+ 		now_rptr = fp6_smmu_read32(gpu, FP6_GPU_CP_RB_RPTR_BR);
+-		if (seen == FP6_REPLAY_FENCE_VALUE && now_rptr == wptr + n) break;
++		rbbm = fp6_smmu_read32(gpu, 0x48u); /* RBBM_STATUS: 1 = idle */
++		if (seen == FP6_REPLAY_FENCE_VALUE && (now_rptr == wptr + n || rbbm == 1u)) break;
+ 		delay(100);
+ 	}
+ 	*dropped_out = dropped;
+ 	*seen_out = seen;
+ 	*rptr_out = now_rptr;
+-	return seen == FP6_REPLAY_FENCE_VALUE && now_rptr == wptr + n;
++	fp6_replay_last_rbbm = rbbm;
++	fp6_replay_last_bv_rptr = fp6_smmu_read32(gpu, 0x2028u); /* CP_RB_RPTR_BV 0x80a */
++	return seen == FP6_REPLAY_FENCE_VALUE && (now_rptr == wptr + n || rbbm == 1u);
+ }
+ 
+ static int
+@@ -5033,7 +5040,11 @@
+ 	    PE_parse_boot_argn("fp6gpureplaystep", &stepping, sizeof(stepping)) && stepping == 1) {
+ 		/* Prefix bisection: the first prefix whose fence never fires names the packet. */
+ 		for (unsigned k = 0; k < r->nsteps; k++) {
+-			if (!fp6_replay_submit(g, gpu, r, r->steps[k], &dropped, &seen, &now_rptr, &target)) {
++			int step_ok = fp6_replay_submit(g, gpu, r, r->steps[k], &dropped, &seen, &now_rptr, &target);
++			printf("QCOM GPU REPLAY: %s step %u/%u dwords=%u ok=%u fence=0x%08x rptr=%u/%u bv_rptr=%u rbbm=0x%08x\n",
++			    r->name, k + 1u, r->nsteps, r->steps[k], step_ok, seen, now_rptr, target,
++			    fp6_replay_last_bv_rptr, fp6_replay_last_rbbm);
++			if (!step_ok) {
+ 				printf("QCOM GPU REPLAY: %s STALLED at prefix %u/%u (%u dwords, previous good %u) dropped=%u fence=0x%08x rptr=%u/%u CB0_FSR=0x%08x\n",
+ 				    r->name, k + 1u, r->nsteps, r->steps[k], k ? r->steps[k - 1] : 0u, dropped, seen,
+ 				    now_rptr, target, fp6_smmu_read32(fp6_gpu_smmu_base, fp6_gpu_cb_off + FP6_SMMU_CB_FSR));

@@ -1,5 +1,29 @@
 # ios-extra — current state
 
+## FP6 draw replay with the Linux submit preamble 0201 (2026-10-23)
+
+**Phone measured:** CI `39950912667` (head `12da2b9f6f7179ea3dd91b78da4cae90fc71f224`)
+passed; build-tree source matched. Image
+`/tmp/ios-extra-run-39950912667/package/fp6-replay-preamble-0201.img` (SHA256
+`8d5d2fe032b562c2079bc62f6b07294a685597feb81bc748d04ba282df9259f1`; stepping on)
+booted once via `fastboot boot`; no flash, EDL or `getvar`. 103 packets; log
+`/tmp/ios-extra-run-39950912667/logs/phone-0201-preamble.txt`.
+
+`buf_init` through TTBR0 passed again (8/8). Draw prefix 64/121 (148 dwords, the
+`THREAD = BR | CONCURRENT_BIN_DISABLE` packet) still reported a stall, but this
+time the fence word read `0x600dcafe`: the CP did execute the fence write that
+follows the IB, so the preamble changed the behaviour. The stall verdict came
+from my criterion requiring `RPTR_BR == WPTR`; RPTR_BR read 2451 against 2460
+(9 dwords behind, the position of the wait-for-idle after the IB), and
+`RBBM_STATUS` stayed `0x00880005` (CP_BUSY + UNSLICE_BUSY). So after this packet
+the fence fires but the GPU never returns to idle and the BR read pointer does
+not catch up; whether BV (idle in the IB dump) or a pending sync is responsible is
+not established. Patch 0202 judges a step by fence plus (RPTR caught up or
+`RBBM_STATUS==1`), accepts an idle GPU as a quiescent ring for the next submit,
+and prints a per-step line with BR/BV read pointers and `RBBM_STATUS`. Host tests
+and arm64 compile pass; CI and phone pending. The triangle is still not
+confirmed drawn.
+
 ## FP6 TTBR0 replay validated; draw stall localized 0199 (2026-10-23)
 
 **Phone measured:** CI `39947768204` (head `d5ee1ca5610e509479fbf8efe608621e89fddabd`)
