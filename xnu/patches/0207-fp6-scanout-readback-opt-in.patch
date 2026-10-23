@@ -1,0 +1,27 @@
+diff --git a/bsd/dev/sweet_gpu.c b/bsd/dev/sweet_gpu.c
+--- a/bsd/dev/sweet_gpu.c
++++ b/bsd/dev/sweet_gpu.c
+@@ -5122,10 +5122,21 @@
+ 		uint64_t pa = FP6_SCANOUT_PA + (uint64_t)r->tri_y * stride;
+ 		uint64_t base = pa & ~0x3fffull;
+ 		uint64_t span = (pa - base) + (uint64_t)r->tri_size * stride;
+-		vm_offset_t map = ml_io_map((vm_offset_t)base, (vm_size_t)((span + 0x3fffull) & ~0x3fffull));
+ 		unsigned other = 0;
++		int readback = 0;
++		/* The CPU readback maps the framebuffer's physical range a second time. That range
++		 * is probably already mapped by the kernel, and a run that did this lost the whole
++		 * boot log (the phone reset after the triangle appeared on screen), so it is opt-in:
++		 * by default the verdict is the GPU fence, an idle GPU and the picture on the panel. */
++		(void)PE_parse_boot_argn("fp6gpuscanoutread", &readback, sizeof(readback));
++		vm_offset_t map = 0;
+ 		total = 1;
+-		if (!map) {
++		if (readback != 1) {
++			good = 1;
++			printf("QCOM GPU REPLAY: %s scanout copy complete (fence and idle); CPU readback not requested, check the panel\n",
++			    r->name);
++			(void)base; (void)span; (void)other;
++		} else if ((map = ml_io_map((vm_offset_t)base, (vm_size_t)((span + 0x3fffull) & ~0x3fffull))) == 0) {
+ 			printf("QCOM GPU REPLAY: %s framebuffer readback mapping failed\n", r->name);
+ 		} else {
+ 			const volatile uint8_t *origin = (const volatile uint8_t *)(map + (vm_offset_t)(pa - base));

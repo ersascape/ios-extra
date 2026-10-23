@@ -82,6 +82,8 @@ class GPUProbeTests(unittest.TestCase):
                           'scanout mapping must verify the exact ADT framebuffer geometry first')
             self.assertIn('#define FP6_SCANOUT_PA 0xe3940000ull', source,
                           'scanout base must be the ADT / upstream FP6 simple-framebuffer address')
+            self.assertIn('PE_parse_boot_argn("fp6gpuscanoutread"', source,
+                          'the framebuffer CPU readback must be opt-in after it lost a boot log')
             self.assertIn('PE_parse_boot_argn("fp6gpuscanout"', source,
                           'writing into the display framebuffer must be explicitly opt-in')
             self.assertIn('PE_parse_boot_argn("fp6gpureplaycb"', source,

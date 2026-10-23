@@ -1,5 +1,31 @@
 # ios-extra — current state
 
+## FP6 display stage 1: triangle appeared on the panel 0206 (2026-10-23)
+
+**Phone observed (user report) and measured:** CI `39973842648` (head
+`860a1a91d07c2d36c2b1a686950f2e21d85c72cb`) passed; source and header matched. Image
+`/tmp/ios-extra-run-39973842648/package/fp6-scanout-0206.img` (SHA256
+`092b98d2e0d6567b30355d0039843ce4244ebd20e08c0da1a8b8b437f9cd785a`; cmdline adds
+`fp6gpureplay=1 fp6gpureplaycb=1 fp6gpuscanout=1`) booted once via `fastboot boot`;
+no flash, EDL or `getvar`. The user reported that the triangle displayed on the
+panel and then the screen went back. The helper reported `phone answers ping:
+False`, captured no USB log, and the phone was in fastboot again afterwards
+(`/tmp/ios-extra-run-39973842648/logs/phone-0206-scanout-fastboot.txt` has only the
+fastboot transcript).
+
+So: the GPU's copy wrote into the scanout framebuffer through the TTBR0 address
+space (visible evidence from the user, not a software measurement), and the boot
+then reset before USB logging started. The probe's log is cached and only replayed
+after the probe returns, so any crash inside the probe loses the whole log; the
+cause is not measured. Hypothesis: the CPU readback, which `ml_io_map`s the
+framebuffer's physical range a second time (probably already mapped by the kernel)
+and is the only new CPU-side operation after the draw. Patch 0207 makes that
+readback opt-in (`fp6gpuscanoutread=1`); by default the verdict is the GPU fence,
+an idle GPU and the picture on the panel. Host tests and arm64 compile pass; CI and
+phone pending. Not established: whether the reset came from the readback at all
+(other candidates: a fault or watchdog after the GPU wrote the framebuffer), how
+long the picture stays, and the pixel values.
+
 ## FP6 display stage 1: GPU copy into the scanout framebuffer, candidate 0206 (2026-10-23)
 
 Source/host only; no phone result yet. The ADT's `sweet-fbcon` node and upstream
