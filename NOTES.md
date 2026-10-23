@@ -19,20 +19,32 @@
   XNU build succeeded and hosted image packaging was skipped because
   `FP6_STOCK_DTB_URL` is unset. Kernel SHA-256
   `314f570a70c67b73bff5eca32f867ed7bc05ad87d73baa3090f15bcca7195487`.
-  Packaged the matching CI ADT and verified Volcano DTB with the workflow init;
-  header-v2 round-trip passed. Image
-  `/tmp/ios-extra-run-39845816435/package/fp6-hfi-no-preempt-0171.img`,
-  SHA-256 `83e366c83190e98a62b0621c63726f263e0e142ddb3242138767fb471bffd37d`.
-  Args include `fp6gmunopreempt=1`. The phone check returned zero devices in
-  fastboot; no 0171 phone result yet. This image is still an HFI probe; GPU ring
-  initialization/execution remains later work.
+  The original `/tmp` image was removed, so it was rebuilt from the retained CI
+  kernel/ADT, verified Volcano DTB, and workflow init as
+  `/tmp/ios-extra-run-39845816435/repackage/fp6-hfi-no-preempt-0171.img`,
+  SHA-256 `bc489958ba715a53ccf4a8c489e3051600de6856ce38c9e89271fe06961a45da`.
+  Header-v2 kernel/DTB/ramdisk round-trip passed. Args include
+  `fp6gmunopreempt=1` and the established SMMU/GMU boot flags. One temporary
+  `fastboot boot` succeeded; no flash or EDL operation was used. The decoded USB
+  log is `/tmp/ios-extra-run-39845816435/logs/phone-0171-no-preempt.txt`, SHA-256
+  `9a7fedb23c75086fc06e09591bfee4ef95acf09dec6c976e46e42c15e2ee0ccd`; 97 UDP
+  packets were captured.
+- **Phone measured:** GMU firmware reported `FW_INIT_RESULT=0x100`, HFI
+  initialized and ACKed the startup tables/requests and bootstrap DDR vote. With
+  preemption omitted, firmware requested GPU allocations kinds 2, 14, 15 and 1,
+  plus GMU-only kind 16; it did not request secure kind 5. The HFI `START` ACK
+  was received. The bounded probe then reset CM3 and retained SMMU/context/clock
+  state. This resolves the secure-CSW allocation boundary for a non-preempting
+  path, but no GPU core boot, SQE execution, DMA write/readback, draw or Metal
+  output occurred. The next code step is Gen8.3 GPU core/SQE initialization after
+  this HFI boundary, using the Linux sequence and correctly staged SQE payload.
 - Linux Gen8.3 source inspection confirms `adreno_get_firmware()` strips the
   first four bytes of `gen80300_sqe.fw`, stages the remainder in a GPU-readable
   allocation, then programs the SQE instruction base and starts SQE before CP
   initialization. The pinned raw artifact is 84,564 bytes, SHA-256
   `38fd00147e8b752dd29c53a0badac8f94b1dbd89dc06f5b1c372d3428cd1b906`, kept in
-  `/tmp` only. This is not a phone result. `fastboot devices` still reports
-  zero devices, so the packaged 0171 probe remains pending.
+  `/tmp` only. This is source/artifact evidence; phone execution remains
+  unproven.
 
 ## FP6 CB0 takeover and HFI allocation boundary 0170 (2026-10-23)
 

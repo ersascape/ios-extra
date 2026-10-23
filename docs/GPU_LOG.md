@@ -1880,12 +1880,24 @@ default preemption remains unchanged. Focused normal and ASan/UBSan tests, full
 host suite, and local arm64 compile pass. Commit
 `3d05098ff1095f58ceec2769340f51a315f45f98` passed CI `39845816435`; kernel
 SHA-256 `314f570a70c67b73bff5eca32f867ed7bc05ad87d73baa3090f15bcca7195487`.
-The packaged header-v2 image is
-`/tmp/ios-extra-run-39845816435/package/fp6-hfi-no-preempt-0171.img`, SHA-256
-`83e366c83190e98a62b0621c63726f263e0e142ddb3242138767fb471bffd37d`; it uses
-the verified Volcano DTB, matching CI ADT and workflow init. Phone test is
-pending because fastboot currently reports zero devices. The patch does not yet
-start a GPU ring or prove execution.
+The original local package was removed, so it was reconstructed from the exact
+CI kernel/ADT, verified Volcano DTB and workflow init. The header-v2 image is
+`/tmp/ios-extra-run-39845816435/repackage/fp6-hfi-no-preempt-0171.img`, SHA-256
+`bc489958ba715a53ccf4a8c489e3051600de6856ce38c9e89271fe06961a45da`; the
+round-trip verified kernel, ramdisk and DTB. One temporary `fastboot boot`
+succeeded and USB capture recorded 97 UDP packets. Decoded log
+`/tmp/ios-extra-run-39845816435/logs/phone-0171-no-preempt.txt`, SHA-256
+`9a7fedb23c75086fc06e09591bfee4ef95acf09dec6c976e46e42c15e2ee0ccd`.
+
+**Phone measured:** `FW_INIT_RESULT=0x100`; HFI initialized. The startup tables,
+HFI configuration and bootstrap DDR vote were ACKed. With `fp6gmunopreempt=1`,
+the firmware requested kinds 2, 14, 15, GMU-only 16 and GPU kind 1, with no
+secure kind 5. The HFI `START` ACK arrived. The probe immediately reset CM3 and
+retained SMMU/context/clock votes. Thus the non-preempting path passes the secure
+CSW allocation boundary and HFI core-firmware start. It still has no GPU
+core/SQE boot, GPU-master DMA, command write/readback, draw or Metal result.
+The next implementation boundary is Gen8.3 GPU/SQE initialization after HFI
+start, following Fairphone Linux's `gen8_hwsched_gpu_boot()` and ring startup.
 
 # FP6 guarded CB0 reinitialization and secure HFI allocation boundary 0170 (2026-10-23)
 
