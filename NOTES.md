@@ -1,5 +1,39 @@
 # ios-extra — current state
 
+## Brightness reference: UniXNU-sheng AppleARMBacklight.cpp (2026-10-23)
+
+Source reading only; nothing implemented or measured. The file the user pointed to
+(`github.com/UniXNU/UniXNU-sheng/blob/main/package/AppleARMBacklight.cpp`, 384 lines;
+absent from the local `/home/ersa/Dev/UniXNU-sheng` clone at `2a1b2f6`, fetched
+read-only into scratch) drives the sheng phone's LCD backlight and shows exactly what
+iOS expects from a backlight service. Hardware half (not reusable on FP6): two Kinetic
+KTZ8866 chips on GENI I2C (address `0x11`, 11-bit level in registers `0x04`/`0x05`).
+iOS-facing half (reusable pattern):
+- CoreBrightness (backboardd) looks for a service with `backlight-control = true`,
+  reads min/max from `IODisplayParameters` -> `brightness` {min, max, value} and sets
+  `{brightness, FadePeriod}` through `setProperties` (`FadePeriod` is 16.16 seconds; the
+  file clamps it to 5 s and steps the fade every 16 ms on its own work loop).
+- The class cannot be named `AppleARMBacklight` (AppleARMPlatform already defines it;
+  a duplicate panics at class registration), yet CoreBrightness only takes the service
+  for the built-in display if `IOObjectConformsTo(service, "AppleARMBacklight")`
+  holds, and backboardd's sandbox allows setting the brightness keys on that class
+  only. The file copies its own vtable and overrides `getMetaClass` to answer
+  AppleARMBacklight's metaclass; a kernel patch (`zzwb-native-sandbox-grant-set-properties`)
+  lets backboardd alone set its properties. Publishing `backlight-control` without the
+  conformance made the screen stop updating (their int-236: the libEDR server never
+  started and QuartzCore's synchronous send blocked).
+- `setProperties` must not block on the service work loop (their int-277/278): it
+  stores the newest request atomically and arms a timer; a newer request replaces one
+  not yet taken.
+For the FP6 AMOLED the transport would be a DCS `WRDISBV` (`0x51`, 12-bit, big-endian
+two bytes; the init sequences contain `51 0D BB`, `51 0F FE`, `51 09 D9`) sent to the
+NT37705 over DSI, which is a panel write: it needs explicit user approval of the exact
+step, a conservative cap well below the panel maximum (the dtsi gives
+`peak-brightness = <14000000>` and the meaning of the upper range is not established),
+and no static bright image. Not established: how to send a DCS command through the
+FP6 DSI controller (command DMA path, clocks, LP mode) and which level the bootloader
+left.
+
 ## FP6 display level 3 and brightness sources (2026-10-23)
 
 Source/host only for level 3; no phone result yet. Patch 0210 adds `fp6dpusnap=3`:
