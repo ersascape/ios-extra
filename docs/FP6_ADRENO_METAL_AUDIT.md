@@ -328,6 +328,21 @@ defines S1CBNDX as unknown in this configuration, so `4` does not identify
 CB4. The next snapshot reads CBFRSYNRA0, CB0 SCTLR/TTBR0/TCR and CBAR/CBA2R, then
 compares the live stream route and SQE page-table descriptors. Do not yet
 attribute the fault to the omitted `gen8_start()` or power-up-list setup.
+
+The 0187 permission image remains an isolated CP probe rather than a complete
+Linux GPU boot. The exact `gen8_hwsched_gpu_boot()` order is GPU MMU start,
+GPU OOB, `gen8_start()`, GPU IRQ enable, SQE/AQE instruction-base setup, then
+HWSCHED boot. The A810 `gen8_start()` programs GMEM bounds and HBB/UBWC mode,
+the Gen8 noncontext register table, hang detection and UCHE prefetch, GMEM
+save/restore when enabled, protection and LLCC state, per-pipe APRIV policy,
+hardware clock gating, and the patched power-up register list. HWSCHED CP init
+then sends the shared seven-dword `gen8_cp_init_cmds()` payload with bit 8 set
+and the real `cpu_gpu_lock` list. XNU 0187 currently stages SQE and sends a
+bounded raw CP init with bit 8 clear and a placeholder list; it intentionally
+does not claim to replace this full sequence. If 0187 clears the SMMU fault but
+CP still fails to idle, the next implementation target is this Gen8.3 boot
+setup/list, using the captured registers and A810 DT values rather than
+guessing from the A6xx path.
 `CP_MEM_WRITE` was refused, and there is still no GPU write/readback, draw, or
 Metal output.
 
