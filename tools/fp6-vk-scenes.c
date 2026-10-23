@@ -131,6 +131,9 @@ int main(int argc, char **argv)
 	 * texture without the staging upload. They reuse the shaders of the scene they reduce. */
 	int is_vbufdraw = !strcmp(scene, "vbufdraw"), is_idxonly = !strcmp(scene, "idxonly"),
 	    is_texlinear = !strcmp(scene, "texlinear");
+	/* texdouble: the texlinear scene drawn twice into the same render pass (cold-start test). */
+	int is_texdouble = !strcmp(scene, "texdouble");
+	if (is_texdouble) is_texlinear = 1;
 	const char *shader = is_vbufdraw ? "vertexbuf" : is_idxonly ? "flat" : is_texlinear ? "texture" : scene;
 	if (!(is_flat || is_varying || is_ubo || is_blend || is_depth || is_texture || is_vbuf || is_vbufdraw ||
 	      is_idxonly || is_texlinear)) {
@@ -367,6 +370,7 @@ int main(int argc, char **argv)
 		vkCmdDrawIndexed(cmd, 3, 1, 0, 0, 0);
 	} else if (is_depth || is_texture || is_texlinear) {
 		vkCmdDraw(cmd, 6, 1, 0, 0);
+		if (is_texdouble) vkCmdDraw(cmd, 6, 1, 0, 0);
 	} else {
 		vkCmdDraw(cmd, 3, 1, 0, 0);
 	}
