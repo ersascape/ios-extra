@@ -59,10 +59,11 @@ as GX off, so this does not demonstrate power-on. CM3 reset was verified;
 SMMU/context/clock votes were retained. No GPU MMIO read beyond status, DMA,
 command execution, readback, draw or Metal output occurred. CB0 FSR briefly
 sampled `0x400` at firmware-init logging and was zero at the OOB timeout.
-The immediate next engineering question is why the bit-30 request does not
-remain in the raw latch; verify the live Gen8 register mapping and inspect the
-transient CB0 FSR before changing power sequencing. Do not assume the phone is
-in fastboot after this boot.
+The next candidate is patch 0174, which matches Linux's ordering by requesting
+GPU OOB before sending HFI `START`. The raw HOST2GMU samples in 0173 cannot rule
+out a transient request latch. Verify the CI result and use one bounded phone
+run to measure whether OOB ACK precedes HFI `START`; do not assume the phone is
+in fastboot after a boot.
 
 ## Historical FP6 GPU state at patch 0170 (2026-10-23)
 

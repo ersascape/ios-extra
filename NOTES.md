@@ -1,6 +1,21 @@
 # ios-extra — current state
 
-## FP6 HFI version correction and OOB diagnostics candidate 0173 (2026-10-23)
+## FP6 Gen8 GPU OOB/HFI ordering candidate 0174 (2026-10-23)
+
+- Source comparison found a meaningful ordering mismatch with Fairphone's
+  Qualcomm Gen8 Linux path. `gen8_gpu_boot()` starts the GPU MMU, requests GPU
+  OOB power, then sends HFI `START`; the current XNU probe sent HFI `START`
+  before OOB. Patch `0174-fp6-gmu-oob-before-hfi-start.patch` moves only that
+  final HFI request to after a successful OOB ACK and carries the actual HFI
+  sequence number forward. It also avoids reading GPU status if the reordered
+  HFI `START` fails.
+- The patch applies cleanly to the exact post-0173 `sweet_gpu.c` from CI
+  buildtree `39891466280`. It has not been compiled or run on the phone yet.
+  Expected discriminating result: either OOB ACK now appears before HFI `START`
+  ACK, or OOB still times out without sending HFI `START`; the latter would
+  rule out this ordering mismatch as the OOB blocker.
+
+## FP6 HFI version correction and OOB diagnostics result 0173 (2026-10-23)
 
 - Patch `0173-fp6-gmu-hfi-version-and-oob-diagnostics.patch` corrects the HFI
   version passed into the startup sequence. The 0172 phone log shows the five
@@ -39,9 +54,11 @@
   `0x400` during firmware init and `0` at timeout. CM3 reset was verified and
   SMMU/context/clock votes retained. No GPU core read, command, DMA,
   write/readback, draw or Metal output was measured.
-- The zero raw request latch places the failure before a GMU response or GPU
-  register failure. Next isolate the bit-30 OOB request write and transient
-  CB0 FSR; do not claim GPU power-on.
+- Raw HOST2GMU info was zero at the sampled times before and after the request,
+  but these samples cannot rule out a transient latch that firmware consumed.
+  `GFX_PWR_CLK_STATUS=3` indicates GX off by Linux's Gen8 predicate. The test
+  does not establish whether the request reached the GMU; do not claim GPU
+  power-on.
 
 ## FP6 GPU power-on OOB probe 0172 (2026-10-23)
 

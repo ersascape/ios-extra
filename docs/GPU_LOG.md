@@ -37,9 +37,11 @@ during firmware init and zero at timeout. CM3 reset was asserted and verified;
 SMMU/context/clock votes were retained. No GPU core read, command, DMA,
 write/readback, draw, or Metal output occurred.
 
-The zero raw request latch puts the failure before a GMU response. Next verify
-the live Gen8 register path and bit-30 request semantics, then inspect the
-transient CB0 FSR. Do not treat this as GPU power-on.
+The raw HOST2GMU values were zero at the sampled times; they do not rule out a
+transient request latch consumed by firmware. `GFX_PWR_CLK_STATUS=3` indicates
+GX off by Linux's Gen8 predicate. The failure point is not established. Patch
+0174 tests the Linux ordering of GPU OOB before HFI `START`; do not treat this
+run as GPU power-on.
 
 ## Gen8 GPU power-on OOB probe 0172 (2026-10-23)
 

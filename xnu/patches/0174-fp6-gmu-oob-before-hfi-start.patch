@@ -1,0 +1,56 @@
+--- a/bsd/dev/sweet_gpu.c
++++ b/bsd/dev/sweet_gpu.c
+@@ -4023,7 +4023,7 @@
+ 
+ static int
+ fp6_gmu_hfi_start_sequence(vm_offset_t smmu, uint32_t cb_off, vm_offset_t g,
+-		uint32_t hfi_version, uint8_t *mem)
++		uint32_t hfi_version, uint8_t *mem, unsigned *sequence_out)
+ {
+ 	static const uint32_t ddr_levels[] = { 0, 0x000bebc2u, 0x00209a8eu };
+ 	static const uint32_t cnoc_levels[] = { 0, 0x64u };
+@@ -4127,9 +4127,8 @@
+ 	/* HW_FENCE, LPAC and AQE stay off. Optionally omit the preemption
+ 	 * feature request to measure whether firmware still asks for secure CSW. */
+ 	if (!fp6_gmu_hfi_configure_preemption(smmu, cb_off, g, mem, &seq)) return 0;
+-	uint32_t gpu_start[1] = { fp6_hfi_hdr(10u, 1u) }; /* hfi_start_cmd is one dword */
+-	if (!fp6_gmu_hfi_send_req(smmu, cb_off, g, mem, gpu_start, 1u, &seq, NULL)) return 0;
+-	printf("QCOM GMU: HFI START ACK; core firmware initialized\n");
++	*sequence_out = seq;
++	printf("QCOM GMU: HFI configured; GPU OOB precedes HFI START\n");
+ 	return 1;
+ }
+ 
+@@ -4323,8 +4322,9 @@
+ 		    v, hfi ? "(HFI initialized)" : "(HFI init timeout)");
+ 		if (hfi) {
+ 			uint8_t *hfi_mem = fp6_gmu_range_va(fp6_gmu_hfi_va);
++			unsigned hfi_sequence = 0;
+ 			if (!hfi_mem || !fp6_gmu_hfi_start_sequence(smmu, cb_off, g,
+-			    fp6_smmu_read32(g, 0x3dff0u), hfi_mem)) {
++			    fp6_smmu_read32(g, 0x3dff0u), hfi_mem, &hfi_sequence)) {
+ 				printf("QCOM GMU: HFI startup sequence stopped; GMU will be reset\n");
+ 			} else {
+ 				vm_offset_t gpu = ml_io_map(0x03d00000u, 0x40000u);
+@@ -4339,10 +4339,17 @@
+ 					    fp6_smmu_read32(smmu, cb_off + FP6_SMMU_CB_FSR),
+ 					    fp6_smmu_read32(smmu, 0x048u));
+ 				} else {
+-					uint32_t rbbm = fp6_smmu_read32(gpu, 0x048u); /* GEN8_RBBM_STATUS */
+-					printf("QCOM GMU: GPU OOB ACK raw_before=0x%08x raw_after=0x%08x intr_info=0x%08x RBBM_STATUS=0x%08x; status read only\n", raw_before, raw_after, info, rbbm);
+-					fp6_smmu_write32(g, 0x47650u, 1u << 31); /* Linux oob_clear(oob_gpu) */
+-					printf("QCOM GMU: GPU OOB clear requested; no GPU command submitted\n");
++					uint32_t gpu_start[1] = { fp6_hfi_hdr(10u, 1u) }; /* HFI START follows GPU OOB */
++					if (!fp6_gmu_hfi_send_req(smmu, cb_off, g, hfi_mem, gpu_start, 1u,
++					    &hfi_sequence, NULL)) {
++						printf("QCOM GMU: HFI START after GPU OOB failed; CM3 reset will be asserted\n");
++					} else {
++						printf("QCOM GMU: HFI START ACK after GPU OOB\n");
++						uint32_t rbbm = fp6_smmu_read32(gpu, 0x048u); /* GEN8_RBBM_STATUS */
++						printf("QCOM GMU: GPU OOB ACK raw_before=0x%08x raw_after=0x%08x intr_info=0x%08x RBBM_STATUS=0x%08x; status read only\n", raw_before, raw_after, info, rbbm);
++						fp6_smmu_write32(g, 0x47650u, 1u << 31); /* Linux oob_clear(oob_gpu) */
++						printf("QCOM GMU: GPU OOB clear requested; no GPU command submitted\n");
++					}
+ 				}
+ 			}
+ 		}
