@@ -78,13 +78,13 @@ class GPUProbeTests(unittest.TestCase):
                           'compute dispatch must remain explicitly opt-in')
             self.assertIn('wanted < 1 || wanted > 16', source,
                           'repeat count must be bounded')
-            self.assertIn('fp6_cs_data_init[i] + 5u * iteration', source,
+            self.assertIn('test->data[i] + 5u * iteration', source,
                           'each repeat must verify the accumulated result')
-            self.assertIn('fp6_cs_patch(stream, fp6_cs_scratch_reloc', source,
+            self.assertIn('fp6_cs_patch(stream, test->reloc[2]', source,
                           'every pointer operand in the stream, including the event scratch, must be relocated')
-            self.assertIn('fp6_cs_patch(stream, fp6_cs_control_reloc', source,
+            self.assertIn('fp6_cs_patch(stream, test->reloc[3]', source,
                           'Mesa shim IOVAs must be relocated, including the completion fence')
-            self.assertIn('(uint64_t)wptr + FP6_CS_RING_DWORDS >= size', source,
+            self.assertIn('(uint64_t)wptr + total >= size', source,
                           'compute stream must not wrap the firmware ring')
             self.assertLess(source.index('(void)fp6_gpu_ring_probe(g, gpu);'),
                             source.index('(void)fp6_gpu_compute_probe(g, gpu);'),
@@ -226,15 +226,9 @@ class GPUProbeTests(unittest.TestCase):
                 '#define FP6_SQE_FW_VERSION 0x01100067u\n'
                 '#define FP6_SQE_FW_SIZE 16u\n'
                 'static const unsigned char fp6_sqe_fw[FP6_SQE_FW_SIZE] = {0};\n')
-            header_dir = work / 'hdr' / 'bsd' / 'dev'
-            header_dir.mkdir(parents=True)
-            (header_dir / 'fp6_gpu_compute_test.h').write_text(added_header(
-                ROOT / 'xnu/patches/0194-fp6-compute-dispatch-probe.patch',
-                'bsd/dev/fp6_gpu_compute_test.h'))
-            subprocess.run(['git', 'apply', '--include=bsd/dev/fp6_gpu_compute_test.h',
-                            str(ROOT / 'xnu/patches/0195-fp6-compute-scratch-fence-relocation.patch')],
-                           cwd=work / 'hdr', check=True)
-            shutil.copyfile(header_dir / 'fp6_gpu_compute_test.h', work / 'fp6_gpu_compute_test.h')
+            (work / 'fp6_gpu_compute_tests.h').write_text(added_header(
+                ROOT / 'xnu/patches/0197-fp6-compute-multi-kernel-batch.patch',
+                'bsd/dev/fp6_gpu_compute_tests.h'))
             (work / 'test.c').write_text(HARNESS)
             build = subprocess.run([shutil.which('cc') or 'cc', '-std=c11', '-Wall',
                                     '-Wextra', '-Werror', *os.environ.get('IOS_EXTRA_CFLAGS', '').split(), '-I', str(work),
