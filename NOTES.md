@@ -15,10 +15,20 @@ not yet a confirmed hardware fix.
 Patch 0187 removes GFX_PRIV from SQE leaf mappings while retaining executable
 and read-only attributes. The resulting AP bits allow unprivileged read-only
 access; ordinary data remains execute-never. The host page-table and GPU probe
-tests pass. Fastboot returned zero devices during this turn, so no phone test
-or image build has yet been run. The next build should combine 0186's
-CBFRSYNRA/CB0/PTE snapshot with this correction, then measure whether CP init
-advances past the SQE permission fault.
+tests pass (full suite: 13 passed, 5 skipped). Commit
+`65fc38b7a337e14c12135472e87d009823c86448` passed XNU CI run `39921911338`.
+The compiled buildtree `sweet_gpu.c` contains the unprivileged SQE mapping.
+Automatic image packaging was skipped because `FP6_STOCK_DTB_URL` is unset;
+the exact CI kernel and ADT were packaged locally with the verified stock DTB
+and bounded init ramdisk. Header-v2 kernel/ADT/DTB/ramdisk round-trip passed.
+Image `/tmp/ios-extra-run-0187/package/fp6-sqe-unprivileged-0187.img` has
+SHA256 `1c7ce78f29c6a5066a99a58ed361a1bc248bf643d4d23a2cf70daa5fb7c3ac4f`.
+Kernel SHA256 is `479972540ecfa7f94c434ed4d593bc46f8393d6ec1fd183f2e400d94f01519b3`,
+ADT SHA256 is `f5d9423bc54c42d08f7c4aeb82e8400eb0fd7b0f4e13b134a5f0b85dcfa54d56`,
+and stock DTB SHA256 is `8198534128258bfe7b05bbb5b227affc181aa49b376884c08eae8564fce124e3`.
+The cmdline enables the 0186 SMMU/GMU diagnostics and the bounded SQE/CP
+execution probe. Fastboot checks still return zero devices, so this image has
+not been booted and 0187 remains unconfirmed on hardware.
 
 ## FP6 SMMU fault attribution snapshot 0186 (2026-10-23)
 

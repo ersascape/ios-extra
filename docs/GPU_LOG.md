@@ -1,3 +1,28 @@
+## FP6 SQE unprivileged permission candidate 0187 (2026-10-23)
+
+Source review found that Linux maps SQE firmware read-only, executable and
+unprivileged: `adreno_get_firmware()` sets `GPUREADONLY` and `UCODE`, while
+`IOMMU_PRIV` is only set for the distinct `KGSL_MEMDESC_PRIVILEGED` flag. The
+0185 phone log's FSYNR0=`0x00040003` has PNU=0, indicating an unprivileged
+access, while XNU 0185 set GFX_PRIV and emitted privileged-only leaf AP bits.
+Patch 0187 removes that flag from SQE mappings. This is a source-backed
+candidate, not yet a hardware-confirmed correction.
+
+Commit `65fc38b7a337e14c12135472e87d009823c86448` passed CI run
+`39921911338`; the buildtree source contains the unprivileged executable SQE
+mapping. The full host suite passed (13 tests, 5 skipped). CI skipped image
+packaging because `FP6_STOCK_DTB_URL` is unset. The exact CI kernel and ADT
+were packaged with the verified stock DTB and bounded init ramdisk; header-v2
+round-trip passed. Image
+`/tmp/ios-extra-run-0187/package/fp6-sqe-unprivileged-0187.img` SHA256
+`1c7ce78f29c6a5066a99a58ed361a1bc248bf643d4d23a2cf70daa5fb7c3ac4f`.
+Kernel SHA256 `479972540ecfa7f94c434ed4d593bc46f8393d6ec1fd183f2e400d94f01519b3`,
+ADT SHA256 `f5d9423bc54c42d08f7c4aeb82e8400eb0fd7b0f4e13b134a5f0b85dcfa54d56`,
+DTB SHA256 `8198534128258bfe7b05bbb5b227affc181aa49b376884c08eae8564fce124e3`.
+The image enables the 0186 CB0/route/PTE snapshot and the bounded GPU execution
+probe. `fastboot devices` returned zero devices after packaging, so no boot or
+phone log exists for 0187 yet. No flash, EDL or `fastboot getvar` was used.
+
 ## FP6 SMMU fault attribution snapshot 0186 (2026-10-23)
 
 Patch 0186 adds read-only CB0 and CB4 snapshots, including CBFRSYNRA0/4, the
