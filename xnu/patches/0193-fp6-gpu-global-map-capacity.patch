@@ -1,0 +1,11 @@
+--- a/bsd/dev/fp6_gpu_global_domain.h
++++ b/bsd/dev/fp6_gpu_global_domain.h
+@@ -10,7 +10,7 @@
+ #define FP6_GPU_GLOBAL_SIZE       (20u * 1024u * 1024u)
+ #define FP6_GPU_GLOBAL_PAGE       4096u
+ #define FP6_GPU_GLOBAL_L3_COUNT   10u
+-#define FP6_GPU_GLOBAL_MAPS       32u
++#define FP6_GPU_GLOBAL_MAPS       64u
+ #define FP6_GPU_GLOBAL_GFX_PRIV   (1u << 1)
+ #define FP6_GPU_GLOBAL_GFX_WRITE  (1u << 2)
+ #define FP6_GPU_GLOBAL_GFX_EXEC   (1u << 3)
