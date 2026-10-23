@@ -1,5 +1,37 @@
 # ios-extra — current state
 
+## FP6 GPU texture root cause: wait for idle after the draw, then clean the CCU (2026-10-24)
+
+**Phone measured:** CI `40010657203` (head `2129d387b776590e72396110e0d22c354d88cb7d`, patch 0220)
+passed. Image `/tmp/ios-extra-run-40010657203/package/fp6-postdraw-0220.img` (SHA256
+`4853dbf62d9cdaf769a7584c7addfa93a9ba368882409488e273a3b865b90574`; `fp6gpureplayonly=tex`) booted once via
+`fastboot boot`; no flash, EDL or `getvar`. Log `/tmp/ios-extra-run-40010657203/logs/phone-0220-postdraw.txt`.
+All 12 replays reached their fence.
+
+All variants are the host-written 4x4 linear texture scene; differing samples out of 256:
+
+| variant | differing |
+|---|---|
+| baseline | 21 |
+| Turnip `syncdraw` only (wait-for-idle after every draw) | **0** |
+| Turnip `flushall` only (full cache flushes, no extra waits) | 19 |
+| packets inserted after the draw: wait-for-idle | 3 (169 pixels expected, 166 lit) |
+| after the draw: `CACHE_CLEAN` + wait-for-idle | 4 |
+| after the draw: `CCU_CLEAN_COLOR/DEPTH` + `CACHE_CLEAN` + wait-for-idle | **0** |
+| after the draw: CCU clean, CCU invalidate, `CACHE_CLEAN`, `CACHE_INVALIDATE7`, wait-for-idle | **0** |
+| the same full block before and after the draw | **0** |
+| wait-for-idle before and after the draw only | 3 |
+
+Conclusion (measured on the phone for this scene, mechanism inferred): on the Adreno 810 the cache cleans
+at the end of a render pass do not wait for fragments of the last draw that are still in flight, so the
+final pixels are lost or stale and read back as the clear colour. The stream must drain the draw with
+`CP_WAIT_FOR_IDLE` before `CCU_CLEAN_COLOR`, `CCU_CLEAN_DEPTH` and `CACHE_CLEAN`. That is the rule for the PM4
+builder (between a draw and anything that reads its output: wait for idle, then clean) and, for Turnip
+captures, what `TU_DEBUG=syncdraw` produces. Earlier results are explained by it: samples at the first
+pixels, the dependence on which cleans ran, and the earlier failures of `depth`, `blend` and `vertexbuf`.
+The kernel postamble (patch 0214) is unchanged: it already waits for idle before cleaning, but only after
+the user stream, so it cannot protect a copy or sample inside the stream.
+
 ## FP6 GPU: all ten scenes render exactly with Turnip flushall; flushes before the draw alone are not enough (2026-10-24)
 
 **Phone measured:** CI `40008940078` (head `b3ef15fb425d259acd7366f20eb353e20166bbc3`, patch 0219)

@@ -28,8 +28,8 @@ Fairphone 6, named **AdrenoGPU**, later carrying a Metal plug-in.
 | Turnip draws, blits, depth, blending, uniform buffers, vertex and index fetch | 0204 to 0218 |
 | GPU copy into the display framebuffer | 0206 |
 
-Open (measured): texture sampling returns wrong texels in the first fragments (about 20 of 256 samples),
-for causes not yet found. Not exercised at all: unprivileged IB execution under a context, several
+Texture sampling and the other early-pixel failures had one cause, now measured: the end-of-pass cache
+cleans must follow a wait-for-idle after the draw (see decision 3 and `NOTES.md`). Not exercised at all: unprivileged IB execution under a context, several
 contexts, GPU interrupts, faults and recovery, power management, GMEM-mode rendering, UBWC.
 
 ## Architecture
@@ -56,7 +56,11 @@ kernel       AdrenoGPU (IOService)  --- one IOUserClient per task
    `CP_INDIRECT_BUFFER`, thread-control both, `CP_WAIT_FOR_IDLE`, cache cleans, then a fence write. The
    exact words are those of `fp6_replay_submit` in `sweet_gpu.c`. A user stream built for Turnip also needs
    `CONCURRENT_BIN_DISABLE` cleared in its `CP_THREAD_CONTROL` packets; our own builder will not emit it.
-3. **Cache maintenance is the kernel's job.** The tests showed results change with the caches cleaned
+3. **Cache maintenance is split between the kernel and the stream.** Measured on 2026-10-24: a draw's
+   fragments must drain (`CP_WAIT_FOR_IDLE`) before the CCU and UCHE cleans, so any stream that reads a
+   draw's output inside itself (a copy, a sampled texture) needs wait-for-idle, `CCU_CLEAN_COLOR/DEPTH`
+   and `CACHE_CLEAN` after the draw. The PM4 builder emits that; the kernel cannot add it from outside the IB.
+   The kernel's part: The tests showed results change with the caches cleaned
    before the fence (patch 0214). The postamble cleans CCU colour, CCU depth and the UCHE
    (`CACHE_CLEAN`), and the preamble invalidates UCHE and CCHE (`CACHE_INVALIDATE7`, `CP_CCHE_INVALIDATE`).
    CPU-written buffer pages are cleaned to the point of coherency before a submission that reads them.

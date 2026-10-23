@@ -10,5 +10,6 @@ The generator is the MIT-licensed `tools/gen-a8xx-regs.py` of the Snapintosh pro
 
 The builder checks its streams against Turnip's with `tools/fp6-pm4-state.py`, which walks a capture
 (following indirect buffers and draw-state groups) and returns the register state at the draw.
-Rule learned on the phone (see `NOTES.md`, 2026-10-24): between a render-pass clear and the first
-draw the stream needs a cache flush, otherwise sampled textures come out wrong on this part.
+Rule learned on the phone (see `NOTES.md`, 2026-10-24): after a draw, `CP_WAIT_FOR_IDLE` and then
+`CCU_CLEAN_COLOR`, `CCU_CLEAN_DEPTH`, `CACHE_CLEAN` before anything reads the draw's output, otherwise the last
+pixels are lost on this part (textures, depth and vertex scenes came out wrong).
