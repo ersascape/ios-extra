@@ -81,18 +81,21 @@ static struct buf make_buffer(VkDeviceSize size, VkBufferUsageFlags usage)
 
 struct image { VkImage i; VkDeviceMemory m; VkImageView v; };
 
-static struct image make_image(VkFormat fmt, unsigned w, unsigned h, VkImageUsageFlags usage,
-    VkImageAspectFlags aspect)
+
+static struct image make_image_t(VkFormat fmt, unsigned w, unsigned h, VkImageUsageFlags usage,
+    VkImageAspectFlags aspect, VkImageTiling tiling)
 {
 	struct image r;
 	VkImageCreateInfo ic = { VK_STRUCTURE_TYPE_IMAGE_CREATE_INFO };
 	ic.imageType = VK_IMAGE_TYPE_2D; ic.format = fmt; ic.extent = (VkExtent3D){ w, h, 1 };
 	ic.mipLevels = 1; ic.arrayLayers = 1; ic.samples = VK_SAMPLE_COUNT_1_BIT;
-	ic.tiling = VK_IMAGE_TILING_OPTIMAL; ic.usage = usage; ic.initialLayout = VK_IMAGE_LAYOUT_UNDEFINED;
+	ic.tiling = tiling; ic.usage = usage;
+	ic.initialLayout = tiling == VK_IMAGE_TILING_LINEAR ? VK_IMAGE_LAYOUT_PREINITIALIZED : VK_IMAGE_LAYOUT_UNDEFINED;
 	CHECK(vkCreateImage(dev, &ic, 0, &r.i));
 	VkMemoryRequirements mr;
 	vkGetImageMemoryRequirements(dev, r.i, &mr);
-	VkMemoryAllocateInfo mai = { VK_STRUCTURE_TYPE_MEMORY_ALLOCATE_INFO, 0, mr.size, memtype(mr.memoryTypeBits, 0) };
+	VkMemoryAllocateInfo mai = { VK_STRUCTURE_TYPE_MEMORY_ALLOCATE_INFO, 0, mr.size, memtype(mr.memoryTypeBits,
+	    tiling == VK_IMAGE_TILING_LINEAR ? VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT : 0) };
 	CHECK(vkAllocateMemory(dev, &mai, 0, &r.m));
 	CHECK(vkBindImageMemory(dev, r.i, r.m, 0));
 	VkImageViewCreateInfo vc = { VK_STRUCTURE_TYPE_IMAGE_VIEW_CREATE_INFO };
@@ -100,6 +103,12 @@ static struct image make_image(VkFormat fmt, unsigned w, unsigned h, VkImageUsag
 	vc.subresourceRange = (VkImageSubresourceRange){ aspect, 0, 1, 0, 1 };
 	CHECK(vkCreateImageView(dev, &vc, 0, &r.v));
 	return r;
+}
+
+static struct image make_image(VkFormat fmt, unsigned w, unsigned h, VkImageUsageFlags usage,
+    VkImageAspectFlags aspect)
+{
+	return make_image_t(fmt, w, h, usage, aspect, VK_IMAGE_TILING_OPTIMAL);
 }
 
 static void barrier(VkCommandBuffer cmd, VkImage img, VkImageAspectFlags aspect, VkImageLayout from,
@@ -117,7 +126,14 @@ int main(int argc, char **argv)
 	int is_flat = !strcmp(scene, "flat"), is_varying = !strcmp(scene, "varying"), is_ubo = !strcmp(scene, "ubo"),
 	    is_blend = !strcmp(scene, "blend"), is_depth = !strcmp(scene, "depth"),
 	    is_texture = !strcmp(scene, "texture"), is_vbuf = !strcmp(scene, "vertexbuf");
-	if (!(is_flat || is_varying || is_ubo || is_blend || is_depth || is_texture || is_vbuf)) {
+	/* Diagnostics that split the vertexbuf and texture scenes into their parts: vertex fetch
+	 * without an index buffer, index fetch without a vertex buffer, and a host-written linear
+	 * texture without the staging upload. They reuse the shaders of the scene they reduce. */
+	int is_vbufdraw = !strcmp(scene, "vbufdraw"), is_idxonly = !strcmp(scene, "idxonly"),
+	    is_texlinear = !strcmp(scene, "texlinear");
+	const char *shader = is_vbufdraw ? "vertexbuf" : is_idxonly ? "flat" : is_texlinear ? "texture" : scene;
+	if (!(is_flat || is_varying || is_ubo || is_blend || is_depth || is_texture || is_vbuf || is_vbufdraw ||
+	      is_idxonly || is_texlinear)) {
 		fprintf(stderr, "unknown scene %s\n", scene);
 		return 2;
 	}
@@ -177,6 +193,21 @@ int main(int argc, char **argv)
 		float c[4] = { 0.2f, 0.8f, 0.4f, 1.0f };
 		memcpy(ubo.map, c, sizeof c);
 	}
+	if (is_vbufdraw) {
+		/* the quad's six vertices expanded, drawn without an index buffer */
+		float q[4][5] = { { -0.6f, -0.6f, 1, 0, 0 }, { 0.6f, -0.6f, 0, 1, 0 },
+		    { 0.6f, 0.6f, 0, 0, 1 }, { -0.6f, 0.6f, 1, 1, 0 } };
+		int order[6] = { 0, 1, 2, 0, 2, 3 };
+		float v[6][5];
+		for (int i = 0; i < 6; i++) memcpy(v[i], q[order[i]], sizeof v[i]);
+		vbuf = make_buffer(sizeof v, VK_BUFFER_USAGE_VERTEX_BUFFER_BIT);
+		memcpy(vbuf.map, v, sizeof v);
+	}
+	if (is_idxonly) {
+		uint16_t idx[3] = { 0, 1, 2 };
+		ibuf = make_buffer(sizeof idx, VK_BUFFER_USAGE_INDEX_BUFFER_BIT);
+		memcpy(ibuf.map, idx, sizeof idx);
+	}
 	if (is_vbuf) {
 		/* position.xy, colour.rgb per vertex; a quad as two triangles by index */
 		float v[4][5] = { { -0.6f, -0.6f, 1, 0, 0 }, { 0.6f, -0.6f, 0, 1, 0 },
@@ -186,6 +217,30 @@ int main(int argc, char **argv)
 		memcpy(vbuf.map, v, sizeof v);
 		ibuf = make_buffer(sizeof idx, VK_BUFFER_USAGE_INDEX_BUFFER_BIT);
 		memcpy(ibuf.map, idx, sizeof idx);
+	}
+	if (is_texlinear) {
+		uint32_t texels[16];
+		for (int y = 0; y < 4; y++)
+			for (int x = 0; x < 4; x++)
+				texels[y * 4 + x] = ((x + y) & 1) ? 0xff00ff00u : 0xff0000ffu;
+		tex = make_image_t(VK_FORMAT_R8G8B8A8_UNORM, 4, 4, VK_IMAGE_USAGE_SAMPLED_BIT,
+		    VK_IMAGE_ASPECT_COLOR_BIT, VK_IMAGE_TILING_LINEAR);
+		VkImageSubresource sr = { VK_IMAGE_ASPECT_COLOR_BIT, 0, 0 };
+		VkSubresourceLayout sl;
+		vkGetImageSubresourceLayout(dev, tex.i, &sr, &sl);
+		void *map;
+		CHECK(vkMapMemory(dev, tex.m, 0, VK_WHOLE_SIZE, 0, &map));
+		for (int y = 0; y < 4; y++) memcpy((char *)map + sl.offset + y * sl.rowPitch, &texels[y * 4], 16);
+		vkUnmapMemory(dev, tex.m);
+	}
+	if (is_texture || is_texlinear) {
+		/* sampler shared by both texture scenes */
+		VkSamplerCreateInfo sc = { VK_STRUCTURE_TYPE_SAMPLER_CREATE_INFO };
+		sc.magFilter = VK_FILTER_NEAREST; sc.minFilter = VK_FILTER_NEAREST;
+		sc.mipmapMode = VK_SAMPLER_MIPMAP_MODE_NEAREST;
+		sc.addressModeU = sc.addressModeV = sc.addressModeW = VK_SAMPLER_ADDRESS_MODE_CLAMP_TO_EDGE;
+		sc.maxLod = 0.0f;
+		CHECK(vkCreateSampler(dev, &sc, 0, &sampler));
 	}
 	if (is_texture) {
 		/* 4x4 RGBA8 checker (red/green) uploaded through a staging buffer */
@@ -197,19 +252,13 @@ int main(int argc, char **argv)
 		memcpy(staging.map, texels, sizeof texels);
 		tex = make_image(VK_FORMAT_R8G8B8A8_UNORM, 4, 4,
 		    VK_IMAGE_USAGE_SAMPLED_BIT | VK_IMAGE_USAGE_TRANSFER_DST_BIT, VK_IMAGE_ASPECT_COLOR_BIT);
-		VkSamplerCreateInfo sc = { VK_STRUCTURE_TYPE_SAMPLER_CREATE_INFO };
-		sc.magFilter = VK_FILTER_NEAREST; sc.minFilter = VK_FILTER_NEAREST;
-		sc.mipmapMode = VK_SAMPLER_MIPMAP_MODE_NEAREST;
-		sc.addressModeU = sc.addressModeV = sc.addressModeW = VK_SAMPLER_ADDRESS_MODE_CLAMP_TO_EDGE;
-		sc.maxLod = 0.0f;
-		CHECK(vkCreateSampler(dev, &sc, 0, &sampler));
 	}
 
 	/* Descriptors. */
 	VkDescriptorSetLayout dsl = 0;
 	VkDescriptorPool dpool = 0;
 	VkDescriptorSet dset = 0;
-	if (is_ubo || is_texture) {
+	if (is_ubo || is_texture || is_texlinear) {
 		VkDescriptorSetLayoutBinding b = { 0, is_ubo ? VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER
 		    : VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, 1, VK_SHADER_STAGE_FRAGMENT_BIT, 0 };
 		VkDescriptorSetLayoutCreateInfo dlci = { VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO, 0, 0, 1, &b };
@@ -222,22 +271,22 @@ int main(int argc, char **argv)
 		VkDescriptorBufferInfo dbi = { ubo.b, 0, 16 };
 		VkDescriptorImageInfo dii = { sampler, tex.v, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL };
 		VkWriteDescriptorSet wds = { VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET, 0, dset, 0, 0, 1, b.descriptorType,
-		    is_texture ? &dii : 0, is_ubo ? &dbi : 0, 0 };
+		    (is_texture || is_texlinear) ? &dii : 0, is_ubo ? &dbi : 0, 0 };
 		vkUpdateDescriptorSets(dev, 1, &wds, 0, 0);
 	}
 
 	/* Pipeline. */
 	VkPipelineShaderStageCreateInfo stages[2] = {
 		{ VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO, 0, 0, VK_SHADER_STAGE_VERTEX_BIT,
-		  module(dir, scene, "vert"), "main" },
+		  module(dir, shader, "vert"), "main" },
 		{ VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO, 0, 0, VK_SHADER_STAGE_FRAGMENT_BIT,
-		  module(dir, scene, "frag"), "main" },
+		  module(dir, shader, "frag"), "main" },
 	};
 	VkVertexInputBindingDescription vbd = { 0, 5 * sizeof(float), VK_VERTEX_INPUT_RATE_VERTEX };
 	VkVertexInputAttributeDescription vad[2] = { { 0, 0, VK_FORMAT_R32G32_SFLOAT, 0 },
 	    { 1, 0, VK_FORMAT_R32G32B32_SFLOAT, 2 * sizeof(float) } };
 	VkPipelineVertexInputStateCreateInfo vi = { VK_STRUCTURE_TYPE_PIPELINE_VERTEX_INPUT_STATE_CREATE_INFO };
-	if (is_vbuf) { vi.vertexBindingDescriptionCount = 1; vi.pVertexBindingDescriptions = &vbd;
+	if (is_vbuf || is_vbufdraw) { vi.vertexBindingDescriptionCount = 1; vi.pVertexBindingDescriptions = &vbd;
 		vi.vertexAttributeDescriptionCount = 2; vi.pVertexAttributeDescriptions = vad; }
 	VkPipelineInputAssemblyStateCreateInfo ia = { VK_STRUCTURE_TYPE_PIPELINE_INPUT_ASSEMBLY_STATE_CREATE_INFO,
 	    0, 0, VK_PRIMITIVE_TOPOLOGY_TRIANGLE_LIST };
@@ -293,6 +342,10 @@ int main(int argc, char **argv)
 		    VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL, VK_ACCESS_TRANSFER_WRITE_BIT, VK_ACCESS_SHADER_READ_BIT,
 		    VK_PIPELINE_STAGE_TRANSFER_BIT, VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT);
 	}
+	if (is_texlinear)
+		barrier(cmd, tex.i, VK_IMAGE_ASPECT_COLOR_BIT, VK_IMAGE_LAYOUT_PREINITIALIZED,
+		    VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL, VK_ACCESS_HOST_WRITE_BIT, VK_ACCESS_SHADER_READ_BIT,
+		    VK_PIPELINE_STAGE_HOST_BIT, VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT);
 	VkClearValue clears[2] = { { .color = { { is_blend ? 0.0f : 0.0f, 0.0f, is_blend ? 1.0f : 0.0f, 1.0f } } },
 	    { .depthStencil = { 1.0f, 0 } } };
 	VkRenderPassBeginInfo rpbi = { VK_STRUCTURE_TYPE_RENDER_PASS_BEGIN_INFO, 0, rp, fb, { { 0, 0 }, { W, H } },
@@ -305,7 +358,14 @@ int main(int argc, char **argv)
 		vkCmdBindVertexBuffers(cmd, 0, 1, &vbuf.b, &off);
 		vkCmdBindIndexBuffer(cmd, ibuf.b, 0, VK_INDEX_TYPE_UINT16);
 		vkCmdDrawIndexed(cmd, 6, 1, 0, 0, 0);
-	} else if (is_depth || is_texture) {
+	} else if (is_vbufdraw) {
+		VkDeviceSize off = 0;
+		vkCmdBindVertexBuffers(cmd, 0, 1, &vbuf.b, &off);
+		vkCmdDraw(cmd, 6, 1, 0, 0);
+	} else if (is_idxonly) {
+		vkCmdBindIndexBuffer(cmd, ibuf.b, 0, VK_INDEX_TYPE_UINT16);
+		vkCmdDrawIndexed(cmd, 3, 1, 0, 0, 0);
+	} else if (is_depth || is_texture || is_texlinear) {
 		vkCmdDraw(cmd, 6, 1, 0, 0);
 	} else {
 		vkCmdDraw(cmd, 3, 1, 0, 0);
