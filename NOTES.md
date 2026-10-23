@@ -1,5 +1,27 @@
 # ios-extra — current state
 
+## FP6 GPU: all ten scenes render exactly with Turnip flushall; flushes before the draw alone are not enough (2026-10-24)
+
+**Phone measured:** CI `40008940078` (head `b3ef15fb425d259acd7366f20eb353e20166bbc3`, patch 0219)
+passed. Image `/tmp/ios-extra-run-40008940078/package/fp6-flushvar-0219.img` (SHA256
+`9e51bac5d004b695a0a7a9d956233cb86cab528ae7fa77f78b73dba6549b0202`) booted once via `fastboot boot`; no
+flash, EDL or `getvar`. Log `/tmp/ios-extra-run-40008940078/logs/phone-0219-flushvar.txt`. All 19 replays
+reached their fence with `CB0_FSR=0x400`.
+
+Scenes captured with `TU_DEBUG=sysmem,noubwc,flushall,syncdraw`: **all ten match lavapipe exactly (0 of 256
+samples differ)**: idxonly, vbufdraw, texlinear (169 lit), flat, varying, ubo, blend, depth (71 lit), texture
+(the staging blit path, 169 lit) and vertexbuf (81 lit). Depth and blend, which had a few edge differences before,
+are now exact too.
+
+Control and injected variants of the baseline `texlinear` stream, each with extra packets inserted before the
+draw (`tools/fp6-gen-replay.py ...:inject=`): baseline 20 differing, `cache_clean`+wfi 20, `ccu_clean`+wfi 19,
+`cache_inv`+wfi 23, `ccu_inv`+wfi 19, all five events+wfi 21. None helps. So the pre-draw block that `flushall`
+adds is not what fixes it. The remaining differences between the baseline and `flushall` streams are the same
+events after the draw (in front of Turnip's end-of-pass `CCU_CLEAN_*`), an extra `CACHE_CLEAN` in the restore
+sequence, and `syncdraw`'s wait-for-idle after the draw. Working hypothesis (source reading, not yet measured):
+the end-of-pass cache cleans run while fragments of the draw are still in flight, so the last pixels never
+reach memory; a wait-for-idle right after the draw would be enough. Next boot: inject packets after the draw.
+
 ## FP6 GPU texture failure fixed by flushing before the draw: Turnip flushall renders it exactly (2026-10-24)
 
 **Phone measured:** CI `40007189649` (head `c8fe667d18e6b82ca655b4f01bd316c77ccb3d36`, patch 0218)
