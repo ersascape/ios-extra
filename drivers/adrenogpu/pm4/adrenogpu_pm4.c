@@ -298,3 +298,171 @@ adrenogpu_pm4_emit_restore(struct adrenogpu_cs *cs, const struct adrenogpu_gmem_
 	PKT7(cs, A8XX_E_CP_SET_DRAW_STATE, A8XX_PKT_CP_SET_DRAW_STATE__0__DISABLE_ALL_GROUPS(1), 0, 0);
 	emit_gmem_cache_cntl(cs, sysmem);
 }
+
+/* ---- render pass ---- */
+static void
+emit_static_binning_regs(struct adrenogpu_cs *cs)
+{
+	struct adrenogpu_regs r = { 0 };
+	R(&r, RB_BUFFER_CNTL, 0, F(RB_BUFFER_CNTL, Z_SYSMEM, 1) | F(RB_BUFFER_CNTL, S_SYSMEM, 1) |
+	    F(RB_BUFFER_CNTL, RT0_SYSMEM, 1) | F(RB_BUFFER_CNTL, RT1_SYSMEM, 1) | F(RB_BUFFER_CNTL, RT2_SYSMEM, 1) |
+	    F(RB_BUFFER_CNTL, RT3_SYSMEM, 1) | F(RB_BUFFER_CNTL, RT4_SYSMEM, 1) | F(RB_BUFFER_CNTL, RT5_SYSMEM, 1) |
+	    F(RB_BUFFER_CNTL, RT6_SYSMEM, 1) | F(RB_BUFFER_CNTL, RT7_SYSMEM, 1));
+	R(&r, GRAS_LRZ_CB_CNTL, 0, 0);
+	R(&r, GRAS_MODE_CNTL, 0, 0x2);
+	R(&r, RB_CLEAR_TARGET, 0, F(RB_CLEAR_TARGET, CLEAR_MODE, A8XX_E_CLEAR_MODE_SYSMEM));
+	adrenogpu_cs_ncrb(cs, &r);
+}
+
+static void
+emit_lrz_off(struct adrenogpu_cs *cs)
+{
+	struct adrenogpu_regs r = { 0 };
+	R64(&r, GRAS_LRZ_BUFFER_BASE, 0, 0);
+	R(&r, GRAS_LRZ_BUFFER_PITCH, 0, 0);
+	R(&r, GRAS_LRZ_VIEW_INFO, 0, 0);
+	R64(&r, GRAS_LRZ_FAST_CLEAR_BUFFER_BASE, 0, 0);
+	R(&r, GRAS_LRZ_DEPTH_BUFFER_INFO, 0, 0);
+	R(&r, GRAS_LRZ_CNTL2, 0, 0);
+	R(&r, GRAS_LRZ_BUFFER_SLICE_PITCH, 0, 0);
+	adrenogpu_cs_crb(cs, &r);
+}
+
+static void
+emit_marker(struct adrenogpu_cs *cs, unsigned mode)
+{
+	PKT7(cs, A8XX_E_CP_SET_MARKER, A8XX_PKT_A8XX_CP_SET_MARKER_0__MODE(mode));
+}
+
+void
+adrenogpu_pm4_emit_pass_begin(struct adrenogpu_cs *cs, const struct adrenogpu_pass *p,
+    const struct adrenogpu_gmem_config *sysmem)
+{
+	struct adrenogpu_regs r;
+	const unsigned W = p->width, H = p->height;
+	if (!W || !H || W > 16384 || H > 16384) {
+		cs->err = 1;
+		return;
+	}
+	adrenogpu_pm4_emit_restore(cs, sysmem, p->border_color_va);
+	/* fd6_emit_sysmem_prep */
+	adrenogpu_cs_event(cs, A8XX_E_LRZ_CACHE_FLUSH);
+	emit_marker(cs, A8XX_E_RM6_DIRECT_RENDER);
+	memset(&r, 0, sizeof r);
+	R(&r, GRAS_SC_WINDOW_SCISSOR_TL, 0, F(GRAS_SC_WINDOW_SCISSOR_TL, X, 0) | F(GRAS_SC_WINDOW_SCISSOR_TL, Y, 0));
+	R(&r, GRAS_SC_WINDOW_SCISSOR_BR, 0, F(GRAS_SC_WINDOW_SCISSOR_BR, X, W - 1) | F(GRAS_SC_WINDOW_SCISSOR_BR, Y, H - 1));
+	adrenogpu_cs_pkt4(cs, &r);
+	memset(&r, 0, sizeof r);
+	R(&r, GRAS_A2D_SCISSOR_TL, 0, F(GRAS_A2D_SCISSOR_TL, X, 0) | F(GRAS_A2D_SCISSOR_TL, Y, 0));
+	R(&r, GRAS_A2D_SCISSOR_BR, 0, F(GRAS_A2D_SCISSOR_BR, X, W - 1) | F(GRAS_A2D_SCISSOR_BR, Y, H - 1));
+	adrenogpu_cs_pkt4(cs, &r);
+	memset(&r, 0, sizeof r);
+	R(&r, RB_RESOLVE_CNTL_1, 0, F(RB_RESOLVE_CNTL_1, X, 0) | F(RB_RESOLVE_CNTL_1, Y, 0));
+	R(&r, RB_RESOLVE_CNTL_2, 0, F(RB_RESOLVE_CNTL_2, X, W - 1) | F(RB_RESOLVE_CNTL_2, Y, H - 1));
+	adrenogpu_cs_pkt4(cs, &r);
+	memset(&r, 0, sizeof r);
+	R(&r, GRAS_MODE_CNTL, 0, 0x2);
+	adrenogpu_cs_pkt4(cs, &r);
+	memset(&r, 0, sizeof r);
+	R(&r, RB_WINDOW_OFFSET, 0, F(RB_WINDOW_OFFSET, X, 0) | F(RB_WINDOW_OFFSET, Y, 0));
+	R(&r, RB_RESOLVE_WINDOW_OFFSET, 0, F(RB_RESOLVE_WINDOW_OFFSET, X, 0) | F(RB_RESOLVE_WINDOW_OFFSET, Y, 0));
+	R(&r, SP_WINDOW_OFFSET, 0, F(SP_WINDOW_OFFSET, X, 0) | F(SP_WINDOW_OFFSET, Y, 0));
+	R(&r, TPL1_WINDOW_OFFSET, 0, F(TPL1_WINDOW_OFFSET, X, 0) | F(TPL1_WINDOW_OFFSET, Y, 0));
+	R(&r, TPL1_A2D_WINDOW_OFFSET, 0, F(TPL1_A2D_WINDOW_OFFSET, X, 0) | F(TPL1_A2D_WINDOW_OFFSET, Y, 0));
+	R(&r, GRAS_SC_BIN_CNTL, 0, F(GRAS_SC_BIN_CNTL, BINW, 0) | F(GRAS_SC_BIN_CNTL, BINH, 0) |
+	    F(GRAS_SC_BIN_CNTL, FORCE_BI_DIR_LRZ_DISABLE, 1) | F(GRAS_SC_BIN_CNTL, RENDER_MODE, A8XX_E_RENDERING_PASS) |
+	    F(GRAS_SC_BIN_CNTL, LRZ_FEEDBACK_ZMODE_MASK, A8XX_E_LRZ_FEEDBACK_EARLY_Z_LATE_Z));
+	R(&r, RB_CNTL, 0, F(RB_CNTL, BINW, 0) | F(RB_CNTL, BINH, 0) | F(RB_CNTL, RENDER_MODE, A8XX_E_RENDERING_PASS) |
+	    F(RB_CNTL, LRZ_FEEDBACK_ZMODE_MASK, A8XX_E_LRZ_FEEDBACK_EARLY_Z_LATE_Z));
+	R(&r, VFD_RENDER_MODE, 0, F(VFD_RENDER_MODE, RENDER_MODE, A8XX_E_RENDERING_PASS));
+	R(&r, TPL1_BIN_SIZE, 0, F(TPL1_BIN_SIZE, BINW, 0) | F(TPL1_BIN_SIZE, BINH, 0));
+	R(&r, TPL1_A2D_BIN_SIZE, 0, F(TPL1_A2D_BIN_SIZE, BINW, 0) | F(TPL1_A2D_BIN_SIZE, BINH, 0));
+	R(&r, SP_BIN_SIZE, 0, F(SP_BIN_SIZE, BINW, 0) | F(SP_BIN_SIZE, BINH, 0));
+	for (unsigned i = 0; i < 8; i++)
+		R(&r, RB_MRT_GMEM_DIMENSION_REG, i, F(RB_MRT_GMEM_DIMENSION_REG, WIDTH, 0) | F(RB_MRT_GMEM_DIMENSION_REG, HEIGHT, 0));
+	R(&r, RB_DEPTH_GMEM_DIMENSION, 0, F(RB_DEPTH_GMEM_DIMENSION, WIDTH, 0) | F(RB_DEPTH_GMEM_DIMENSION, HEIGHT, 0));
+	R(&r, RB_STENCIL_GMEM_DIMENSION, 0, F(RB_STENCIL_GMEM_DIMENSION, WIDTH, 0) | F(RB_STENCIL_GMEM_DIMENSION, HEIGHT, 0));
+	R(&r, RB_RESOLVE_CNTL_3, 0, F(RB_RESOLVE_CNTL_3, BINW, 0) | F(RB_RESOLVE_CNTL_3, BINH, 0));
+	R(&r, RB_BUFFER_CNTL, 0, F(RB_BUFFER_CNTL, Z_SYSMEM, 1) | F(RB_BUFFER_CNTL, S_SYSMEM, 1) |
+	    F(RB_BUFFER_CNTL, RT0_SYSMEM, 1) | F(RB_BUFFER_CNTL, RT1_SYSMEM, 1) | F(RB_BUFFER_CNTL, RT2_SYSMEM, 1) |
+	    F(RB_BUFFER_CNTL, RT3_SYSMEM, 1) | F(RB_BUFFER_CNTL, RT4_SYSMEM, 1) | F(RB_BUFFER_CNTL, RT5_SYSMEM, 1) |
+	    F(RB_BUFFER_CNTL, RT6_SYSMEM, 1) | F(RB_BUFFER_CNTL, RT7_SYSMEM, 1));
+	R(&r, GRAS_LRZ_CB_CNTL, 0, 0);
+	R(&r, VPC_SO_OVERRIDE, 0, F(VPC_SO_OVERRIDE, DISABLE, 0));
+	adrenogpu_cs_crb(cs, &r);
+	emit_marker(cs, A8XX_E_RM6_DIRECT_RENDER);
+	PKT7(cs, A8XX_E_CP_SKIP_IB2_ENABLE_GLOBAL, 0);
+	PKT7(cs, A8XX_E_CP_SKIP_IB2_ENABLE_LOCAL, 1);
+	PKT7(cs, A8XX_E_CP_SET_VISIBILITY_OVERRIDE, 1);
+	/* emit_zs (none), emit_mrt, emit_msaa */
+	memset(&r, 0, sizeof r);
+	R(&r, RB_DEPTH_BUFFER_INFO, 0, F(RB_DEPTH_BUFFER_INFO, DEPTH_FORMAT, A8XX_E_DEPTH6_NONE) |
+	    F(RB_DEPTH_BUFFER_INFO, TILEMODE, A8XX_E_TILE6_LINEAR));
+	R(&r, RB_DEPTH_BUFFER_PITCH, 0, F(RB_DEPTH_BUFFER_PITCH, VALUE, 0));
+	R(&r, RB_DEPTH_BUFFER_ARRAY_PITCH, 0, F(RB_DEPTH_BUFFER_ARRAY_PITCH, VALUE, 0));
+	R64(&r, RB_DEPTH_BUFFER_BASE, 0, 0);
+	R(&r, RB_DEPTH_GMEM_BASE, 0, 0);
+	R(&r, GRAS_SU_DEPTH_BUFFER_INFO, 0, F(GRAS_SU_DEPTH_BUFFER_INFO, DEPTH_FORMAT, A8XX_E_DEPTH6_NONE));
+	R(&r, RB_STENCIL_BUFFER_INFO, 0, F(RB_STENCIL_BUFFER_INFO, TILEMODE, A8XX_E_TILE6_LINEAR));
+	R(&r, RB_MRT_BUF_INFO, 0, F(RB_MRT_BUF_INFO, COLOR_FORMAT, p->color.rb_format) |
+	    F(RB_MRT_BUF_INFO, COLOR_TILE_MODE, p->color.tile_mode) | F(RB_MRT_BUF_INFO, COLOR_SWAP, p->color.swap));
+	R(&r, RB_MRT_PITCH, 0, F(RB_MRT_PITCH, VALUE, p->color.pitch));
+	R(&r, RB_MRT_ARRAY_PITCH, 0, F(RB_MRT_ARRAY_PITCH, VALUE, p->color.layer_bytes));
+	R64(&r, RB_MRT_BASE, 0, p->color.va);
+	R(&r, RB_MRT_BASE_GMEM, 0, 0);
+	R(&r, SP_PS_MRT_REG, 0, F(SP_PS_MRT_REG, COLOR_FORMAT, p->color.rb_format));
+	R64(&r, RB_COLOR_FLAG_BUFFER_ADDR, 0, p->color.va);
+	R(&r, RB_COLOR_FLAG_BUFFER_PITCH, 0, F(RB_COLOR_FLAG_BUFFER_PITCH, PITCH, 0) | F(RB_COLOR_FLAG_BUFFER_PITCH, ARRAY_PITCH, 0));
+	R(&r, GRAS_LRZ_MRT_BUFFER_INFO_0, 0, F(GRAS_LRZ_MRT_BUFFER_INFO_0, COLOR_FORMAT, p->color.rb_format));
+	R(&r, RB_SRGB_CNTL, 0, F(RB_SRGB_CNTL, SRGB_MRT0, p->color.srgb));
+	R(&r, SP_SRGB_CNTL, 0, F(SP_SRGB_CNTL, SRGB_MRT0, p->color.srgb));
+	R(&r, GRAS_CL_ARRAY_SIZE, 0, F(GRAS_CL_ARRAY_SIZE, VALUE, 0));
+	R(&r, TPL1_RAS_MSAA_CNTL, 0, F(TPL1_RAS_MSAA_CNTL, SAMPLES, A8XX_E_MSAA_ONE));
+	R(&r, TPL1_DEST_MSAA_CNTL, 0, F(TPL1_DEST_MSAA_CNTL, SAMPLES, A8XX_E_MSAA_ONE) | F(TPL1_DEST_MSAA_CNTL, MSAA_DISABLE, 1));
+	R(&r, GRAS_SC_RAS_MSAA_CNTL, 0, F(GRAS_SC_RAS_MSAA_CNTL, SAMPLES, A8XX_E_MSAA_ONE));
+	R(&r, GRAS_SC_DEST_MSAA_CNTL, 0, F(GRAS_SC_DEST_MSAA_CNTL, SAMPLES, A8XX_E_MSAA_ONE) | F(GRAS_SC_DEST_MSAA_CNTL, MSAA_DISABLE, 1));
+	R(&r, RB_RAS_MSAA_CNTL, 0, F(RB_RAS_MSAA_CNTL, SAMPLES, A8XX_E_MSAA_ONE));
+	R(&r, RB_DEST_MSAA_CNTL, 0, F(RB_DEST_MSAA_CNTL, SAMPLES, A8XX_E_MSAA_ONE) | F(RB_DEST_MSAA_CNTL, MSAA_DISABLE, 1));
+	R(&r, RB_RESOLVE_GMEM_BUFFER_INFO, 0, F(RB_RESOLVE_GMEM_BUFFER_INFO, SAMPLES, A8XX_E_MSAA_ONE));
+	adrenogpu_cs_crb(cs, &r);
+	/* fd6_emit_sysmem */
+	emit_gmem_cache_cntl(cs, sysmem);
+	emit_static_binning_regs(cs);
+	memset(&r, 0, sizeof r);
+	R(&r, RB_RENDER_CNTL, 0, F(RB_RENDER_CNTL, RASTER_MODE, A8XX_E_TYPE_TILED) | F(RB_RENDER_CNTL, RASTER_DIRECTION, A8XX_E_LR_TB));
+	R(&r, GRAS_SU_RENDER_CNTL, 0, 0);
+	adrenogpu_cs_crb(cs, &r);
+	emit_lrz_off(cs);
+}
+
+void
+adrenogpu_pm4_emit_draw_auto(struct adrenogpu_cs *cs, unsigned prim_type, unsigned instances, unsigned vertices)
+{
+	/* INDEX_SIZE is not meaningful without an index buffer; Turnip leaves bits 10-11 set (cntl 0xd84 for a
+	 * triangle list), and so does this. */
+	PKT7(cs, A8XX_E_CP_DRAW_INDX_OFFSET, A8XX_PKT_CP_DRAW_INDX_OFFSET_0__PRIM_TYPE(prim_type) |
+	    A8XX_PKT_CP_DRAW_INDX_OFFSET_0__SOURCE_SELECT(A8XX_E_DI_SRC_SEL_AUTO_INDEX) |
+	    A8XX_PKT_CP_DRAW_INDX_OFFSET_0__VIS_CULL(A8XX_E_USE_VISIBILITY) | (3u << 10), instances, vertices);
+}
+
+void
+adrenogpu_pm4_emit_pass_end(struct adrenogpu_cs *cs)
+{
+	/* The draw must drain before the cleans: a CP_WAIT_FOR_IDLE first (the measured fix), then the
+	 * fd6_emit_sysmem_fini / emit_common_fini flushes. */
+	adrenogpu_cs_wfi(cs);
+	adrenogpu_cs_event(cs, A8XX_E_CCU_CLEAN_COLOR);
+	adrenogpu_cs_event(cs, A8XX_E_CCU_CLEAN_DEPTH);
+	adrenogpu_cs_event(cs, A8XX_E_CCU_INVALIDATE_COLOR);
+	adrenogpu_cs_event(cs, A8XX_E_CCU_INVALIDATE_DEPTH);
+	adrenogpu_cs_event(cs, A8XX_E_CACHE_CLEAN);
+	adrenogpu_cs_event(cs, A8XX_E_DUMMY_EVENT);
+	adrenogpu_cs_event(cs, A8XX_E_SUBPASS_FENCE);
+	adrenogpu_cs_event(cs, A8XX_E_DUMMY_EVENT);
+	adrenogpu_cs_wfi(cs);
+	adrenogpu_cs_pkt7(cs, A8XX_E_CP_CCHE_INVALIDATE, NULL, 0);
+	adrenogpu_cs_wfi(cs);
+	adrenogpu_cs_event(cs, A8XX_E_CACHE_CLEAN);
+	PKT7(cs, A8XX_E_CP_SKIP_IB2_ENABLE_GLOBAL, 0);
+	adrenogpu_cs_event(cs, A8XX_E_LRZ_CACHE_FLUSH);
+}

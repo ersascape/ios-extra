@@ -62,4 +62,31 @@ unsigned adrenogpu_calc_gmem_layout(const struct adrenogpu_chip *, unsigned gmem
  * draw-state reset, and the sysmem GMEM cache configuration. */
 void adrenogpu_pm4_emit_restore(struct adrenogpu_cs *, const struct adrenogpu_gmem_config *sysmem,
     uint64_t border_color_va);
+
+/* ---- one sysmem render pass: one linear or tiled colour target, no depth, MSAA off ---- */
+struct adrenogpu_color_target {
+	uint64_t va;            /* GPU virtual address of level 0 */
+	uint32_t pitch;         /* bytes per row */
+	uint32_t layer_bytes;   /* bytes per layer (RB_MRT_ARRAY_PITCH) */
+	unsigned rb_format;     /* A8XX_E_FMT6_* colour format */
+	unsigned swap;          /* A8XX_E_WZYX or WXYZ */
+	unsigned tile_mode;     /* A8XX_E_TILE6_* */
+	unsigned srgb;
+};
+
+struct adrenogpu_pass {
+	unsigned width, height;
+	struct adrenogpu_color_target color;
+	uint64_t border_color_va;
+};
+
+/* Restore, fd6_emit_sysmem_prep, the attachments and fd6_emit_sysmem, without the load-action clear (the 2D
+ * clear is a later step). */
+void adrenogpu_pm4_emit_pass_begin(struct adrenogpu_cs *, const struct adrenogpu_pass *,
+    const struct adrenogpu_gmem_config *sysmem);
+/* CP_DRAW_INDX_OFFSET, auto-index (no index buffer), visibility use as Turnip emits it. */
+void adrenogpu_pm4_emit_draw_auto(struct adrenogpu_cs *, unsigned prim_type, unsigned instances, unsigned vertices);
+/* End of pass. Measured on the Adreno 810 (NOTES.md, 2026-10-24): the draw must drain first, so a
+ * CP_WAIT_FOR_IDLE comes before any CCU or cache clean; without it the last pixels are lost. */
+void adrenogpu_pm4_emit_pass_end(struct adrenogpu_cs *);
 #endif

@@ -28,6 +28,26 @@ main(int argc, char **argv)
 	printf("PASS: the A810 sysmem layout does not fit 576 KiB (lowest offset %d), GMEM mode does\n",
 	    (int)sysmem.depth_ccu_offset);
 
+	if (argc > 10 && !strcmp(argv[1], "pass")) {
+		/* pass FILE W H VA PITCH LAYER FMT SWAP TILE BORDER: one pass (begin, draw, end) for the Turnip comparison. */
+		adrenogpu_calc_gmem_layout(&chip, 622592, &gmem, &sysmem);
+		struct adrenogpu_pass pass = { (unsigned)atoi(argv[3]), (unsigned)atoi(argv[4]),
+		    { strtoull(argv[5], NULL, 16), (uint32_t)atoi(argv[6]), (uint32_t)atoi(argv[7]), (unsigned)atoi(argv[8]),
+		      (unsigned)atoi(argv[9]), (unsigned)atoi(argv[10]), 0 }, strtoull(argv[11], NULL, 16) };
+		uint32_t buf[2048];
+		struct adrenogpu_cs cs;
+		adrenogpu_cs_init(&cs, buf, 2048);
+		adrenogpu_pm4_emit_pass_begin(&cs, &pass, &sysmem);
+		size_t begin = cs.n;
+		adrenogpu_pm4_emit_draw_auto(&cs, 4, 1, 3);
+		adrenogpu_pm4_emit_pass_end(&cs);
+		assert(!cs.err);
+		FILE *f = fopen(argv[2], "wb");
+		assert(f && fwrite(buf, 4, cs.n, f) == cs.n);
+		fclose(f);
+		printf("pass: %zu dwords (%zu before the draw)\n", cs.n, begin);
+		return 0;
+	}
 	if (argc > 1) {
 		/* Dump the restore stream for the comparison against Turnip. */
 		adrenogpu_calc_gmem_layout(&chip, 622592, &gmem, &sysmem);
