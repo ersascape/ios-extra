@@ -1,5 +1,24 @@
 # ios-extra — current state
 
+## FP6 display stage 2: read-only DPU snapshot, candidate 0208 (2026-10-23)
+
+Source/host only; no phone result. The stock FP6 DT (`mdss_mdp@ae00000`, reg
+`0xae00000/0x84000`) gives the block map: CTL0 `+0x16000`, LM0 `+0x45000`
+(`display-pref primary`), SSPP VIG0 `+0x5000` and DMA0..2 `+0x25000/27000/29000`,
+INTF `+0x35000..0x38000` (type list `dp, dsi, none, dp`, so the panel is INTF_1 at
+`+0x36000`), pingpong `+0x6a000`, DSI ctrl `0xae94000` (v2.8), DSI PHY `0xae95500`
+(v5.2), dispcc `0xaf00000`, `disp_cc_mdss_core_gdsc` at `0xaf09000`. Register
+offsets inside the blocks are taken from mainline Linux `dpu_hw_{ctl,lm,sspp,intf}.c`
+(fetched from git.kernel.org), not from a measurement. Patch 0208 adds an opt-in,
+write-free probe (`fp6dpusnap=1`: GDSC status + MDSS `HW_VERSION` only; `=2`: also
+CTL0, LM0, the four SSPPs and INTF_1) called first from `fp6_smmu_inventory()`. It
+reads the GDSC first and does not map the MDP block if PWR_ON is clear, because a
+read of an unpowered or unclocked block can hang the bus and lose the whole boot log
+(as the framebuffer readback did in 0206). Host tests (including a no-write and a
+GDSC-before-MDP ordering assertion) and the arm64 compile pass. Planned: boot level 1
+first, then level 2, from the same CI kernel. Whether HLOS may read these blocks at
+all (the DT mentions a trusted-VM display) is unmeasured.
+
 ## FP6 display stage 1 without the CPU readback 0207 (2026-10-23)
 
 **Phone measured:** CI `39975616055` (head `aeb8e8dbcb006699c0c1dfea21e65501562e003b`)

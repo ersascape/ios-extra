@@ -1,0 +1,109 @@
+diff --git a/bsd/dev/sweet_gpu.c b/bsd/dev/sweet_gpu.c
+--- a/bsd/dev/sweet_gpu.c
++++ b/bsd/dev/sweet_gpu.c
+@@ -5857,10 +5857,105 @@
+ 	return 1;
+ }
+ 
++/* Display stage 2: read-only snapshot of what the bootloader left configured. Register
++ * map from the stock FP6 DT (mdss_mdp@ae00000: CTL0 +0x16000, LM0 +0x45000, SSPP
++ * +0x5000/0x25000/0x27000/0x29000, DSI INTF_1 +0x36000) and mainline Linux
++ * dpu_hw_{ctl,lm,sspp,intf}.c. Reading a block that is unpowered or unclocked can hang
++ * the bus and lose the boot log, so level 1 reads only the MDSS core GDSC status
++ * (disp_cc_mdss_core_gdsc@af09000, bit 31 = PWR_ON) and the MDP version word; level 2
++ * reads the pipeline registers and only runs if the GDSC reports power. No writes. */
++#define FP6_MDSS_PA        0x0ae00000ull
++#define FP6_MDSS_SIZE      0x84000u
++#define FP6_DISPCC_GDSC_PA 0x0af09000ull
++struct fp6_dpu_reg { const char *name; uint32_t off; };
++static const struct fp6_dpu_reg fp6_dpu_ctl_regs[] = {
++	{ "LAYER0", 0x00 }, { "TOP", 0x14 }, { "FLUSH", 0x18 }, { "START", 0x1c },
++	{ "EXT0", 0x40 }, { "EXT2", 0x70 }, { "EXT3", 0xa0 }, { "EXT4", 0xb8 },
++	{ "MERGE3D_ACT", 0xe4 }, { "DSC_ACT", 0xe8 }, { "WB_ACT", 0xec },
++	{ "INTF_ACT", 0xf4 }, { "FETCH_ACT", 0xfc }, { "PIPE_ACT", 0x12c },
++	{ "LAYER_ACT", 0x130 }, { "INTF_MASTER", 0x134 },
++};
++static const struct fp6_dpu_reg fp6_dpu_lm_regs[] = {
++	{ "OP_MODE", 0x00 }, { "OUT_SIZE", 0x04 }, { "BORDER0", 0x08 }, { "BG_SRC_SEL", 0x14 },
++	{ "BORDER0_V12", 0x1c }, { "BORDER1_V12", 0x20 },
++	{ "BLEND0_OP", 0x20 }, { "BLEND0_FG_SRC", 0x24 }, { "BLEND0_CONST", 0x28 },
++	{ "BLEND1_OP", 0x38 }, { "BLEND1_FG_SRC", 0x3c },
++};
++static const struct fp6_dpu_reg fp6_dpu_sspp_regs[] = {
++	{ "SRC_SIZE", 0x00 }, { "SRC_XY", 0x08 }, { "OUT_SIZE", 0x0c }, { "OUT_XY", 0x10 },
++	{ "SRC0_ADDR", 0x14 }, { "YSTRIDE0", 0x24 }, { "FORMAT", 0x30 }, { "UNPACK", 0x34 },
++	{ "OP_MODE", 0x38 }, { "UBWC_STATIC", 0x44 }, { "FETCH_CFG", 0x48 }, { "ADDR_SW_STATUS", 0x70 },
++};
++static const struct fp6_dpu_reg fp6_dpu_intf_regs[] = {
++	{ "TIMING_EN", 0x000 }, { "CONFIG", 0x004 }, { "HSYNC_CTL", 0x008 },
++	{ "VSYNC_PERIOD", 0x00c }, { "VSYNC_PULSE", 0x014 },
++	{ "DISP_V_START", 0x01c }, { "DISP_V_END", 0x024 }, { "ACT_V_START", 0x02c },
++	{ "ACT_V_END", 0x034 }, { "DISP_HCTL", 0x03c }, { "ACT_HCTL", 0x040 },
++	{ "BORDER_COLOR", 0x044 }, { "UNDERFLOW_COLOR", 0x048 }, { "HSYNC_SKEW", 0x04c },
++	{ "POLARITY", 0x050 }, { "TEST_CTL", 0x054 }, { "CONFIG2", 0x060 },
++	{ "DSI_CMD_TRIG", 0x084 }, { "PANEL_FORMAT", 0x090 }, { "FRAME_LINE_EN", 0x0a8 },
++	{ "FRAME_COUNT", 0x0ac }, { "LINE_COUNT", 0x0b0 }, { "TPG_ENABLE", 0x100 },
++	{ "PROG_FETCH", 0x170 }, { "MUX", 0x25c }, { "STATUS", 0x26c },
++};
++
++static void
++fp6_dpu_dump(const char *block, vm_offset_t base, uint32_t block_off,
++		const struct fp6_dpu_reg *regs, unsigned count)
++{
++	char line[200];
++	unsigned len = 0;
++	for (unsigned i = 0; i < count; i++) {
++		uint32_t v = fp6_smmu_read32(base, block_off + regs[i].off);
++		len += (unsigned)snprintf(line + len, sizeof(line) - len, " %s=0x%08x", regs[i].name, v);
++		if (len > sizeof(line) - 40u || i + 1u == count || (i % 4u) == 3u) {
++			printf("QCOM DPU: %s%s\\n", block, line);
++			len = 0;
++			line[0] = 0;
++		}
++	}
++}
++
++static void
++fp6_dpu_snapshot(void)
++{
++	int level = 0;
++	if (!PE_parse_boot_argn("fp6dpusnap", &level, sizeof(level)) || level < 1) return;
++	printf("QCOM DPU: read-only display snapshot level %d requested\\n", level);
++	vm_offset_t gd = ml_io_map(FP6_DISPCC_GDSC_PA & ~0x3fffull, 0x4000u);
++	if (!gd) {
++		printf("QCOM DPU: GDSC mapping failed; no display reads\\n");
++		return;
++	}
++	uint32_t gdscr = fp6_smmu_read32(gd, (uint32_t)(FP6_DISPCC_GDSC_PA & 0x3fffull));
++	printf("QCOM DPU: disp_cc_mdss_core_gdsc GDSCR=0x%08x (PWR_ON=%u SW_COLLAPSE=%u)\\n", gdscr,
++	    (gdscr >> 31) & 1u, gdscr & 1u);
++	if (!(gdscr & 0x80000000u)) {
++		printf("QCOM DPU: MDSS core power domain reports off; not touching the MDP block\\n");
++		return;
++	}
++	vm_offset_t mdp = ml_io_map(FP6_MDSS_PA, FP6_MDSS_SIZE);
++	if (!mdp) {
++		printf("QCOM DPU: MDP mapping failed\\n");
++		return;
++	}
++	printf("QCOM DPU: MDSS HW_VERSION=0x%08x\\n", fp6_smmu_read32(mdp, 0x0u));
++	if (level < 2) return;
++	fp6_dpu_dump("CTL0", mdp, 0x16000u, fp6_dpu_ctl_regs, sizeof(fp6_dpu_ctl_regs) / sizeof(fp6_dpu_ctl_regs[0]));
++	fp6_dpu_dump("LM0", mdp, 0x45000u, fp6_dpu_lm_regs, sizeof(fp6_dpu_lm_regs) / sizeof(fp6_dpu_lm_regs[0]));
++	static const uint32_t sspp_off[4] = { 0x5000u, 0x25000u, 0x27000u, 0x29000u };
++	static const char *const sspp_name[4] = { "SSPP VIG0", "SSPP DMA0", "SSPP DMA1", "SSPP DMA2" };
++	for (unsigned i = 0; i < 4u; i++)
++		fp6_dpu_dump(sspp_name[i], mdp, sspp_off[i], fp6_dpu_sspp_regs,
++		    sizeof(fp6_dpu_sspp_regs) / sizeof(fp6_dpu_sspp_regs[0]));
++	fp6_dpu_dump("INTF1(DSI)", mdp, 0x36000u, fp6_dpu_intf_regs, sizeof(fp6_dpu_intf_regs) / sizeof(fp6_dpu_intf_regs[0]));
++	printf("QCOM DPU: snapshot complete (no writes)\\n");
++}
++
+ static void
+ fp6_smmu_inventory(void)
+ {
+ 	int mode = 0;
++	fp6_dpu_snapshot();
+ 	if (!PE_parse_boot_argn("fp6smmu", &mode, sizeof(mode)) || mode == 0)
+ 		return;
+ 	if (mode != 1 && mode != 2) {

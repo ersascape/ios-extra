@@ -84,6 +84,14 @@ class GPUProbeTests(unittest.TestCase):
                           'scanout base must be the ADT / upstream FP6 simple-framebuffer address')
             self.assertIn('PE_parse_boot_argn("fp6gpuscanoutread"', source,
                           'the framebuffer CPU readback must be opt-in after it lost a boot log')
+            self.assertIn('PE_parse_boot_argn("fp6dpusnap"', source,
+                          'the display snapshot must be explicitly opt-in')
+            dpu_start = source.index('fp6_dpu_snapshot(void)\n{')
+            dpu = source[dpu_start:source.index('fp6_smmu_inventory(void)\n{', dpu_start)]
+            self.assertNotRegex(dpu, r'fp6_smmu_write(32|64)\(',
+                                'the display snapshot must not write any register')
+            self.assertLess(dpu.index('GDSCR'), dpu.index('FP6_MDSS_PA, FP6_MDSS_SIZE'),
+                            'the MDSS power domain must be checked before the MDP block is mapped')
             self.assertIn('PE_parse_boot_argn("fp6gpuscanout"', source,
                           'writing into the display framebuffer must be explicitly opt-in')
             self.assertIn('PE_parse_boot_argn("fp6gpureplaycb"', source,
@@ -699,6 +707,7 @@ int PE_parse_boot_argn(const char *name, void *value, int length)
 		return fp6_mode != 0;
 	}
 	if (strcmp(name, "fp6gmuload") == 0) { return 0; }
+	if (strcmp(name, "fp6dpusnap") == 0) { return 0; }
 	if (strcmp(name, "fp6gpuexec") == 0) { return 0; }
 	if (strcmp(name, "fp6gmunopreempt") == 0) {
 		assert(length == sizeof(fp6_gmu_no_preempt_mode));
