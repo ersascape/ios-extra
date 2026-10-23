@@ -1,5 +1,31 @@
 # ios-extra — current state
 
+## FP6 batched compute kernels 0197 (2026-10-23)
+
+**Phone measured:** CI `39943744175` (head `e8b9e3d9a055e3fb7df3a14f9ec591934658aaed`)
+passed; build-tree source and header matched. Image
+`/tmp/ios-extra-run-39943744175/package/fp6-compute-batch-0197.img` (SHA256
+`a3ef87861527937a03786d9a0e88a8440df9aa77e45e2824a0b81a1e58f805af`; cmdline adds
+`fp6gpuring=1 fp6gpucompute=3`) booted once via `fastboot boot`; no flash, EDL or
+`getvar`. 90 packets; log `/tmp/ios-extra-run-39943744175/logs/phone-0197-batch.txt`.
+
+Seven back-to-back submissions through the firmware BR ring, each from a Mesa
+A810 computerator capture with its own shader/descriptor/data pages. Every run:
+WPTR doorbell not dropped, fence and scratch seqno `1`, RPTR reached WPTR,
+CB0 FSR `0x400`, correct result, `all 5 kernels passed`:
+- `buf_init` x3 (`+5` each, accumulating): `6..13`, `11..18`, `16..23`.
+- `iota1`, 32 lanes: `buf[i]==i`, 32/32.
+- `iota4`, same kernel as 4 workgroups: 32/32. All groups write identical
+  values, so this shows the 4-group launch completed without fault, not that
+  each group ran separately.
+- `branch`, predicated control flow: lane 0 `0x87654321`, others `0x12345678`, 16/16.
+- `localmem`, shared memory write then read by all lanes: all `5`, 8/8.
+CM3 reset verified afterwards. Measured: ring reuse with persistent state across
+submissions, multi-lane launch, workgroup count 4, control flow, local memory.
+Not measured: graphics draw, constants/UBO, textures, private memory, per-process
+address spaces, the CP power-up list, power management between submissions,
+concurrent use with GMU scheduling, Metal.
+
 ## FP6 first GPU shader execution: compute dispatch 0195 (2026-10-23)
 
 **Phone measured:** CI `39940824622` (head `465ba7a`) passed; build-tree source and
