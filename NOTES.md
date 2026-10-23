@@ -1,5 +1,29 @@
 # ios-extra — current state
 
+## FP6 display level 3 measured: the panel is refreshed at 60 Hz during XNU boot 0210 (2026-10-23)
+
+**Phone measured:** CI `39984929368` (head `4165fa338717a55306ce4348c93e3101c651a44d`)
+passed; source matched. Image
+`/tmp/ios-extra-run-39984929368/package/fp6-dpusnap3-0210.img` (SHA256
+`e5a3325f883871ba13960032c674f2227b7d732387c868aa5cc762565ba8cdd0`; `fp6dpusnap=3`)
+booted once via `fastboot boot`; no flash, EDL or `getvar`. 103 packets; log
+`/tmp/ios-extra-run-39984929368/logs/phone-0210-dpusnap3.txt`. Reads only; no hang.
+
+Eight samples 250 ms apart of INTF_1 `FRAME_COUNT`: `0x22627, 0x22636, 0x22645,
+0x22654, 0x22663, 0x22672, 0x22681, 0x22690`, i.e. exactly +15 per 250 ms (105 frames in
+1750 ms, 60.0 per second). So the DPU keeps pushing frames at 60 Hz while XNU boots, and
+a write to the scanout framebuffer reaches the panel on the next transfer without any
+DPU programming. INTF_1 `LINE_COUNT` over the same samples: `0x1d4, 0x1ae, 0x190, 0x150,
+0xfc, 0xae, 0x61, 0x01` (varies; its semantics are not interpreted here). Pingpong 0 at
+`+0x6a000` reads all zero (`TEAR_CHECK_EN`, `SYNC_*`, `RD/WR_PTR_IRQ`, `LINE_COUNT`,
+`AUTOREFRESH`, `DSC_MODE`) and CTL0 `START`/`FLUSH` read zero at every sample, so the
+60 Hz transfers are not coming from PP0's autorefresh and not from a CTL start seen at
+these sample times. Not established: what triggers the transfers (another pingpong, a
+hardware auto-refresh, or something the bootloader left running), whether that
+persists after XNU's display code runs, and the TE source. This supports the
+firmware-framebuffer display path and gives a free vblank-like source (INTF_1 frame
+count, readable without writes).
+
 ## UniXNU-sheng package reference list (2026-10-23)
 
 Source reading only (`github.com/UniXNU/UniXNU-sheng`, `package/`, 99 files; the sheng
