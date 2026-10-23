@@ -66,9 +66,9 @@ Superseded by the 0179 phone result above.
   were retained. No GPU command, DMA, memory write/readback, draw or Metal output.
 - 0178 proves that correcting the HFI START/OOB order alone does not fix the
   timeout. The A810 profile does not advertise `ADRENO_GMU_WARMBOOT`, selecting
-  coldboot rather than warmboot resume. Linux coldboot still sends HFI
-  `WARMBOOT_SET_SCRATCH`, raw Gen8 CP init, then `WARMBOOT_QUERY_SCRATCH`; these
-  transactions are required before boot completes. Patch 0179 now measures the
+  coldboot rather than warmboot resume. Its coldboot scratch set/query helpers
+  are guarded by `warmboot_enabled` and therefore send no scratch messages for
+  A810's default profile. CP init remains required. Patch 0179 measures the
   default votes and OOB ACK. The full command path and SQE firmware hash are in
   `docs/FP6_ADRENO_METAL_AUDIT.md`.
 

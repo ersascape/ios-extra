@@ -68,10 +68,10 @@ verified. The order correction alone is not the fix. No GPU command, DMA,
 memory write/readback, draw or Metal output occurred.
 
 The A810 profile omits `ADRENO_GMU_WARMBOOT`, so Linux selects coldboot instead
-of warmboot resume. The coldboot path still sends HFI `WARMBOOT_SET_SCRATCH`,
-raw Gen8 CP init, then `WARMBOOT_QUERY_SCRATCH`; those transactions remain
-required. The default-vote and OOB boundary is now phone-tested in 0179 above.
-The exact coldboot sequence and pinned SQE payload hash are recorded in
+of warmboot resume. Its coldboot scratch set/query helper calls return without
+sending messages when `warmboot_enabled` is false; this is the default for the
+A810 profile. The default-vote and OOB boundary is now phone-tested in 0179
+above. The exact coldboot sequence and pinned SQE payload hash are recorded in
 `docs/FP6_ADRENO_METAL_AUDIT.md`.
 
 ## OOB ACK mask result 0177 (2026-10-23)

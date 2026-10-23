@@ -298,11 +298,11 @@ SM7635 source makes the remaining order explicit:
 
 1. `gen8_hwsched_gpu_boot()` starts the GPU MMU, acquires GPU OOB, runs
    `gen8_start()`, enables GPU IRQs and programs the SQE instruction base.
-2. The coldboot branch sends `HFI_WARMBOOT_SET_SCRATCH` for `gpu_boot_scratch`,
-   then `gen8_hwsched_cp_init()`, then `HFI_WARMBOOT_QUERY_SCRATCH`. The A810
-   profile omits the `ADRENO_GMU_WARMBOOT` feature, which selects coldboot over
-   warmboot resume; it does **not** remove these HFI scratch transactions from
-   coldboot.
+2. The coldboot branch calls scratch set/query helpers, but
+   `gen8_hwsched_hfi_send_warmboot_cmd()` returns without sending when
+   `warmboot_enabled` is false. The A810 profile omits `ADRENO_GMU_WARMBOOT`,
+   and the first-boot HFI setup only queries/enables warmboot when that feature
+   is present, so these scratch calls are no-ops for the default A810 profile.
 3. `gen8_hwsched_cp_init()` sends `H2F_MSG_ISSUE_CMD_RAW` with the exact Gen8
    `CP_THREAD_CONTROL` + `CP_ME_INIT` packet, waits up to 200 ms for
    `GEN8_GMUAO_GPU_CX_BUSY_STATUS[23]` to clear, authenticates ZAP and switches
