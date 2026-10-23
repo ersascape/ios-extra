@@ -294,6 +294,9 @@ class GPUProbeTests(unittest.TestCase):
             subprocess.run(['git', 'apply', '--include=bsd/dev/fp6_gpu_replay_data.h',
                             str(ROOT / 'xnu/patches/0216-fp6-replay-selection-and-texdouble.patch')],
                            cwd=work / 'replay', check=True)
+            subprocess.run(['git', 'apply', '--include=bsd/dev/fp6_gpu_replay_data.h',
+                            str(ROOT / 'xnu/patches/0217-fp6-replay-texture-without-descriptor-prefetch.patch')],
+                           cwd=work / 'replay', check=True)
             shutil.copyfile(replay_dir / 'fp6_gpu_replay_data.h', work / 'fp6_gpu_replay_data.h')
             (work / 'test.c').write_text(HARNESS)
             build = subprocess.run([shutil.which('cc') or 'cc', '-std=c11', '-Wall',
