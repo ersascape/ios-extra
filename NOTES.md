@@ -1,5 +1,29 @@
 # ios-extra — current state
 
+## FP6 display stage 1 without the CPU readback 0207 (2026-10-23)
+
+**Phone measured:** CI `39975616055` (head `aeb8e8dbcb006699c0c1dfea21e65501562e003b`)
+passed; source matched. Image
+`/tmp/ios-extra-run-39975616055/package/fp6-scanout-noread-0207.img` (SHA256
+`c57c14d4ad66a65836222a431680e96191c65ee88b7a206024a87af29e6fc121`; same cmdline as
+0206, `fp6gpuscanoutread` unset) booted once via `fastboot boot`; no flash, EDL or
+`getvar`. 106 packets; log
+`/tmp/ios-extra-run-39975616055/logs/phone-0207-noread.txt`. The USB log came back
+and the phone answered ping.
+
+`buf_init` passed (8/8). The `screen` capture (two IBs, 4092 + 3919 dwords) mapped
+312 anonymous pages plus the 2708-page scanout BO onto the real framebuffer
+(`0xe3940000`, geometry verified from `PE_current_console`; 15 tables in total) and
+completed: fence `0x600dcafe`, RPTR 889/889, CB0 FSR `0x400` (no fault), GPU idle,
+`check=1/1`. The `draw` capture then also passed (512 pixels in each result image).
+`all 3 captures passed`; CM3 reset verified. The only difference from the 0206 run,
+which lost its whole log and reset the phone after the picture appeared, is the CPU
+readback of the framebuffer through a second `ml_io_map`; removing it restored
+normal operation, which supports (does not isolate) that readback as the cause.
+Panel observations are the user's and are not recorded here. Not measured: the
+rendered pixel values in the framebuffer, how long the picture persists, and any
+behaviour after the probe returns.
+
 ## FP6 display stage 1: triangle appeared on the panel 0206 (2026-10-23)
 
 **Phone observed (user report) and measured:** CI `39973842648` (head
