@@ -1,5 +1,22 @@
 # ios-extra — current state
 
+## FP6 HFI version correction and OOB diagnostics candidate 0173 (2026-10-23)
+
+- Patch `0173-fp6-gmu-hfi-version-and-oob-diagnostics.patch` corrects the HFI
+  version passed into the startup sequence. The 0172 phone log shows the five
+  words at DTCM `+0x3fe0..+0x3ff0` as
+  `50010012 ffffffff 50000010 00000000 20070001`; code had passed the fourth
+  word (`+0x3fec`, zero), so the HFI minor-version check skipped Linux's
+  context-queue capability query. The patch passes the actual version at
+  `+0x3ff0`. It also logs HOST2GMU raw OOB before/after the request, GMU
+  graphics power/clock and RPMh status, firmware init/busy, CB0 FSR and SMMU
+  global fault status if OOB times out.
+- This is source-derived from the just-captured phone log and Fairphone's
+  HFI version semantics. Local arm64 compile against CI buildtree `39889495686`
+  reports `0 of 1 files failed`; the patch applies to the 0172 source. CI,
+  packaging and phone measurement are pending. `fastboot devices` currently
+  shows exactly one phone.
+
 ## FP6 GPU power-on OOB probe 0172 (2026-10-23)
 
 - Commit `dc61567a02f8877fb9cbbdc80e9c05cb6cafe1a5` passed XNU CI run

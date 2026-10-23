@@ -1,3 +1,19 @@
+## HFI version-offset correction and OOB instrumentation candidate 0173 (2026-10-23)
+
+The 0172 phone log prints DTCM words from `+0x3fe0` through `+0x3ff0`:
+`0x50010012`, `0xffffffff`, `0x50000010`, `0`, `0x20070001`. The HFI startup
+call was passed `+0x3fec`, the fourth word, rather than the version word at
+`+0x3ff0`. As a result the HFI minor-version check saw zero and skipped the
+`HFI_VALUE_CONTEXT_QUEUE` query that Linux performs for minor version >= 3.
+Patch 0173 passes the observed version word at `+0x3ff0`.
+
+Patch 0173 also records the HOST2GMU raw OOB request latch before and after
+bit-30 request, and on timeout captures `GFX_PWR_CLK_STATUS`, RPMh power state,
+firmware init/busy, CB0 FSR and SMMU global fault status before CM3 reset. This
+will distinguish an unlatched OOB write from a running GMU that fails to answer
+and from a GPU power/fault state. It is source-compiled arm64 (`0 of 1 files
+failed`) against buildtree `39889495686`; no CI or phone result exists yet.
+
 ## Gen8 GPU power-on OOB probe 0172 (2026-10-23)
 
 Commit `dc61567a02f8877fb9cbbdc80e9c05cb6cafe1a5` passed CI run
