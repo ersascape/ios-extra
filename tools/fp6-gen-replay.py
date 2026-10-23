@@ -68,6 +68,22 @@ def packet_ends(stream):
     return ends
 
 
+def cbd_payloads(bos):
+    """GPU addresses of every CP_THREAD_CONTROL payload that sets CONCURRENT_BIN_DISABLE.
+
+    Turnip patches these at submit time (plain BR when concurrent binning is on).
+    The probe can clear the bit to test whether the disable itself hangs the CP.
+    """
+    out = []
+    for base, size, blob in bos:
+        w = words(blob)
+        for i in range(len(w) - 1):
+            if w[i] == 0x70970001 and w[i + 1] & (1 << 27) and (w[i + 1] & 3) and \
+                    not w[i + 1] & ~(0x3 | (1 << 27) | (1 << 31)):
+                out.append(base + 4 * (i + 1))
+    return out
+
+
 def build(path, check):
     bos, cmd, chip = parse(path)
     if chip != 0x44010000:
@@ -92,7 +108,7 @@ def build(path, check):
             if base <= v < base + size and (sw[i + 1] == 0 or (
                     i and sw[i - 1] < 0x10000 and sw[i + 1] < 0x10000 and sw[i + 2] == 0)):
                 pages.setdefault(base + ((v - base) // PAGE) * PAGE, [])
-    result = {'pages': pages, 'ib_va': cmd_va, 'ib_dwords': cmd_dwords, 'steps': packet_ends(sw),
+    result = {'pages': pages, 'ib_va': cmd_va, 'ib_dwords': cmd_dwords, 'steps': packet_ends(sw), 'cbd': cbd_payloads(bos),
               'check': check, 'check_va': 0, 'elements': 0, 'init': []}
     if check == 'add5':
         # The UAV descriptor (TYPE=TEX_BUFFER, nonzero count) names the data buffer.
@@ -115,7 +131,7 @@ def build(path, check):
 def emit(name, values, kind='uint32_t', per_line=8):
     if not values:
         return None
-    suffix = 'u' if kind == 'uint32_t' else ''
+    suffix = {'uint32_t': 'u', 'uint64_t': 'ull'}.get(kind, '')
     lines = ['static const %s %s[%d] = {' % (kind, name, len(values))]
     for i in range(0, len(values), per_line):
         lines.append('\t' + ', '.join('0x%x%s' % (v, suffix) for v in values[i:i + per_line]) + ',')
@@ -151,6 +167,8 @@ def main():
            '\tconst uint32_t *init;',
            '\tconst uint16_t *steps; /* top-level packet end offsets, for prefix bisection */',
            '\tunsigned nsteps;',
+           '\tconst uint64_t *cbd; /* CP_THREAD_CONTROL payload addresses with CONCURRENT_BIN_DISABLE */',
+           '\tunsigned ncbd;',
            '};']
     rows, summary = [], []
     for spec in specs:
@@ -173,12 +191,17 @@ def main():
         if init:
             out.append(init)
         out.append(emit('fp6_replay_%s_steps' % name, r['steps'], 'uint16_t'))
+        cbd = emit('fp6_replay_%s_cbd' % name, r['cbd'], 'uint64_t')
+        if cbd:
+            out.append(cbd)
         rows.append('\t{ "%s", fp6_replay_%s_pages, %d, 0x%xull, %d, FP6_REPLAY_CHECK_%s,\n'
-                    '\t  0x%xull, %d, %s, fp6_replay_%s_steps, %d },' % (name, name, len(page_rows), r['ib_va'],
+                    '\t  0x%xull, %d, %s, fp6_replay_%s_steps, %d, %s, %d },' % (name, name, len(page_rows), r['ib_va'],
                                                 r['ib_dwords'], check.upper(), r['check_va'],
                                                 r['elements'],
                                                 'fp6_replay_%s_init' % name if r['init'] else 'NULL',
-                                                name, len(r['steps'])))
+                                                name, len(r['steps']),
+                                                'fp6_replay_%s_cbd' % name if r['cbd'] else 'NULL',
+                                                len(r['cbd'])))
         summary.append('%s: %d pages (%d with data) ib=0x%x/%d dwords check=%s'
                        % (name, len(page_rows), sum(1 for v in r['pages'].values() if v),
                           r['ib_va'], r['ib_dwords'], check))

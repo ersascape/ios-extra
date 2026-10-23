@@ -1,5 +1,29 @@
 # ios-extra — current state
 
+## FP6 draw stall is CONCURRENT_BIN_DISABLE, footer ruled out 0203 (2026-10-23)
+
+**Phone measured:** CI `39953899789` (head `007bce94e2fc296d74833001d7fc39fb74826379`)
+passed; source matched. Image
+`/tmp/ios-extra-run-39953899789/package/fp6-replay-threads-0203.img` (SHA256
+`7450bdc1f126203aa36ef517400c092dbcacb72e5e02906b267cf1baaeda871c`) booted once via
+`fastboot boot`; no flash, EDL or `getvar`. 95 packets; log
+`/tmp/ios-extra-run-39953899789/logs/phone-0203-threads.txt`.
+
+Result identical to 0202: prefixes 1-63 clean, prefix 64 stalls with BR read
+pointer 2451, BV 2460, `RBBM_STATUS=0x00880005`. Reordering the footer
+(`SYNC|BOTH` before `WAIT_FOR_IDLE`) changed nothing, which refutes the footer
+hypothesis: BR stops at ring index 16, the first packet after the IB, with either
+footer. Mapping packet offsets shows the draw's `CP_INDIRECT_BUFFER` is far beyond
+dword 148, so prefix 64 contains only state setup plus one packet,
+`CP_THREAD_CONTROL THREAD=BR | CONCURRENT_BIN_DISABLE` (dwords 146-147). The BR
+thread cannot proceed past a following barrier once that bit is set, while BV has
+already read to the end of the ring. Source: Turnip patches these packets at submit
+time (plain BR when concurrent binning is enabled; the capture is the CB-disabled
+variant); the stream has three of them (dwords 147, 173, 196 of the top-level IB).
+Patch 0204 adds `fp6gpureplaycb=1` to clear the disable bit in those packets; host
+tests and arm64 compile pass, CI and phone pending. Whether this part's BV pipe
+supports being skipped by CBD at all is unknown. No triangle yet.
+
 ## FP6 draw replay per-step trace 0202 (2026-10-23)
 
 **Phone measured:** CI `39952430135` (head `a964129928a7137f085ae177cf7338a2859a246b`)

@@ -78,6 +78,8 @@ class GPUProbeTests(unittest.TestCase):
                           'compute dispatch must remain explicitly opt-in')
             self.assertIn('fp6_cp_type7_packet(0x1fu, 1u); /* CP_RESET_CONTEXT_STATE */', source,
                           'replay must clear BV/BR counters like the Linux gen8 submit path')
+            self.assertIn('PE_parse_boot_argn("fp6gpureplaycb"', source,
+                          'clearing CONCURRENT_BIN_DISABLE must be explicitly opt-in')
             self.assertIn('PE_parse_boot_argn("fp6gpureplaystep"', source,
                           'prefix bisection must be explicitly opt-in')
             self.assertIn('PE_parse_boot_argn("fp6gpureplay"', source,
@@ -249,6 +251,9 @@ class GPUProbeTests(unittest.TestCase):
                 'bsd/dev/fp6_gpu_replay_data.h'))
             subprocess.run(['git', 'apply', '--include=bsd/dev/fp6_gpu_replay_data.h',
                             str(ROOT / 'xnu/patches/0200-fp6-replay-prefix-bisection.patch')],
+                           cwd=work / 'replay', check=True)
+            subprocess.run(['git', 'apply', '--include=bsd/dev/fp6_gpu_replay_data.h',
+                            str(ROOT / 'xnu/patches/0204-fp6-replay-clear-concurrent-bin-disable.patch')],
                            cwd=work / 'replay', check=True)
             shutil.copyfile(replay_dir / 'fp6_gpu_replay_data.h', work / 'fp6_gpu_replay_data.h')
             (work / 'test.c').write_text(HARNESS)

@@ -1,0 +1,61 @@
+diff --git a/bsd/dev/fp6_gpu_replay_data.h b/bsd/dev/fp6_gpu_replay_data.h
+--- a/bsd/dev/fp6_gpu_replay_data.h
++++ b/bsd/dev/fp6_gpu_replay_data.h
+@@ -22,6 +22,8 @@
+ 	const uint32_t *init;
+ 	const uint16_t *steps; /* top-level packet end offsets, for prefix bisection */
+ 	unsigned nsteps;
++	const uint64_t *cbd; /* CP_THREAD_CONTROL payload addresses with CONCURRENT_BIN_DISABLE */
++	unsigned ncbd;
+ };
+ static const uint32_t fp6_replay_draw_p100000000[712] = {
+ 	0x1u, 0x204cc003u, 0x2u, 0x3f800000u, 0x3u, 0x204cc004u, 0x4u, 0x10u,
+@@ -491,6 +493,9 @@
+ 	0x13a, 0x140, 0x144, 0x149, 0x14c, 0x151, 0x153, 0x155,
+ 	0x157,
+ };
++static const uint64_t fp6_replay_draw_cbd[3] = {
++	0x10002e24cull, 0x10002e2b4ull, 0x10002e310ull,
++};
+ static const uint32_t fp6_replay_buf_init_pff7fd000[8] = {
+ 	0x0u, 0xffffdfc0u, 0x1u, 0x180000u, 0x2u, 0x8u, 0x3u, 0x158c4bu,
+ };
+@@ -551,9 +556,9 @@
+ };
+ static const struct fp6_replay fp6_replays[] = {
+ 	{ "draw", fp6_replay_draw_pages, 56, 0x10002e000ull, 343, FP6_REPLAY_CHECK_COLOR,
+-	  0x0ull, 0, NULL, fp6_replay_draw_steps, 121 },
++	  0x0ull, 0, NULL, fp6_replay_draw_steps, 121, fp6_replay_draw_cbd, 3 },
+ 	{ "buf_init", fp6_replay_buf_init_pages, 6, 0xff7fe000ull, 151, FP6_REPLAY_CHECK_ADD5,
+-	  0xffffdfc0ull, 8, fp6_replay_buf_init_init, fp6_replay_buf_init_steps, 13 },
++	  0xffffdfc0ull, 8, fp6_replay_buf_init_init, fp6_replay_buf_init_steps, 13, NULL, 0 },
+ };
+ #define FP6_REPLAY_COUNT (sizeof(fp6_replays) / sizeof(fp6_replays[0]))
+ #endif
+diff --git a/bsd/dev/sweet_gpu.c b/bsd/dev/sweet_gpu.c
+--- a/bsd/dev/sweet_gpu.c
++++ b/bsd/dev/sweet_gpu.c
+@@ -5032,6 +5032,23 @@
+ 	}
+ 	printf("QCOM GPU REPLAY: %s mapped %u pages, root=0x%llx tables=%u\n", r->name, r->npages,
+ 	    (unsigned long long)l0_pa, fp6_as_table_count);
++	/* Turnip patches CP_THREAD_CONTROL at submit time: plain BR when concurrent binning
++	 * is on. fp6gpureplaycb=1 clears CONCURRENT_BIN_DISABLE in the captured stream to test
++	 * whether that bit alone is what stalls the BR thread. */
++	int clear_cbd = 0;
++	if (r->ncbd && PE_parse_boot_argn("fp6gpureplaycb", &clear_cbd, sizeof(clear_cbd)) && clear_cbd == 1) {
++		unsigned cleared = 0;
++		for (unsigned k = 0; k < r->ncbd; k++) {
++			struct fp6_gpu_global_page *page = fp6_as_find_page(r, first_page, r->cbd[k]);
++			if (!page) continue;
++			volatile uint32_t *word = (volatile uint32_t *)(void *)(page->va + (r->cbd[k] & 0xfffull));
++			*word &= ~(1u << 27);
++			(void)fp6_gpu_kernel_publish(NULL, page->va, 4096u);
++			cleared++;
++		}
++		printf("QCOM GPU REPLAY: %s cleared CONCURRENT_BIN_DISABLE in %u of %u thread-control packets\n",
++		    r->name, cleared, r->ncbd);
++	}
+ 	if (!fp6_replay_activate(l0_pa)) {
+ 		printf("QCOM GPU REPLAY: %s TTBR0/TCR activation failed\n", r->name);
+ 		return 0;
