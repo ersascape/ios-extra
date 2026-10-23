@@ -316,13 +316,17 @@ initialized `cpu_gpu_lock` list, then configures IRQs and submits CP init.
 Patch 0183 passed CI `39912182367` and one phone boot. Read-only snapshots
 showed CB0 FSR moving from `0x400` after GMU firmware init to `0x408` directly
 after CP init; busy=`0x70880004`, busy2=`0x12`, RBBM=`0x00880005`. These values
-were unchanged after writing the no-ZAP secure-trust register. Thus the new
-CB0 fault occurs during CP init and the trust write is not its trigger. The
-memory write was refused before submission. Patch 0184 adds CB0 FAR and
-FSYNR0/1 to identify the faulting address and access syndrome; host tests and
-local arm64 compile pass, with CI and phone measurement pending. Use that
-evidence before choosing the first Linux-equivalent startup and power-up-list
-changes.
+were unchanged after writing the no-ZAP secure-trust register. Patch 0184
+passed CI `39913744029` and one phone boot. It measured FAR=`0x1ff800000b000`,
+the first SQE instruction page, with FSYNR0=`0x00040043` and FSYNR1=`0`.
+Linux ARM SMMUv2 definitions decode FSR `0x408` as UUT+PF and FSYNR0 as
+PLVL=3, read access, IND set, S1CBNDX=4. This is a real context fault on the
+SQE fetch; it is not evidence that CP consumed valid firmware. Since the
+reported S1CBNDX differs from the CB0 bank that supplied FSR, next snapshot
+CBFRSYNRA0, CB0 SCTLR/TTBR0/TCR and CBAR/CBA2R, then compare the live stream
+route and SQE page-table descriptors. Do not yet attribute the fault to the
+omitted `gen8_start()` or power-up-list setup. `CP_MEM_WRITE` was refused, and
+there is still no GPU write/readback, draw, or Metal output.
 Even a passing memory word would prove only the first GPU command write, not
 draw/readback or Metal.
 

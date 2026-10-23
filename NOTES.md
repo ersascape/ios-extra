@@ -86,14 +86,31 @@ new CB0 fault to CP init and rules out the trust write as its trigger; the
 current log lacks FAR and FSYNR, so the faulting IOVA and access syndrome are
 not yet known. The CP memory write remains correctly refused.
 
-Patch 0184 adds read-only 64-bit CB0 FAR and FSYNR0/1 to the same snapshots.
-The patch applies to the 0183 CI buildtree; normal and ASan/UBSan GPU harnesses
-pass, the full suite passes (13 tests, 5 skipped), and local arm64 compilation
-against CI headers passes (0/1 failed). CI and a follow-up phone measurement
-are pending. Linux source review confirms A810 HWSCHED runs `gen8_start()`
-before SQE setup and enables CP_ME_INIT power-up-list bit 8 with a populated
-`cpu_gpu_lock` list; the bounded XNU probe omits those pieces. That is a
-candidate path to correct after FAR/FSYNR identifies the failing access.
+Patch 0184 adds read-only CB0 FAR and FSYNR0/1. Commit
+`188b92b8eda565f302b0553409b58ecdfcf69b45` passed CI `39913744029`; one
+temporary boot captured 105 packets / 24,517 bytes. Kernel SHA256 is
+`aff25e0f5b3c36fd32ea0ecc6aa4f7a533f2ef6b98895dd50b9c3539a0b37225`; the
+packaged image `/tmp/ios-extra-run-0184/package/fp6-cb0-far-fsynr-0184.img`
+has SHA256 `61eb5e87f618ea9ca789bb02b27d3bb4eef34c1f44288f28c3a3f531d23ba3d3`.
+The decoded log and raw UDP are
+`/tmp/ios-extra-run-0184/logs/phone-0184-cb0-far-fsynr.txt` and `.udp`, both
+SHA256 `ce5f173e16d833fd35639d676bf6ba676a3cbd00af45520077f09902166a8ccf`.
+
+Phone measurement: after CP init, CB0 FSR=`0x408`, FAR=`0x1ff800000b000`
+(the first SQE instruction page), FSYNR0=`0x00040043`, FSYNR1=`0`, and the
+busy/CP status tuple matches 0183. Linux ARM SMMUv2 field definitions decode
+FSR `0x408` as UUT (bit 8) plus PF (bit 3); FSYNR0 has PLVL=3, WNR=0 (read),
+IND=1, and S1CBNDX=4. This is evidence of a faulting read at the expected SQE
+IOVA, despite the CPU page-table walk and software mapping checks. The
+S1CBNDX value differs from the CB0 register bank where FSR was sampled; its
+meaning for this stream/context configuration remains to be verified. No
+`CP_MEM_WRITE` was submitted, and there is no GPU write/readback or draw result.
+
+The next diagnostic should capture CBFRSYNRA0 (faulting SID), CB0 SCTLR,
+TTBR0, TCR, CBAR/CBA2R and the walk descriptors for this SQE VA, then check
+the GPU stream-to-context route. Do not yet infer that the absent Linux
+`gen8_start()`/power-up list caused the SMMU fault; that sequence remains a
+candidate once the fetch fault's context and descriptor state are understood.
 
 ## FP6 GMU OOB ACK result 0179 (2026-10-23)
 

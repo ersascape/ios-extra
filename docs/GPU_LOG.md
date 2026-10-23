@@ -72,15 +72,32 @@ remained after the secure-trust write. Therefore the new CB0 fault appears
 during CP init, before the trust write; the trust write does not trigger this
 observed busy state. No CP memory write was submitted or verified.
 
-Patch 0184 adds read-only 64-bit CB0 FAR and FSYNR0/1 to the snapshots, to
-identify the faulting IOVA and access type. It applies to the 0183 CI buildtree;
-normal and ASan/UBSan GPU harnesses pass, the full suite passes (13 tests, 5
-skipped), and local arm64 object compilation passes (0/1 failed). CI and phone
-measurement remain pending. Linux HWSCHED source shows `gen8_start()` precedes
-SQE setup and CP init, and CP init enables power-up-list bit 8 with an
-initialized `cpu_gpu_lock` list. The bounded XNU probe omits this setup; FAR
-and FSYNR will guide the next change rather than assuming that omission caused
-the fault.
+Patch 0184 adds read-only CB0 FAR and FSYNR0/1. Commit
+`188b92b8eda565f302b0553409b58ecdfcf69b45` passed CI `39913744029`; the
+buildtree `sweet_gpu.c` matched `/tmp/sweet_gpu-0184.c`. Kernel SHA256 is
+`aff25e0f5b3c36fd32ea0ecc6aa4f7a533f2ef6b98895dd50b9c3539a0b37225` and the
+image `/tmp/ios-extra-run-0184/package/fp6-cb0-far-fsynr-0184.img` SHA256 is
+`61eb5e87f618ea9ca789bb02b27d3bb4eef34c1f44288f28c3a3f531d23ba3d3`.
+One temporary boot captured 105 packets / 24,517 bytes. Decoded log and raw
+UDP are `/tmp/ios-extra-run-0184/logs/phone-0184-cb0-far-fsynr.txt` and `.udp`,
+both SHA256 `ce5f173e16d833fd35639d676bf6ba676a3cbd00af45520077f09902166a8ccf`.
+
+**Phone measured:** immediately after CP init, CB0 FSR=`0x408`, FAR=
+`0x1ff800000b000` (the first SQE instruction page), FSYNR0=`0x00040043`,
+FSYNR1=`0`. Busy=`0x70880004`, busy2=`0x12`, mask=`0`, RBBM=`0x00880005`,
+CP interrupt registers=`0`, SQE status=`0xdeafbead`. Values are unchanged
+after the no-ZAP secure-trust write. Linux ARM SMMUv2 definitions identify
+FSR bits 8/3 as UUT/PF; FSYNR0 fields decode as PLVL=3, WNR=0, IND=1, and
+S1CBNDX=4. The fault is on a read at the SQE base IOVA. The reported S1CBNDX
+does not match the CB0 bank from which FSR was read, so bank/stream attribution
+needs corroboration (especially CBFRSYNRA0 and the live CB0 translation
+registers). The mapped SQE VA therefore is not yet proven usable by the GPU.
+CP memory write remains refused before submission; no GPU write/readback or
+draw has succeeded.
+
+Next diagnostic: snapshot CBFRSYNRA0, CB0 SCTLR/TTBR0/TCR, CBAR/CBA2R and the
+SQE page-table descriptors. Compare the live stream route and context-bank
+selection before changing the Linux `gen8_start()` or power-up-list sequence.
 
 ## FP6 default HFI votes and GPU OOB ACK result 0179 (2026-10-23)
 
