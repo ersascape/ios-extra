@@ -1,5 +1,35 @@
 # ios-extra — current state
 
+## FP6 GPU scene batch measured: 5 of 7 Turnip renders match lavapipe on the Adreno 810 (2026-10-23)
+
+**Phone measured:** CI `39990503899` (head `a5fe62960adbc51ed9b7e3589b03818537f280ed`, patch
+0211) passed. Image `/tmp/ios-extra-run-39990503899/package/fp6-scenes-0211.img` (SHA256
+`36d4787e9054a6aaeb3cf92286a3abee0269a4c9019ddcc1c4e6305cc1cb0905`; cmdline adds
+`fp6gpureplay=1 fp6gpureplaycb=1`) booted once via `fastboot boot`; no flash, EDL or
+`getvar`. 92 packets; log `/tmp/ios-extra-run-39990503899/logs/phone-0211-scenes.txt`.
+The ADT differs from the previous run's only in one 64-byte random field.
+
+Seven scenes from `tools/fp6-vk-scenes.c` (64x64 RGBA8, Mesa Turnip A810 captures with
+`TU_GMEM=622592 TU_DEBUG=sysmem,noubwc`, CONCURRENT_BIN_DISABLE cleared) were replayed at
+their original IOVAs and each result's 16x16 sampled grid compared with lavapipe within 6 per
+channel. Every replay reached its fence with `CB0_FSR=0x400` and no dropped packets; the
+earlier `buf_init` (8/8) and `draw` (512 + 512 pixels) captures still pass.
+
+| scene | result |
+|---|---|
+| flat, varying (interpolated colours), ubo (uniform colour) | 0 of 256 samples differ |
+| blend (src-alpha over a clear colour) | 1 differs, edge pixel |
+| depth (LESS test, overlapping triangles) | 1 differs, edge pixel |
+| texture (sampled 2x2 checker) | **78 differ**: the top half of the quad (rows 2 to 7) reads `0x00000000`, the bottom half is right |
+| vertexbuf (vertex buffer attributes) | **81 differ**: nothing drawn, 0 pixels lit |
+
+Not yet explained: why the sampled texture returns zero for the upper half, and why a draw
+fed from a vertex buffer draws nothing. Both replays map every captured BO page; suspects are
+the texture upload path (the capture holds the staging copy and the image in one submit) and
+vertex fetch from a BO the generator stores as data. Source inspection only so far, no cause
+claimed. The grid comparison is lavapipe-based, so rasteriser edge pixels are tolerated up to
+12 of 256.
+
 ## FP6 display level 3 measured: the panel is refreshed at 60 Hz during XNU boot 0210 (2026-10-23)
 
 **Phone measured:** CI `39984929368` (head `4165fa338717a55306ce4348c93e3101c651a44d`)
