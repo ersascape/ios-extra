@@ -40,8 +40,10 @@ class GPUProbeTests(unittest.TestCase):
                           'write/readback probe must use CP_MEM_WRITE')
             self.assertIn('fp6_gpu_exec_alloc_sqe()', source,
                           'SQE must be backed pagewise for a contiguous GPU VA')
-            self.assertIn('fp6_exec_sqe[i].pa, FP6_HFI_MEMFLAG_GFX_PRIV', source,
-                          'each SQE page must be separately published into TTBR1')
+            self.assertIn('fp6_exec_sqe[i].pa, FP6_GPU_GLOBAL_GFX_EXEC))', source,
+                          'SQE pages must be executable and accessible to unprivileged GPU reads')
+            self.assertNotIn('fp6_exec_sqe[i].pa, FP6_HFI_MEMFLAG_GFX_PRIV', source,
+                             'SQE firmware must not be mapped privileged-only')
             self.assertIn('FP6_GPU_GLOBAL_GFX_EXEC', source,
                           'SQE firmware pages must be executable in the GPU SMMU')
             self.assertIn('va != fp6_exec_sqe_va + (uint64_t)i * 4096u', source,

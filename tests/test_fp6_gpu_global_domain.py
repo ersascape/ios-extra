@@ -57,12 +57,13 @@ int main(void) {
  uint64_t exec_va;
  assert(!fp6_gpu_global_va(d,0x1000,12,&exec_va,&rounded));
  assert(!fp6_gpu_global_map(d,exec_va,0x1000,0x906000000ULL,
-     FP6_GPU_GLOBAL_GFX_PRIV | FP6_GPU_GLOBAL_GFX_EXEC));
+     FP6_GPU_GLOBAL_GFX_EXEC));
  uint64_t exec_canonical=fp6_gpu_global_canonical(exec_va);
  unsigned exec_l3=(unsigned)((exec_canonical >> 21) & 511u);
  unsigned exec_page=(unsigned)((exec_canonical >> 12) & 511u);
  uint64_t *exec_ptes=(uint64_t *)(void *)d->l3[exec_l3].va;
  assert((exec_ptes[exec_page] & (3ULL << 53)) == 0);
+ assert((exec_ptes[exec_page] & (3ULL << 6)) == (3ULL << 6));
  assert(fp6_gpu_global_walk(d,exec_va)==0x906000000ULL);
  assert(fp6_gpu_global_walk(d,FP6_GPU_GLOBAL_BASE+FP6_GPU_GLOBAL_SIZE)==~0ULL);
  assert(!fp6_gpu_global_publish(d) && d->frozen && npublish==13);

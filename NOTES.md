@@ -1,5 +1,25 @@
 # ios-extra — current state
 
+## FP6 SQE privilege correction 0187 (2026-10-23)
+
+Source review found that Linux `adreno_get_firmware()` allocates SQE firmware
+`GPUREADONLY` with the separate `KGSL_MEMDESC_UCODE` attribute. In
+`kgsl_iommu.c`, read-only removes write permission and UCODE removes NOEXEC;
+`IOMMU_PRIV` is added only for the distinct `KGSL_MEMDESC_PRIVILEGED` bit.
+XNU 0185 instead mapped SQE pages with GFX_PRIV, producing privileged-only
+leaf PTEs. The 0185 phone log's FSYNR0=`0x00040003` has PNU=0, indicating the
+faulting GPU access was unprivileged. This makes the privilege mismatch a
+strong, source-backed candidate for the remaining SQE permission fault; it is
+not yet a confirmed hardware fix.
+
+Patch 0187 removes GFX_PRIV from SQE leaf mappings while retaining executable
+and read-only attributes. The resulting AP bits allow unprivileged read-only
+access; ordinary data remains execute-never. The host page-table and GPU probe
+tests pass. Fastboot returned zero devices during this turn, so no phone test
+or image build has yet been run. The next build should combine 0186's
+CBFRSYNRA/CB0/PTE snapshot with this correction, then measure whether CP init
+advances past the SQE permission fault.
+
 ## FP6 SMMU fault attribution snapshot 0186 (2026-10-23)
 
 After the 0185 executable SQE mapping changed the reported access to a data

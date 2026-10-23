@@ -1,0 +1,12 @@
+--- a/bsd/dev/sweet_gpu.c
++++ b/bsd/dev/sweet_gpu.c
+@@ -4308,8 +4308,7 @@
+ 		memcpy(fp6_exec_sqe[i].va, fp6_sqe_fw + offset, bytes);
+ 		(void)fp6_gpu_kernel_publish(NULL, fp6_exec_sqe[i].va, 4096u);
+ 		if (!fp6_gpu_global_map_live(fp6_gpu_smmu_base, va, 4096u,
+-		    fp6_exec_sqe[i].pa, FP6_HFI_MEMFLAG_GFX_PRIV |
+-		    FP6_GPU_GLOBAL_GFX_EXEC)) {
++		    fp6_exec_sqe[i].pa, FP6_GPU_GLOBAL_GFX_EXEC)) {
+ 			printf("QCOM GPU EXEC: SQE SMMU page map failed page=%u VA=0x%llx PA=0x%llx\n",
+ 			    i, (unsigned long long)va, (unsigned long long)fp6_exec_sqe[i].pa);
+ 			return 0;

@@ -343,6 +343,24 @@ persists, inspect CBFRSYNRA0, live CB0 configuration and SQE descriptors.
 Even a passing memory word would prove only the first GPU command write, not
 draw/readback or Metal.
 
+### SQE unprivileged permission correction (0187)
+
+Fairphone Linux's `adreno_get_firmware()` allocates SQE firmware with
+`KGSL_MEMFLAGS_GPUREADONLY` and `KGSL_MEMDESC_UCODE`. In
+`kgsl_iommu.c:_iommu_get_protection_flags()`, the former removes write
+permission, the latter clears `IOMMU_NOEXEC`, and the separate
+`KGSL_MEMDESC_PRIVILEGED` bit is what adds `IOMMU_PRIV`. Thus Linux maps SQE as
+unprivileged, read-only and executable. XNU 0185 passed `GFX_PRIV` when mapping
+SQE and emitted AP bits for privileged-only access. The measured
+FSYNR0=`0x00040003` has PNU=0 (unprivileged access), consistent with the
+permission fault at the SQE IOVA.
+
+Patch 0187 removes that privileged-only attribute for SQE while retaining
+execute permission and read-only AP bits. Host tests confirm AP=11 and execute
+permission for SQE, while data remains XN. This is a source-backed candidate,
+not a proven fix. Combine it with 0186's detailed CB0/CBFRSYNRA/PTE snapshot in
+one build and verify the actual phone fault state before claiming CP startup.
+
 ### A810 coldboot command order checked against current Linux source
 
 The measured 0179 OOB ACK means the next path begins after GMU/HFI startup. The
