@@ -1,5 +1,29 @@
 # ios-extra — current state
 
+## FP6 CP privilege setup 0188 (2026-10-23)
+
+**Phone measured (0187):** image `fp6-sqe-unprivileged-0187.img` (SHA256
+`1c7ce78f29c6a5066a99a58ed361a1bc248bf643d4d23a2cf70daa5fb7c3ac4f`), one
+temporary boot, 93 packets; log `/tmp/ios-extra-run-0187/logs/phone-0187-sqe-unprivileged.txt`.
+HFI START, default votes, OOB ACK and SQE base/start still work. The fault moved
+off the SQE: CB0 FSR=`0x80000408`, FAR=`0x1ff8000003000`, FSYNR0=`0x00040003`,
+CBFRSYNRA0=0. FAR is HFI kind 1 (flags `0x37b`, 32 KiB), mapped read-only and
+privileged-only (PTE `0x903e88e83`). `CP_MEM_WRITE` was again refused; no GPU
+write/readback, draw or Metal output.
+
+**Source finding (not a phone result):** Linux `gen8_start()` writes
+`CP_APRIV_CNTL_PIPE` (0x84d) per pipe, `0xf` (`0x6f` for BR): ICACHE, ringbuffer
+fetch, PM4 memory access and RPTR shadow writes become privileged. HFI `GFX_PRIV`
+allocations map as `IOMMU_PRIV`, as XNU does. The probe never programs APRIV, so
+the CP reads the privileged ring page unprivileged. Patch 0188 programs BR/BV/
+DDE_BR/DDE_BV APRIV via `CP_APERTURE_CNTL_HOST` (0x81c) before the SQE base and
+start, logs each readback, restores aperture 0. Host suite passes (5 skipped);
+local arm64 compile `0 of 1 files failed`. CI and phone pending.
+
+Known unrelated bug, not yet fixed: raw HFI flags are passed to the global-domain
+mapper, where HFI bit 3 (`GMU_ACC`) collides with `GFX_EXEC`, so GMU-visible
+allocations are mapped executable. Fix in its own patch.
+
 ## FP6 SQE privilege correction 0187 (2026-10-23)
 
 Source review found that Linux `adreno_get_firmware()` allocates SQE firmware

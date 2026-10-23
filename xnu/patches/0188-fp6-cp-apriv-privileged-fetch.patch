@@ -1,0 +1,38 @@
+--- a/bsd/dev/sweet_gpu.c
++++ b/bsd/dev/sweet_gpu.c
+@@ -4421,6 +4421,27 @@
+ 	return 1;
+ }
+ 
++/* Linux gen8_start(): per-pipe CP_APRIV_CNTL makes ICACHE, ringbuffer fetch,
++ * PM4 memory access and RPTR shadow writes privileged (BR also crashdumper
++ * read/write). Without it the CP accesses GFX_PRIV pages unprivileged. */
++#define FP6_GPU_CP_APERTURE_CNTL_HOST 0x2070u /* 0x81c dwords */
++#define FP6_GPU_CP_APRIV_CNTL_PIPE    0x2134u /* 0x84d dwords */
++#define FP6_GPU_APRIV_DEFAULT         0x0fu
++#define FP6_GPU_BR_APRIV_DEFAULT      0x6fu
++static void
++fp6_gpu_program_apriv(vm_offset_t gpu)
++{
++	static const uint32_t pipes[] = { 1u, 2u, 6u, 7u }; /* BR, BV, DDE_BR, DDE_BV */
++	for (unsigned i = 0; i < sizeof(pipes) / sizeof(pipes[0]); i++) {
++		uint32_t want = pipes[i] == 1u ? FP6_GPU_BR_APRIV_DEFAULT : FP6_GPU_APRIV_DEFAULT;
++		fp6_smmu_write32(gpu, FP6_GPU_CP_APERTURE_CNTL_HOST, pipes[i] << 12);
++		fp6_smmu_write32(gpu, FP6_GPU_CP_APRIV_CNTL_PIPE, want);
++		printf("QCOM GPU EXEC: APRIV pipe=%u wrote=0x%02x read=0x%08x\n", pipes[i], want,
++		    fp6_smmu_read32(gpu, FP6_GPU_CP_APRIV_CNTL_PIPE));
++	}
++	fp6_smmu_write32(gpu, FP6_GPU_CP_APERTURE_CNTL_HOST, 0u);
++}
++
+ static int
+ fp6_gpu_exec_probe(vm_offset_t g, vm_offset_t gpu, uint8_t *hfi_mem,
+ 		unsigned *sequence)
+@@ -4455,6 +4476,7 @@
+ 		    (unsigned long long)fp6_exec_sqe_va,
+ 		    (unsigned long long)fp6_exec_result_va);
+ 	}
++	fp6_gpu_program_apriv(gpu);
+ 	fp6_smmu_write32(gpu, 0x2058u, (uint32_t)fp6_exec_sqe_va); /* SQE base LO */
+ 	fp6_smmu_write32(gpu, 0x205cu, (uint32_t)(fp6_exec_sqe_va >> 32)); /* SQE base HI */
+ 	fp6_smmu_write32(gpu, 0x2054u, 1u); /* SQE start */

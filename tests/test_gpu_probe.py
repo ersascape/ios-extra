@@ -46,6 +46,13 @@ class GPUProbeTests(unittest.TestCase):
                              'SQE firmware must not be mapped privileged-only')
             self.assertIn('FP6_GPU_GLOBAL_GFX_EXEC', source,
                           'SQE firmware pages must be executable in the GPU SMMU')
+            self.assertIn('FP6_GPU_CP_APRIV_CNTL_PIPE    0x2134u', source,
+                          'CP_APRIV_CNTL_PIPE must be programmed as in Linux gen8_start()')
+            self.assertIn('FP6_GPU_BR_APRIV_DEFAULT      0x6fu', source,
+                          'BR pipe also marks crashdumper accesses privileged')
+            self.assertLess(source.index('\tfp6_gpu_program_apriv(gpu);\n'),
+                            source.index('fp6_smmu_write32(gpu, 0x2058u, (uint32_t)fp6_exec_sqe_va)'),
+                            'APRIV must be programmed before the SQE base and start')
             self.assertIn('va != fp6_exec_sqe_va + (uint64_t)i * 4096u', source,
                           'SQE pages must form one contiguous GPU virtual range')
             self.assertLess(
