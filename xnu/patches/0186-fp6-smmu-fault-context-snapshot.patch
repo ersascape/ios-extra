@@ -1,0 +1,64 @@
+--- a/bsd/dev/sweet_gpu.c
++++ b/bsd/dev/sweet_gpu.c
+@@ -4329,5 +4329,14 @@
+ fp6_gpu_exec_snapshot(vm_offset_t g, vm_offset_t gpu, const char *stage)
+ {
++	vm_offset_t smmu = fp6_gpu_smmu_base;
++	uint64_t far = fp6_smmu_read64(smmu, fp6_gpu_cb_off + 0x0060u);
++	uint64_t ca = fp6_gpu_global_canonical(far);
++	unsigned l0i = (unsigned)((ca >> 39) & 511u);
++	unsigned l1i = (unsigned)((ca >> 30) & 511u);
++	unsigned l2i = (unsigned)((ca >> 21) & 511u);
++	unsigned l3i = (unsigned)((ca >> 12) & 511u);
++	uint64_t l0d, l1d, l2d = 0, pte = 0;
++	uint32_t route_smr, route_s2cr;
+ 	uint32_t busy = fp6_smmu_read32(g, 0x57c30u);
+ 	uint32_t busy2 = fp6_smmu_read32(g, 0x57c34u);
+ 	uint32_t mask = fp6_smmu_read32(g, 0x57c38u);
+@@ -4337,6 +4348,4 @@
+ 	uint32_t cp2gmu = fp6_smmu_read32(gpu, 0x2088u);
+ 	uint32_t sqe = fp6_smmu_read32(gpu, 0x22ecu);
+-	uint64_t far = fp6_smmu_read64(fp6_gpu_smmu_base,
+-	    fp6_gpu_cb_off + 0x0060u);
+ 	uint32_t fsr = fp6_smmu_read32(fp6_gpu_smmu_base,
+ 	    fp6_gpu_cb_off + FP6_SMMU_CB_FSR);
+@@ -4348,4 +4365,39 @@
+ 	printf("QCOM GPU EXEC: state=%s busy=0x%08x busy2=0x%08x mask=0x%08x RBBM=0x%08x RBBM_INT0=0x%08x CP_GLOBAL=0x%08x CP2GMU=0x%08x SQE=0x%08x CB0_FSR=0x%08x FAR=0x%016llx FSYNR0=0x%08x FSYNR1=0x%08x\n",
+ 	    stage, busy, busy2, mask, rbbm, rbbm_int, cp_global, cp2gmu, sqe, fsr,
+ 	    (unsigned long long)far, fsynr0, fsynr1);
++	route_smr = fp6_smmu_read32(smmu, FP6_SMMU_SMR(fp6_gpu_smr_group));
++	route_s2cr = fp6_smmu_read32(smmu, FP6_SMMU_S2CR(fp6_gpu_smr_group));
++	printf("QCOM GPU EXEC: route group=%u SMR=0x%08x S2CR=0x%08x CBFRSYNRA0=0x%08x CBFRSYNRA4=0x%08x\n",
++	    fp6_gpu_smr_group, route_smr, route_s2cr,
++	    fp6_smmu_read32(smmu, FP6_SMMU_GR1 + 0x400u),
++	    fp6_smmu_read32(smmu, FP6_SMMU_GR1 + 0x410u));
++	for (unsigned cb = 0; cb <= 4u; cb += (cb == 0u ? 4u : 1u)) {
++		uint32_t off = fp6_gpu_cb_off + cb * 0x1000u;
++		printf("QCOM GPU EXEC: CB%u CBAR=0x%08x CBA2R=0x%08x SCTLR=0x%08x ACTLR=0x%08x TTBR0=0x%016llx TTBR1=0x%016llx TCR=0x%08x TCR2=0x%08x MAIR=0x%08x/0x%08x FSR=0x%08x FAR=0x%016llx FSYNR0=0x%08x FSYNR1=0x%08x\n",
++		    cb, fp6_smmu_read32(smmu, FP6_SMMU_CBAR(cb)),
++		    fp6_smmu_read32(smmu, FP6_SMMU_CBA2R(cb)),
++		    fp6_smmu_read32(smmu, off), fp6_smmu_read32(smmu, off + 0x4u),
++		    (unsigned long long)fp6_smmu_read64(smmu, off + 0x20u),
++		    (unsigned long long)fp6_smmu_read64(smmu, off + 0x28u),
++		    fp6_smmu_read32(smmu, off + 0x30u),
++		    fp6_smmu_read32(smmu, off + 0x10u),
++		    fp6_smmu_read32(smmu, off + 0x38u),
++		    fp6_smmu_read32(smmu, off + 0x3cu),
++		    fp6_smmu_read32(smmu, off + 0x58u),
++		    (unsigned long long)fp6_smmu_read64(smmu, off + 0x60u),
++		    fp6_smmu_read32(smmu, off + 0x68u),
++		    fp6_smmu_read32(smmu, off + 0x6cu));
++	}
++	l0d = ((uint64_t *)(void *)fp6_gpu_global_domain.l0.va)[l0i];
++	l1d = ((uint64_t *)(void *)fp6_gpu_global_domain.l1.va)[l1i];
++	if (l2i < FP6_GPU_GLOBAL_L3_COUNT) {
++		l2d = ((uint64_t *)(void *)fp6_gpu_global_domain.l2.va)[l2i];
++		pte = ((uint64_t *)(void *)fp6_gpu_global_domain.l3[l2i].va)[l3i];
++	}
++	printf("QCOM GPU EXEC: walk root=0x%llx FAR-canonical=0x%llx idx=%u/%u/%u/%u desc=0x%016llx/0x%016llx/0x%016llx PTE=0x%016llx translated-PA=0x%llx\n",
++	    (unsigned long long)fp6_gpu_global_domain.l0.pa,
++	    (unsigned long long)ca, l0i, l1i, l2i, l3i,
++	    (unsigned long long)l0d, (unsigned long long)l1d,
++	    (unsigned long long)l2d, (unsigned long long)pte,
++	    (unsigned long long)((pte & 0x0000fffffffff000ULL) | (far & 0xfffu)));
+ }

@@ -60,12 +60,20 @@ class GPUProbeTests(unittest.TestCase):
                           'CP init must be followed by a read-only fault snapshot')
             self.assertIn('fp6_gpu_exec_snapshot(g, gpu, "after-secure-trust")', source,
                           'secure-trust transition must be followed by a read-only snapshot')
+            self.assertIn('CBFRSYNRA0=', source,
+                          'fault attribution must include the selected SMMU context bank SID')
+            self.assertIn('CBFRSYNRA4=', source,
+                          'fault attribution must include context bank 4 reported by FSYNR0')
+            self.assertIn('walk root=', source,
+                          'fault report must include the actual TTBR1 descriptors and SQE leaf PTE')
+            self.assertIn('CB%u CBAR=', source,
+                          'fault report must compare CB0 with CB4 configuration and syndrome')
             for offset in ('0x57c34u', '0x57c38u', '0x1a8u', '0x22d4u',
                            '0x2088u', '0x22ecu', 'FP6_SMMU_CB_FSR',
                            '0x0060u', '0x0068u', '0x006cu'):
                 self.assertIn(offset, source,
                               f'GPU fault snapshot must include {offset}')
-            self.assertIn('fp6_smmu_read64(fp6_gpu_smmu_base', source,
+            self.assertIn('fp6_smmu_read64(smmu, fp6_gpu_cb_off + 0x0060u)', source,
                           'SMMU FAR must be captured at full physical-address width')
             self.assertLess(source.index('"after-cp-init"'),
                             source.index('"after-secure-trust"'),
