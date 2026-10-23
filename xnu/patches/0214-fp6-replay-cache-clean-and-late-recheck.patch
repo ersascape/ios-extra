@@ -1,0 +1,93 @@
+diff --git a/bsd/dev/sweet_gpu.c b/bsd/dev/sweet_gpu.c
+--- a/bsd/dev/sweet_gpu.c
++++ b/bsd/dev/sweet_gpu.c
+@@ -4966,7 +4966,7 @@ fp6_replay_submit(vm_offset_t g, vm_offset_t gpu, const struct fp6_replay *r,
+ 	/* Linux gen8_rb_context_switch() + gen8_ringbuffer_submitcmd() preamble: Mesa's
+ 	 * CP_BV_BR_COUNT_OPS PIPE_SET_BR_OFFSET assumes the kernel cleared the BV/BR
+ 	 * counters with CP_RESET_CONTEXT_STATE before the user IB. */
+-	uint32_t cmd[40];
++	uint32_t cmd[48];
+ 	unsigned n = 0;
+ 	cmd[n++] = fp6_cp_type7_packet(0x17u, 1u); /* CP_THREAD_CONTROL: both, sync */
+ 	cmd[n++] = 3u | (1u << 31);
+@@ -5009,6 +5009,21 @@ fp6_replay_submit(vm_offset_t g, vm_offset_t gpu, const struct fp6_replay *r,
+ 	cmd[n++] = fp6_cp_type7_packet(0x17u, 1u); /* CP_THREAD_CONTROL: both, sync */
+ 	cmd[n++] = 3u | (1u << 31);
+ 	cmd[n++] = fp6_cp_type7_packet(0x26u, 0u); /* CP_WAIT_FOR_IDLE */
++	/* The fence is a plain CP_MEM_WRITE, which flushes nothing: the render target and the final
++	 * image copy can still sit in the CCU/UCHE write-back caches when the CPU reads memory. Linux
++	 * ends a submission with CACHE_FLUSH_TS for this reason. Clean the caches first (events as in
++	 * Mesa's A7xx+ CCU/UCHE clean); fp6gpureplaynoflush=1 reproduces the earlier runs. */
++	int noflush = 0;
++	(void)PE_parse_boot_argn("fp6gpureplaynoflush", &noflush, sizeof(noflush));
++	if (noflush != 1) {
++		cmd[n++] = fp6_cp_type7_packet(0x46u, 1u); /* CP_EVENT_WRITE7: CCU_CLEAN_COLOR */
++		cmd[n++] = 0x21u;
++		cmd[n++] = fp6_cp_type7_packet(0x46u, 1u); /* CCU_CLEAN_DEPTH */
++		cmd[n++] = 0x20u;
++		cmd[n++] = fp6_cp_type7_packet(0x46u, 1u); /* CACHE_CLEAN */
++		cmd[n++] = 0x31u;
++		cmd[n++] = fp6_cp_type7_packet(0x26u, 0u); /* CP_WAIT_FOR_IDLE */
++	}
+ 	cmd[n++] = fp6_cp_type7_packet(0x3du, 3u); /* CP_MEM_WRITE fence */
+ 	cmd[n++] = (uint32_t)(fp6_exec_result_va + 4u * FP6_REPLAY_FENCE_OFFSET);
+ 	cmd[n++] = (uint32_t)((fp6_exec_result_va + 4u * FP6_REPLAY_FENCE_OFFSET) >> 32);
+@@ -5143,23 +5158,44 @@ fp6_replay_run(vm_offset_t g, vm_offset_t gpu, unsigned index)
+ 		total = 1;
+ 		if (have == 4u) {
+ 			char row[17];
+-			for (unsigned gy = 0; gy < 16u; gy++) {
+-				for (unsigned gx = 0; gx < 16u; gx++) {
+-					unsigned word = gy * 4u * 64u + gx * 4u;
+-					uint32_t v = img[word / 1024u][word % 1024u], e = r->init[gy * 16u + gx];
+-					int near = 1;
+-					for (unsigned sh = 0; sh < 32u; sh += 8u) {
+-						int d = (int)((v >> sh) & 0xffu) - (int)((e >> sh) & 0xffu);
+-						if (d < -6 || d > 6) near = 0;
++			unsigned first_miss = 0;
++			for (unsigned pass = 0; pass < 2u; pass++) {
++				if (pass) {
++					/* Distinguish a missing cache flush (late data stays wrong) from a write that
++					 * had not landed yet (late data is right). */
++					delay(200000);
++					for (unsigned q = 0; q < 4u; q++) {
++						struct fp6_gpu_global_page *page =
++						    fp6_as_find_page(r, first_page, r->check_va + 0x1000ull * q);
++						fp6_gpu_invalidate_cpu_cache(page->va, 4096u);
+ 					}
+-					if (!near && mismatches++ < 6u)
+-						printf("QCOM GPU REPLAY: %s grid (%u,%u) got 0x%08x want 0x%08x\n", r->name, gx, gy, v, e);
+-					if (v != 0xff000000u) lit++;
+-					row[gx] = !near ? 'x' : (v == 0xff000000u ? '.' : '#');
+ 				}
+-				row[16] = 0;
+-				printf("QCOM GPU GRID %s %02u %s\n", r->name, gy, row);
++				mismatches = lit = 0;
++				for (unsigned gy = 0; gy < 16u; gy++) {
++					for (unsigned gx = 0; gx < 16u; gx++) {
++						unsigned word = gy * 4u * 64u + gx * 4u;
++						uint32_t v = img[word / 1024u][word % 1024u], e = r->init[gy * 16u + gx];
++						int near = 1;
++						for (unsigned sh = 0; sh < 32u; sh += 8u) {
++							int d = (int)((v >> sh) & 0xffu) - (int)((e >> sh) & 0xffu);
++							if (d < -6 || d > 6) near = 0;
++						}
++						if (!pass && !near && mismatches < 6u)
++							printf("QCOM GPU REPLAY: %s grid (%u,%u) got 0x%08x want 0x%08x\n", r->name, gx, gy, v, e);
++						if (!near) mismatches++;
++						if (v != 0xff000000u) lit++;
++						row[gx] = !near ? 'x' : (v == 0xff000000u ? '.' : '#');
++					}
++					row[16] = 0;
++					if (!pass) printf("QCOM GPU GRID %s %02u %s\n", r->name, gy, row);
++				}
++				if (!pass) {
++					first_miss = mismatches;
++					if (!mismatches) break;
++				}
+ 			}
++			if (first_miss != mismatches)
++				printf("QCOM GPU REPLAY: %s grid after 200 ms: %u differ (was %u)\n", r->name, mismatches, first_miss);
+ 			good = mismatches <= 12u;
+ 			printf("QCOM GPU REPLAY: %s grid %u of 256 samples differ, %u lit; %s\n", r->name, mismatches, lit,
+ 			    good ? "MATCH" : "MISMATCH");

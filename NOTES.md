@@ -1,5 +1,25 @@
 # ios-extra — current state
 
+## FP6 GPU replay: UCHE/CCHE invalidation did not change the texture and vertexbuf results (2026-10-23)
+
+**Phone measured:** CI `39994550223` (head `a86f8b4d7d3d4cba2f82f58dbe5e99613a7db456`, patch
+0213) passed. Image `/tmp/ios-extra-run-39994550223/package/fp6-scenes-0213.img` (SHA256
+`6042cbe2b1bb22bb06c10ce91c09b20c006f4896f1b216034e638cbeb9bf0d12`) booted once via
+`fastboot boot`; no flash, EDL or `getvar`. Log
+`/tmp/ios-extra-run-39994550223/logs/phone-0213-inv.txt`. Patch 0213 adds `CACHE_INVALIDATE7`,
+`CP_CCHE_INVALIDATE` and a wait-for-idle before every replay IB (`fp6gpureplaynoinv=1` skips it).
+
+Result: identical to patch 0212. 7 of 10 scenes match; texture (78 differ), texlinear (21) and
+vertexbuf (81, nothing lit) fail exactly as before. So stale UCHE/CCHE lines from the previous
+scene's address space are not the cause.
+
+Source observation for the next test: in texture the wrong samples read `0x00000000` (the
+zero-initialised result page, never written), in texlinear `0xff000000` (the clear colour). The
+replay fence is a plain `CP_MEM_WRITE` after a wait-for-idle, which flushes no cache, whereas Linux
+ends a submit with `CACHE_FLUSH_TS`. Patch 0214 cleans CCU colour/depth and the UCHE
+(`CACHE_CLEAN`) before the fence and re-reads a mismatching result after 200 ms, to separate a missing
+flush from a late write. Not yet run on the phone.
+
 ## FP6 GPU diagnostics measured: fetch paths work alone, two combinations still fail (2026-10-23)
 
 **Phone measured:** CI `39992573473` (head `70253f55e0dd6f25088ebc4898d879132bd01248`, patch
