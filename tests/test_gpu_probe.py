@@ -54,6 +54,17 @@ class GPUProbeTests(unittest.TestCase):
                 'Linux default DCVS votes must precede the GPU OOB request')
             self.assertIn('fp6_smmu_write32(g, 0x4764cu, 0x7fffffffu);', source,
                           'the OOB ACK interrupt must remain unmasked during polling')
+            self.assertIn('fp6_gpu_exec_snapshot(g, gpu, "after-cp-init")', source,
+                          'CP init must be followed by a read-only fault snapshot')
+            self.assertIn('fp6_gpu_exec_snapshot(g, gpu, "after-secure-trust")', source,
+                          'secure-trust transition must be followed by a read-only snapshot')
+            for offset in ('0x57c34u', '0x57c38u', '0x1a8u', '0x22d4u',
+                           '0x2088u', '0x22ecu', 'FP6_SMMU_CB_FSR'):
+                self.assertIn(offset, source,
+                              f'GPU fault snapshot must include {offset}')
+            self.assertLess(source.index('"after-cp-init"'),
+                            source.index('"after-secure-trust"'),
+                            'snapshot ordering must isolate the secure-trust transition')
             source = source.replace('__asm__ volatile("dsb sy" ::: "memory");', '')
             source = source.replace('__asm__ volatile("dc ivac, %0" :: "r"(p) : "memory");', '(void)p;')
             for name in ('fp6_gmu_loader.h',):

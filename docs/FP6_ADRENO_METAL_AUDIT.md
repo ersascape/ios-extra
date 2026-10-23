@@ -299,19 +299,27 @@ checking a GPU memory write. CM3 reset was verified and SID/context/clock votes
 were retained. The failure log did not separate VA reservation, physical
 backing allocation and page-table publication, so its cause is unresolved.
 
-Patch 0182 changes SQE backing to individual 4 KiB physical pages mapped into a
-single contiguous GPU virtual range; it also reports which allocation or map
-stage fails. That fits Linux's scatter-backed global-memory model and removes a
-large contiguous physical allocation requirement. If its mapping succeeds,
-the opt-in path starts SQE, sends the Linux Gen8 `CP_THREAD_CONTROL` +
-`CP_ME_INIT` packet through HFI raw-command ID 131, then uses the Linux no-ZAP
-fallback and submits one `CP_MEM_WRITE`. It polls GPU_CX_BUSY_STATUS bit 23 for
-200 ms, invalidates the CPU cache line and checks the result. The diagnostic
-still leaves CP_ME_INIT's optional Linux power-up-list bit 8 clear and does not
-port `gen8_start()` or Linux's `cpu_gpu_lock` list. CM3 reset containment and
-permanent mapping retention remain in place after success or failure. Local
-arm64 compilation and host tests pass; 0182 CI and phone results are pending.
-Even a passing memory word would prove the first GPU command write, not
+Patch 0182 changed SQE backing to individual 4 KiB physical pages mapped into
+one contiguous GPU virtual range. CI `39909842939` passed, and one temporary
+phone boot confirmed the pagewise map, SQE base programming and the HFI raw
+`CP_THREAD_CONTROL` + `CP_ME_INIT` path. The command returned the idle
+indication (`GPU_CX_BUSY_STATUS=0x71000000`, `RBBM_STATUS=1`), but the next
+idle check stayed busy (`0x70880004`) for 200 ms before `CP_MEM_WRITE`. The
+write was refused before submission, so there is no GPU memory write/readback
+result yet. Exact image, source, checksums and capture are in `GPU_LOG.md` and
+`NOTES.md`.
+
+The 0182 code is only Linux-derived: it leaves CP_ME_INIT power-up-list bit 8
+clear, passes a zero-filled placeholder list and does not run `gen8_start()`.
+Linux A810 HWSCHED runs `gen8_start()` before SQE setup, enables bit 8 with an
+initialized `cpu_gpu_lock` list, then configures IRQs and submits CP init. The
+0182 log lacks busy-status2 and CP/SMMU fault registers, so it cannot tell
+whether busy reassertion followed CP init, the direct secure-trust write, or a
+fault. Patch 0183 adds read-only snapshots on each side of that trust write;
+host and sanitizer harnesses pass, local arm64 compilation against the 0182
+CI headers passes, and CI/phone measurement are pending. These diagnostics
+will guide the first Linux-equivalent `gen8_start()` and power-up-list port.
+Even a passing memory word would prove only the first GPU command write, not
 draw/readback or Metal.
 
 ### A810 coldboot command order checked against current Linux source

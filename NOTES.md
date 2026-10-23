@@ -41,8 +41,42 @@ write/readback is claimed.
 Patch 0182 changes SQE backing to separate 4 KiB physical pages mapped in one
 contiguous GPU VA and adds per-stage failure messages. This matches Linux's
 scatter-backed global buffer mapping model and removes the large contiguous
-physical allocation requirement. It is locally compiled and the host suite
-passes (13 tests, 5 skipped); CI and another phone boot are pending.
+physical allocation requirement. Commit `e853a696e99ae2aef0eee8e7f63f9c7561df8b9d`
+passed CI `39909842939`; kernel SHA256
+`a8af5f0241d26a4d8c93e6a02022e21d843940b76a7ec0cc5135c60df78b3da9`, ADT
+SHA256 `542293f42c875f31ef866b1635b64df1ff2d65b21f23b4bbea464b2f2cf27846`,
+and build-tree `sweet_gpu.c` matches `/tmp/sweet_gpu-0182.c` byte-for-byte.
+The generated SQE header SHA256 is
+`a042cff1cd82853b6d0274a49241e4862fb1764d3dad458db91bcc4853aff2b7`.
+Image `/tmp/ios-extra-run-0182/package/fp6-sqe-cp-write-0182.img` SHA256
+`623ba7fbbd0a3b75a1edb178e605335dcc8393207b0d24d768abd7f2f5e774ef` used the
+matching stock DTB and bounded RAM-disk init.
+
+One temporary boot reached the GMU/HFI startup and default votes, ACKed GPU
+OOB, mapped SQE from pagewise backing and programmed its base. The HFI raw
+`CP_THREAD_CONTROL + CP_ME_INIT` request returned the GPU idle indication
+(`busy=0x71000000`, `RBBM_STATUS=1`). Before submitting `CP_MEM_WRITE`, the
+next idle check stayed busy for 200 ms (`GPU_CX_BUSY_STATUS=0x70880004`), so
+the write was correctly refused and no memory write/readback is claimed. The
+probe verified CM3 reset and retained SID/context/clock votes. Decoded and raw
+USB logs are `/tmp/ios-extra-run-0182/logs/phone-0182-sqe-cp-write.txt` and
+`.udp`, both SHA256
+`118e212a7a801d9f56913d17cc4abc98f9175933653bf3c1111f17fd8c0f5369`;
+capture was 96 packets / 23,832 bytes. The pagewise fix therefore resolved the
+0181 mapping failure. The 0182 trace does not include busy-status2 or CP fault
+registers, so it does not identify why busy reasserted after CP init.
+
+Patch 0183 adds read-only snapshots after CP init and after the no-ZAP
+`RBBM_SECVID_TRUST_CNTL` transition: busy/status2/mask, RBBM and CP interrupt
+status, CP2GMU/SQE state and SMMU CB0 FSR. This should isolate whether the
+busy transition follows CP init, secure-trust setup or an underlying fault.
+Normal and ASan/UBSan GPU harnesses pass, full suite passes (13 tests, 5
+skipped), and local arm64 compilation against CI 0182 headers passes (0/1
+failed). CI and a follow-up phone measurement are pending. Linux source review
+also confirms A810 HWSCHED runs `gen8_start()` before SQE setup and enables
+`CP_ME_INIT` power-up-list bit 8 with a populated `cpu_gpu_lock` register list;
+the current bounded probe omits those pieces, so its execution path is not yet
+Linux-equivalent.
 
 ## FP6 GMU OOB ACK result 0179 (2026-10-23)
 

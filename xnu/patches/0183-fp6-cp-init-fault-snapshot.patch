@@ -1,0 +1,54 @@
+--- a/bsd/dev/sweet_gpu.c
++++ b/bsd/dev/sweet_gpu.c
+@@ -4220,9 +4220,9 @@
+ }
+ 
+ /* Small bounded Gen8 CP diagnostic. This deliberately does not claim to
+- * replace gen8_start(): it loads the pinned A810 SQE, submits Linux's exact
+- * CP_THREAD_CONTROL/CP_ME_INIT envelope with the optional power-up-list bit
+- * disabled, then asks CP to write one known word through SID0/CB0. */
++ * replace gen8_start(): it loads the pinned A810 SQE, submits a Linux-derived
++ * CP_THREAD_CONTROL/CP_ME_INIT envelope with the power-up-list bit disabled,
++ * then asks CP to write one known word through SID0/CB0. */
+ #define FP6_EXEC_SQE_PAGES ((FP6_SQE_FW_SIZE + 4095u) / 4096u)
+ static struct fp6_gpu_global_page fp6_exec_sqe[FP6_EXEC_SQE_PAGES];
+ static struct fp6_gpu_global_page fp6_exec_pwrup, fp6_exec_result;
+@@ -4328,6 +4328,23 @@
+ 	return 0;
+ }
+ 
++static void
++fp6_gpu_exec_snapshot(vm_offset_t g, vm_offset_t gpu, const char *stage)
++{
++	uint32_t busy = fp6_smmu_read32(g, 0x57c30u);
++	uint32_t busy2 = fp6_smmu_read32(g, 0x57c34u);
++	uint32_t mask = fp6_smmu_read32(g, 0x57c38u);
++	uint32_t rbbm = fp6_smmu_read32(gpu, 0x048u);
++	uint32_t rbbm_int = fp6_smmu_read32(gpu, 0x1a8u);
++	uint32_t cp_global = fp6_smmu_read32(gpu, 0x22d4u);
++	uint32_t cp2gmu = fp6_smmu_read32(gpu, 0x2088u);
++	uint32_t sqe = fp6_smmu_read32(gpu, 0x22ecu);
++	uint32_t fsr = fp6_smmu_read32(fp6_gpu_smmu_base,
++	    fp6_gpu_cb_off + FP6_SMMU_CB_FSR);
++	printf("QCOM GPU EXEC: state=%s busy=0x%08x busy2=0x%08x mask=0x%08x RBBM=0x%08x RBBM_INT0=0x%08x CP_GLOBAL=0x%08x CP2GMU=0x%08x SQE=0x%08x CB0_FSR=0x%08x\n",
++	    stage, busy, busy2, mask, rbbm, rbbm_int, cp_global, cp2gmu, sqe, fsr);
++}
++
+ static int
+ fp6_gpu_exec_raw(vm_offset_t g, uint8_t *hfi_mem, unsigned *sequence,
+ 		vm_offset_t gpu, const uint32_t *cmd, unsigned cmd_dwords,
+@@ -4417,12 +4434,14 @@
+ 	init_cmd[9] = 1u << 31;
+ 	if (!fp6_gpu_exec_raw(g, hfi_mem, sequence, gpu, init_cmd, 10u, "CP_THREAD_CONTROL+CP_ME_INIT"))
+ 		return 0;
++	fp6_gpu_exec_snapshot(g, gpu, "after-cp-init");
+ 	/* Same fallback Linux uses when no ZAP image is loaded. */
+ 	fp6_smmu_write32(gpu, 0x3d000u, 0u); /* RBBM_SECVID_TRUST_CNTL dword 0xf400 */
+ 	if (fp6_smmu_read32(gpu, 0x3d000u) != 0u) {
+ 		printf("QCOM GPU EXEC: secure-trust fallback readback failed\n");
+ 		return 0;
+ 	}
++	fp6_gpu_exec_snapshot(g, gpu, "after-secure-trust");
+ 	*(volatile uint32_t *)(void *)fp6_exec_result.va = 0xdeadbeefu;
+ 	(void)fp6_gpu_kernel_publish(NULL, fp6_exec_result.va, 64u);
+ 	write_cmd[0] = fp6_cp_type7_packet(0x3du, 3u); /* CP_MEM_WRITE */

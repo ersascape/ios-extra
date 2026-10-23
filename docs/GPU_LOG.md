@@ -1,4 +1,4 @@
-## FP6 SQE/CP probe allocation failure 0181; pagewise candidate 0182 (2026-10-23)
+## FP6 SQE/CP probe and busy transition 0181/0182; diagnostic 0183 (2026-10-23)
 
 Patch 0181 commit `ce2dfe3b0fd0b9a0ad309427d64cdac0d4e18e7b` passed CI run
 `39908276809`. The exact CI kernel SHA256 is
@@ -25,10 +25,40 @@ and raw UDP:
 SHA256 `15be18ebde1ef4248be7497c6290be0b5cbc406ffd208815c024b6fb9f872758`.
 No GPU execution or memory write is claimed.
 
-Patch 0182 now allocates the 84,560-byte SQE payload page by page and maps the
-pages into one contiguous GPU VA, with stage-specific failure logs. It is
-locally arm64-compiled; normal and ASan/UBSan host tests pass. This is not yet
-CI- or phone-tested.
+Patch 0182 allocates the 84,560-byte SQE payload page by page and maps the pages
+into one contiguous GPU VA, with stage-specific failure logs. Commit
+`e853a696e99ae2aef0eee8e7f63f9c7561df8b9d` passed CI `39909842939`; kernel
+SHA256 `a8af5f0241d26a4d8c93e6a02022e21d843940b76a7ec0cc5135c60df78b3da9`,
+ADT SHA256 `542293f42c875f31ef866b1635b64df1ff2d65b21f23b4bbea464b2f2cf27846`,
+and the CI buildtree source matches `/tmp/sweet_gpu-0182.c`. The SQE firmware
+header matches SHA256
+`a042cff1cd82853b6d0274a49241e4862fb1764d3dad458db91bcc4853aff2b7`.
+Image `/tmp/ios-extra-run-0182/package/fp6-sqe-cp-write-0182.img` SHA256
+`623ba7fbbd0a3b75a1edb178e605335dcc8393207b0d24d768abd7f2f5e774ef` used
+the exact CI kernel/ADT, verified stock DTB and workflow init.
+
+One temporary `fastboot boot` succeeded; the phone answered ping and the
+user-mode USB capture received 96 packets / 23,832 bytes. The log and raw UDP
+are `/tmp/ios-extra-run-0182/logs/phone-0182-sqe-cp-write.txt` and `.udp`, both
+SHA256 `118e212a7a801d9f56913d17cc4abc98f9175933653bf3c1111f17fd8c0f5369`.
+The measured sequence was: HFI `START` ACK; default GPU and bus vote ACKs; GPU
+OOB ACK (`intr_info=0x80000000`, `RBBM_STATUS=1`); pagewise SQE mapping and SQE
+base programming; HFI raw `CP_THREAD_CONTROL + CP_ME_INIT` idle indication
+(`busy=0x71000000`, `RBBM_STATUS=1`). Before `CP_MEM_WRITE`, a new bounded
+200 ms idle check read `GPU_CX_BUSY_STATUS=0x70880004` and refused submission.
+The probe reset CM3 and retained SID/context/clock votes. No GPU memory write,
+readback, draw or Metal output is established. The missing 0182 data are
+busy-status2, the busy mask, RBBM/CP fault status and SMMU FSR at the transition.
+
+Patch 0183 adds read-only snapshots after CP init and after the direct
+no-ZAP `RBBM_SECVID_TRUST_CNTL` write, including those status registers and
+CB0 FSR. The source patch applies cleanly to the 0182 CI buildtree. Normal and
+ASan/UBSan `tests/test_gpu_probe.py` pass; the full Python suite passes (13
+tests, 5 skipped); arm64 object compilation against the 0182 CI headers passes
+(0/1 failed). CI and phone measurement are pending. Linux HWSCHED source shows
+`gen8_start()` precedes SQE setup and CP init, and `CP_ME_INIT` enables bit 8
+with a populated `cpu_gpu_lock` list; 0181/0182 omit that setup. This remains a
+source-based next-fix lead, not a measured cause of the busy transition.
 
 ## FP6 default HFI votes and GPU OOB ACK result 0179 (2026-10-23)
 
