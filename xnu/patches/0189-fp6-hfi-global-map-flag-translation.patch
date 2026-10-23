@@ -1,0 +1,14 @@
+--- a/bsd/dev/sweet_gpu.c
++++ b/bsd/dev/sweet_gpu.c
+@@ -3704,7 +3704,10 @@
+ 				return 0;
+ 			}
+ 		}
+-		if (!fp6_gpu_global_map_live(smmu, gpu_address, gpu_mapped, gpu_backing.pa, flags)) {
++		/* HFI flag bit 3 is GMU_ACC but the global domain uses it for EXEC; pass
++		 * only the PRIV/WRITE bits, which share positions (Linux keeps data NOEXEC). */
++		if (!fp6_gpu_global_map_live(smmu, gpu_address, gpu_mapped, gpu_backing.pa,
++		    flags & (FP6_GPU_GLOBAL_GFX_PRIV | FP6_GPU_GLOBAL_GFX_WRITE))) {
+ 			printf("QCOM GPU SMMU: HFI global map refused kind=%u handle=%u VA=0x%llx PA=0x%llx; CM3 reset required\n",
+ 			    kind, handle, (unsigned long long)gpu_address,
+ 			    (unsigned long long)gpu_backing.pa);
