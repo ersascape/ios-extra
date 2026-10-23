@@ -76,6 +76,8 @@ class GPUProbeTests(unittest.TestCase):
                           'host ring write must target a firmware kind-1 ring only')
             self.assertIn('PE_parse_boot_argn("fp6gpucompute"', source,
                           'compute dispatch must remain explicitly opt-in')
+            self.assertIn('fp6_cp_type7_packet(0x1fu, 1u); /* CP_RESET_CONTEXT_STATE */', source,
+                          'replay must clear BV/BR counters like the Linux gen8 submit path')
             self.assertIn('PE_parse_boot_argn("fp6gpureplaystep"', source,
                           'prefix bisection must be explicitly opt-in')
             self.assertIn('PE_parse_boot_argn("fp6gpureplay"', source,

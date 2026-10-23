@@ -1,0 +1,37 @@
+diff --git a/bsd/dev/sweet_gpu.c b/bsd/dev/sweet_gpu.c
+--- a/bsd/dev/sweet_gpu.c
++++ b/bsd/dev/sweet_gpu.c
+@@ -4943,16 +4943,30 @@
+ 		}
+ 	}
+ 	uint64_t size = (uint64_t)2 << (cntl & 0xffu);
+-	uint32_t cmd[16];
++	/* Linux gen8_rb_context_switch() + gen8_ringbuffer_submitcmd() preamble: Mesa's
++	 * CP_BV_BR_COUNT_OPS PIPE_SET_BR_OFFSET assumes the kernel cleared the BV/BR
++	 * counters with CP_RESET_CONTEXT_STATE before the user IB. */
++	uint32_t cmd[32];
+ 	unsigned n = 0;
++	cmd[n++] = fp6_cp_type7_packet(0x17u, 1u); /* CP_THREAD_CONTROL: both, sync */
++	cmd[n++] = 3u | (1u << 31);
++	cmd[n++] = fp6_cp_type7_packet(0x1fu, 1u); /* CP_RESET_CONTEXT_STATE */
++	cmd[n++] = 0xfu; /* CLEAR_ON_CHIP_TS | CLEAR_RESOURCE_TABLE | CLEAR_BV_BR_COUNTER | RESET_GLOBAL_LOCAL_TS */
+ 	cmd[n++] = fp6_cp_type7_packet(0x17u, 1u); /* CP_THREAD_CONTROL: BR, sync */
+ 	cmd[n++] = 1u | (1u << 31);
+-	cmd[n++] = fp6_cp_type7_packet(0x26u, 0u); /* CP_WAIT_FOR_IDLE */
++	cmd[n++] = fp6_cp_type7_packet(0x17u, 1u); /* CP_THREAD_CONTROL: both */
++	cmd[n++] = 3u;
++	cmd[n++] = fp6_cp_type7_packet(0x65u, 1u); /* CP_SET_MARKER: IFPC disable */
++	cmd[n++] = 0x101u;
++	cmd[n++] = fp6_cp_type7_packet(0x17u, 1u); /* CP_THREAD_CONTROL: BR */
++	cmd[n++] = 1u;
+ 	cmd[n++] = fp6_cp_type7_packet(0x3fu, 3u); /* CP_INDIRECT_BUFFER */
+ 	cmd[n++] = (uint32_t)r->ib_va;
+ 	cmd[n++] = (uint32_t)(r->ib_va >> 32);
+ 	cmd[n++] = ib_dwords;
+-	cmd[n++] = fp6_cp_type7_packet(0x26u, 0u);
++	cmd[n++] = fp6_cp_type7_packet(0x26u, 0u); /* CP_WAIT_FOR_IDLE */
++	cmd[n++] = fp6_cp_type7_packet(0x17u, 1u); /* CP_THREAD_CONTROL: both, sync (BV drains) */
++	cmd[n++] = 3u | (1u << 31);
+ 	cmd[n++] = fp6_cp_type7_packet(0x3du, 3u); /* CP_MEM_WRITE fence */
+ 	cmd[n++] = (uint32_t)(fp6_exec_result_va + 4u * FP6_REPLAY_FENCE_OFFSET);
+ 	cmd[n++] = (uint32_t)((fp6_exec_result_va + 4u * FP6_REPLAY_FENCE_OFFSET) >> 32);
