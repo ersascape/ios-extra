@@ -1,5 +1,30 @@
 # ios-extra — current state
 
+## FP6 triangle rendered and read back 0205 (2026-10-23)
+
+**Phone measured:** CI `39966763160` (head `19190d4d7380858b22cb468a60d9e2723bc3c29d`)
+passed; source matched. Image
+`/tmp/ios-extra-run-39966763160/package/fp6-replay-ascii-0205.img` (SHA256
+`dc35f682e630f6af9f9b33a5c6fc329538653d44a305b5a0c4a7c1fa16c0e378`; cmdline
+`fp6gpuring=1 fp6gpucompute=1 fp6gpureplay=1 fp6gpureplaycb=1`, stepping off)
+booted once via `fastboot boot`; no flash, EDL or `getvar`. 100 packets; log
+`/tmp/ios-extra-run-39966763160/logs/phone-0205-ascii.txt`.
+
+The full Mesa Turnip A810 draw (CBD cleared) ran as one submission and the probe
+reported `all 2 captures passed` (`buf_init` 8/8; draw `check=1/1`, fence
+`0x600dcafe`, RPTR 885/885, CB0 FSR `0x400`). The two 16 KiB result images were
+printed as 64x64 rows and rebuilt on the host: the linear copy
+(`0x10002a000`, vkCmdCopyImageToBuffer target) is a clean triangle (512 pixels of
+`0xff4080ff`, base up, apex down as Vulkan's top-left origin predicts, rows 16-46)
+on a fully written opaque-black clear background (3584 non-zero pixels), so
+clear, draw and blit all produced the expected values. The render target BO
+(`0x100026000`) holds the same pixel counts in the GPU's tiled layout (rows
+interleaved), so its row-by-row print is scrambled as expected. Rebuilt image:
+scratch only (not committed). Still unmeasured: GMEM (tiled-binning) rendering
+and the fake 608 KiB GMEM CCU offsets on the 576 KiB part, UBWC, textures,
+UBO/constants, depth, blending, multiple draws, the original CBD-set stream (still
+hangs BR), the Linux kernel's own submit-time CB patching, display, and Metal.
+
 ## FP6 first GPU draw: Turnip A810 triangle replay 0204 (2026-10-23)
 
 **Phone measured:** CI `39965021309` (head `02caa494caaf21df497f7488b12c46177912cf2f`)
