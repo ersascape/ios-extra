@@ -1,0 +1,100 @@
+--- a/bsd/dev/sweet_gpu.c
++++ b/bsd/dev/sweet_gpu.c
+@@ -4223,7 +4223,9 @@
+  * replace gen8_start(): it loads the pinned A810 SQE, submits Linux's exact
+  * CP_THREAD_CONTROL/CP_ME_INIT envelope with the optional power-up-list bit
+  * disabled, then asks CP to write one known word through SID0/CB0. */
+-static struct fp6_gpu_global_page fp6_exec_sqe, fp6_exec_pwrup, fp6_exec_result;
++#define FP6_EXEC_SQE_PAGES ((FP6_SQE_FW_SIZE + 4095u) / 4096u)
++static struct fp6_gpu_global_page fp6_exec_sqe[FP6_EXEC_SQE_PAGES];
++static struct fp6_gpu_global_page fp6_exec_pwrup, fp6_exec_result;
+ static uint64_t fp6_exec_sqe_va, fp6_exec_pwrup_va, fp6_exec_result_va;
+ static int fp6_exec_pages_ready;
+ 
+@@ -4258,10 +4260,60 @@
+ {
+ 	uint32_t mapped = 0;
+ 	if (fp6_gpu_global_va(&fp6_gpu_global_domain, size, 12u, gpu_va, &mapped) ||
+-	    mapped != ((size + 4095u) & ~4095u) ||
+-	    fp6_gpu_kernel_alloc(NULL, mapped, page) ||
+-	    fp6_gpu_global_map_live(fp6_gpu_smmu_base, *gpu_va, mapped,
+-		page->pa, flags)) return 0;
++	    mapped != ((size + 4095u) & ~4095u)) {
++		printf("QCOM GPU EXEC: VA reservation failed bytes=%u\n", size);
++		return 0;
++	}
++	if (fp6_gpu_kernel_alloc(NULL, mapped, page)) {
++		printf("QCOM GPU EXEC: backing allocation failed bytes=%u mapped=%u\n", size, mapped);
++		return 0;
++	}
++	if (!fp6_gpu_global_map_live(fp6_gpu_smmu_base, *gpu_va, mapped, page->pa, flags)) {
++		printf("QCOM GPU EXEC: backing map failed VA=0x%llx PA=0x%llx bytes=%u flags=0x%x\n",
++		    (unsigned long long)*gpu_va, (unsigned long long)page->pa, mapped, flags);
++		return 0;
++	}
++	return 1;
++}
++
++static int
++fp6_gpu_exec_alloc_sqe(void)
++{
++	if (!FP6_EXEC_SQE_PAGES || fp6_gpu_global_domain.count + FP6_EXEC_SQE_PAGES + 2u > FP6_GPU_GLOBAL_MAPS) {
++		printf("QCOM GPU EXEC: SQE page count exceeds permanent global-map capacity pages=%u\n",
++		    FP6_EXEC_SQE_PAGES);
++		return 0;
++	}
++	for (unsigned i = 0; i < FP6_EXEC_SQE_PAGES; i++) {
++		uint32_t mapped = 0;
++		uint64_t va = 0;
++		if (fp6_gpu_global_va(&fp6_gpu_global_domain, 4096u, 12u, &va, &mapped) || mapped != 4096u) {
++			printf("QCOM GPU EXEC: SQE VA reservation failed page=%u/%u\n", i, FP6_EXEC_SQE_PAGES);
++			return 0;
++		}
++		if (i == 0) fp6_exec_sqe_va = va;
++		else if (va != fp6_exec_sqe_va + (uint64_t)i * 4096u) {
++			printf("QCOM GPU EXEC: SQE GPU VA is not contiguous page=%u va=0x%llx\n",
++			    i, (unsigned long long)va);
++			return 0;
++		}
++		if (fp6_gpu_kernel_alloc(NULL, 4096u, &fp6_exec_sqe[i])) {
++			printf("QCOM GPU EXEC: SQE physical page allocation failed page=%u/%u\n",
++			    i, FP6_EXEC_SQE_PAGES);
++			return 0;
++		}
++		uint32_t offset = i * 4096u;
++		uint32_t bytes = FP6_SQE_FW_SIZE - offset;
++		if (bytes > 4096u) bytes = 4096u;
++		memcpy(fp6_exec_sqe[i].va, fp6_sqe_fw + offset, bytes);
++		(void)fp6_gpu_kernel_publish(NULL, fp6_exec_sqe[i].va, 4096u);
++		if (!fp6_gpu_global_map_live(fp6_gpu_smmu_base, va, 4096u,
++		    fp6_exec_sqe[i].pa, FP6_HFI_MEMFLAG_GFX_PRIV)) {
++			printf("QCOM GPU EXEC: SQE SMMU page map failed page=%u VA=0x%llx PA=0x%llx\n",
++			    i, (unsigned long long)va, (unsigned long long)fp6_exec_sqe[i].pa);
++			return 0;
++		}
++	}
+ 	return 1;
+ }
+ 
+@@ -4319,19 +4371,16 @@
+ 		return 0;
+ 	}
+ 	if (!fp6_exec_pages_ready) {
+-		if (!fp6_gpu_exec_alloc(FP6_SQE_FW_SIZE, FP6_HFI_MEMFLAG_GFX_PRIV,
+-		    &fp6_exec_sqe, &fp6_exec_sqe_va) ||
++		if (!fp6_gpu_exec_alloc_sqe() ||
+ 		    !fp6_gpu_exec_alloc(4096u, FP6_HFI_MEMFLAG_GFX_PRIV,
+ 		    &fp6_exec_pwrup, &fp6_exec_pwrup_va) ||
+ 		    !fp6_gpu_exec_alloc(4096u, FP6_HFI_MEMFLAG_GFX_PRIV | FP6_HFI_MEMFLAG_GFX_WRITEABLE,
+ 		    &fp6_exec_result, &fp6_exec_result_va)) {
+-			printf("QCOM GPU EXEC: permanent GPU buffer mapping failed; mappings retained\n");
++			printf("QCOM GPU EXEC: permanent GPU buffers incomplete; mappings retained\n");
+ 			return 0;
+ 		}
+-		memcpy(fp6_exec_sqe.va, fp6_sqe_fw, FP6_SQE_FW_SIZE);
+ 		memset(fp6_exec_pwrup.va, 0, 4096u);
+ 		*(volatile uint32_t *)(void *)fp6_exec_result.va = 0xdeadbeefu;
+-		(void)fp6_gpu_kernel_publish(NULL, fp6_exec_sqe.va, FP6_SQE_FW_SIZE);
+ 		(void)fp6_gpu_kernel_publish(NULL, fp6_exec_pwrup.va, 4096u);
+ 		(void)fp6_gpu_kernel_publish(NULL, fp6_exec_result.va, 4096u);
+ 		fp6_exec_pages_ready = 1;

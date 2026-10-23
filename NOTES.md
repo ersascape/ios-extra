@@ -1,26 +1,48 @@
 # ios-extra — current state
 
-## FP6 SQE/CP execution candidate 0181 (2026-10-23)
+## FP6 SQE/CP execution attempt 0181 and pagewise fix 0182 (2026-10-23)
 
-Built a bounded opt-in candidate from the 0179 measured OOB state. Patch 0180
-validates the pinned `gen80300_sqe.fw` input (84,564 bytes, version
+Patch 0180 validates pinned `gen80300_sqe.fw` (84,564 bytes, version
 `0x01100067`, SHA256
 `38fd00147e8b752dd29c53a0badac8f94b1dbd89dc06f5b1c372d3428cd1b906`) and
 stages its 84,560-byte instruction payload without committing firmware.
-Patch 0181, enabled only by `fp6gpuexec=1`, maps that payload and a writable
-result page through SID0/CB0 TTBR1, starts SQE, submits the A810 Gen8 raw CP
-initialization packet with Linux's optional power-up-list bit disabled, then
-submits `CP_MEM_WRITE` and checks the known result after CPU cache invalidation.
-Each raw request has Linux's 200 ms GPU-busy bound; reset containment and
-permanent backing retention remain active on both success and failure. This
-does not port Linux's full `gen8_start()` register programming, power-up list,
-draw setup or Metal path.
+Patch 0181 is opt-in with `fp6gpuexec=1`; it tries to map SQE firmware, a CP
+power-up-list placeholder and a writable result page through the active
+SID0/CB0 TTBR1 domain, then start SQE, send Gen8 CP init and issue `CP_MEM_WRITE`.
+The raw HFI commands have Linux's 200 ms GPU-busy bound, and reset containment
+and permanent backing retention remain active on success or failure. The
+diagnostic leaves CP_ME_INIT's optional power-up-list bit 8 clear. It does not
+port Linux's `gen8_start()` register setup, spinlock register list, draw path or
+Metal integration.
 
-The generated stage header was checked against the pinned blob. The cached XNU
-arm64 compile passed (0/1 failed); GPU harness and ASan/UBSan passed, checking
-PM4 type-7 packet parity and that the test is skipped with no MMIO writes
-unless explicitly enabled. Full host suite passed (13 tests, 5 skipped). CI
-build and phone run are pending; no GPU command success is claimed yet.
+Commit `ce2dfe3b0fd0b9a0ad309427d64cdac0d4e18e7b` passed CI run
+`39908276809`; kernel SHA256
+`226c25ee611eeaf514900d13a5c044e2175f31824f7d21ea640a8c1549582c33`. The
+buildtree's `sweet_gpu.c` matched the locally compiled source SHA256
+`5b9b152a3e42f240219abcc0680df9de40ccd359b36058b6d5c2d684db40316f`; the
+staged SQE header matched the local generated header SHA256
+`a042cff1cd82853b6d0274a49241e4862fb1764d3dad458db91bcc4853aff2b7`.
+Packaged image
+`/tmp/ios-extra-run-0181/package/fp6-sqe-cp-write-0181.img` SHA256
+`eff80b5fb9aebead340ab1ce243e279b2a66352467926b800b7d26e098e52b96` used
+the exact CI kernel/ADT and verified local stock DTB.
+
+One temporary boot reached the already measured HFI `START`, both default
+votes, and GPU OOB ACK (`GMU2HOST_INTR_INFO=0x80000000`, `RBBM_STATUS=1`). The
+first new operation stopped at `permanent GPU buffer mapping failed`, before
+SQE base writes or any HFI raw CP command. CM3 reset was verified; SID/context/
+clock votes were retained. The log and raw UDP are
+`/tmp/ios-extra-run-0181/logs/phone-0181-sqe-cp-write.txt` and `.udp`, both
+SHA256 `15be18ebde1ef4248be7497c6290be0b5cbc406ffd208815c024b6fb9f872758`.
+0181 combined VA reservation, backing allocation and SMMU map failures into
+one log, so the exact failing substep is unknown. No GPU command or memory
+write/readback is claimed.
+
+Patch 0182 changes SQE backing to separate 4 KiB physical pages mapped in one
+contiguous GPU VA and adds per-stage failure messages. This matches Linux's
+scatter-backed global buffer mapping model and removes the large contiguous
+physical allocation requirement. It is locally compiled and the host suite
+passes (13 tests, 5 skipped); CI and another phone boot are pending.
 
 ## FP6 GMU OOB ACK result 0179 (2026-10-23)
 

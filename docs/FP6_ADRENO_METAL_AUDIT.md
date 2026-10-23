@@ -291,22 +291,27 @@ The pinned FairBlobs raw artifact inspected locally was 84,564 bytes, SHA-256
 in `/tmp` and is not committed. This is source/artifact inspection only: the
 phone has not run SQE, and GPU execution remains unproven.
 
-Patch 0181 is the first bounded SQE/CP execution candidate. Its 0180 staging
-script pins the artifact commit and whole-file hash, checks version
-`0x01100067`, and generates only the 84,560-byte payload header at build time.
-With explicit `fp6gpuexec=1`, XNU allocates permanent GPU-global backing for the
-SQE, a power-up-list placeholder and a writable result word, publishes each
-mapping into the already-live SID0/CB0 TTBR1 domain, starts SQE, then sends the
-Linux Gen8 `CP_THREAD_CONTROL` + `CP_ME_INIT` packet through HFI raw-command ID
-131. This diagnostic leaves CP_ME_INIT's optional Linux power-up-list bit 8
-clear; it does not yet port `gen8_start()` or Linux's `cpu_gpu_lock` list. It
-then uses the Linux no-ZAP fallback, submits a one-word `CP_MEM_WRITE`, polls
-GPU_CX_BUSY_STATUS bit 23 with a 200 ms bound, invalidates the CPU cache line
-and checks the written value. CM3 reset containment and permanent mapping
-retention remain in place after either success or failure. The host test checks
-packet parity and the explicit opt-in refusal path; arm64 compilation checks
-syntax/code generation only. CI and phone results are recorded in NOTES/GPU_LOG
-when available. A passing value would prove the first GPU command write, not
+Patch 0181 was built in CI run `39908276809` and tested once with
+`fp6gpuexec=1`. The phone repeated the measured HFI startup, both default votes
+and GPU OOB ACK, then printed `permanent GPU buffer mapping failed`. It stopped
+before programming the SQE registers, sending any HFI raw CP command, or
+checking a GPU memory write. CM3 reset was verified and SID/context/clock votes
+were retained. The failure log did not separate VA reservation, physical
+backing allocation and page-table publication, so its cause is unresolved.
+
+Patch 0182 changes SQE backing to individual 4 KiB physical pages mapped into a
+single contiguous GPU virtual range; it also reports which allocation or map
+stage fails. That fits Linux's scatter-backed global-memory model and removes a
+large contiguous physical allocation requirement. If its mapping succeeds,
+the opt-in path starts SQE, sends the Linux Gen8 `CP_THREAD_CONTROL` +
+`CP_ME_INIT` packet through HFI raw-command ID 131, then uses the Linux no-ZAP
+fallback and submits one `CP_MEM_WRITE`. It polls GPU_CX_BUSY_STATUS bit 23 for
+200 ms, invalidates the CPU cache line and checks the result. The diagnostic
+still leaves CP_ME_INIT's optional Linux power-up-list bit 8 clear and does not
+port `gen8_start()` or Linux's `cpu_gpu_lock` list. CM3 reset containment and
+permanent mapping retention remain in place after success or failure. Local
+arm64 compilation and host tests pass; 0182 CI and phone results are pending.
+Even a passing memory word would prove the first GPU command write, not
 draw/readback or Metal.
 
 ### A810 coldboot command order checked against current Linux source

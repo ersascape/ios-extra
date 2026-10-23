@@ -38,6 +38,12 @@ class GPUProbeTests(unittest.TestCase):
                           'raw CP packets must use the Gen8 HFI raw-command message')
             self.assertIn('fp6_cp_type7_packet(0x3du, 3u)', source,
                           'write/readback probe must use CP_MEM_WRITE')
+            self.assertIn('fp6_gpu_exec_alloc_sqe()', source,
+                          'SQE must be backed pagewise for a contiguous GPU VA')
+            self.assertIn('fp6_exec_sqe[i].pa, FP6_HFI_MEMFLAG_GFX_PRIV', source,
+                          'each SQE page must be separately published into TTBR1')
+            self.assertIn('va != fp6_exec_sqe_va + (uint64_t)i * 4096u', source,
+                          'SQE pages must form one contiguous GPU virtual range')
             self.assertLess(
                 source.index('HFI START ACK; core firmware initialized'),
                 source.index('if (!fp6_gmu_hfi_default_votes('),

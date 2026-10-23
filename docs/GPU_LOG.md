@@ -1,3 +1,35 @@
+## FP6 SQE/CP probe allocation failure 0181; pagewise candidate 0182 (2026-10-23)
+
+Patch 0181 commit `ce2dfe3b0fd0b9a0ad309427d64cdac0d4e18e7b` passed CI run
+`39908276809`. The exact CI kernel SHA256 is
+`226c25ee611eeaf514900d13a5c044e2175f31824f7d21ea640a8c1549582c33`; the
+CI buildtree's `bsd/dev/sweet_gpu.c` matched the locally compiled file
+(`5b9b152a3e42f240219abcc0680df9de40ccd359b36058b6d5c2d684db40316f`). The
+generated SQE header SHA256 is
+`a042cff1cd82853b6d0274a49241e4862fb1764d3dad458db91bcc4853aff2b7`. The
+workflow omitted image packaging because `FP6_STOCK_DTB_URL` is unset; locally
+packaged the exact kernel/ADT with `research/local-fp6/fp6-stock.dtb` and the
+known static init. Image
+`/tmp/ios-extra-run-0181/package/fp6-sqe-cp-write-0181.img` SHA256
+`eff80b5fb9aebead340ab1ce243e279b2a66352467926b800b7d26e098e52b96`.
+
+One temporary `fastboot boot` reached the HFI `START` ACK, default GPU vote
+(pwrlevel 8/perf-index 2), default bus vote (level 2), and GPU OOB ACK
+(`GMU2HOST_INTR_INFO=0x80000000`, `RBBM_STATUS=0x1`). The opt-in execution path
+then stopped with `permanent GPU buffer mapping failed`; it did not program the
+SQE base or submit CP initialization/`CP_MEM_WRITE`. The 0181 code combined VA,
+backing allocation and SMMU map failures, leaving the exact substep unknown.
+CM3 reset was verified and SID/context/clock votes were retained. Decoded log
+and raw UDP:
+`/tmp/ios-extra-run-0181/logs/phone-0181-sqe-cp-write.txt` and `.udp`, both
+SHA256 `15be18ebde1ef4248be7497c6290be0b5cbc406ffd208815c024b6fb9f872758`.
+No GPU execution or memory write is claimed.
+
+Patch 0182 now allocates the 84,560-byte SQE payload page by page and maps the
+pages into one contiguous GPU VA, with stage-specific failure logs. It is
+locally arm64-compiled; normal and ASan/UBSan host tests pass. This is not yet
+CI- or phone-tested.
+
 ## FP6 default HFI votes and GPU OOB ACK result 0179 (2026-10-23)
 
 Source comparison with Fairphone Gen8 HWSched found that Linux sends the
