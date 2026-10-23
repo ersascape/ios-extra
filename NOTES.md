@@ -1,5 +1,25 @@
 # ios-extra — current state
 
+## FP6 display snapshot level 1 measured 0208 (2026-10-23)
+
+**Phone measured:** CI `39977919581` (head `d7ca0e9f96efe188af24f6f8c50853e7ade92b22`)
+passed; source matched. Image
+`/tmp/ios-extra-run-39977919581/package1/fp6-dpusnap1-0208.img` (SHA256
+`d0dca06934f568b95efe600e430ac381c5d4189ffa854ee50dc409848c1ea42a`; cmdline
+`... fp6usb=2 fp6dpusnap=1`) booted once via `fastboot boot`; no flash, EDL or
+`getvar`. 92 packets; log `/tmp/ios-extra-run-39977919581/logs/phone-0208-dpusnap1.txt`.
+
+Level 1 returned: `disp_cc_mdss_core_gdsc GDSCR=0xf822f800` (PWR_ON=1,
+SW_COLLAPSE=0) and `MDSS HW_VERSION=0xa0020000`. So the bootloader's display power
+domain is still on at this point of the boot and HLOS can read the MDP block
+without a hang or fault; `0xa0020000` is DPU 10.2.0 by the usual Qualcomm field
+layout (major `[31:28]`, minor `[27:16]`). The printed lines were joined by a literal
+`\n` (my string escaping error); patch 0209 fixes that. Level 2 (CTL0, LM0, four
+SSPPs, INTF_1) is packaged at
+`/tmp/ios-extra-run-39977919581/package2/fp6-dpusnap2-0208.img` (SHA256
+`d5942cdf9c16b7621440a0f2379fc2fa82d63823d5f661378bab3e1cb88e8ed0`) but is not run
+yet; it will be rebuilt with 0209 first so its output is readable.
+
 ## FP6 display stage 2: read-only DPU snapshot, candidate 0208 (2026-10-23)
 
 Source/host only; no phone result. The stock FP6 DT (`mdss_mdp@ae00000`, reg

@@ -1,0 +1,53 @@
+diff --git a/bsd/dev/sweet_gpu.c b/bsd/dev/sweet_gpu.c
+--- a/bsd/dev/sweet_gpu.c
++++ b/bsd/dev/sweet_gpu.c
+@@ -5908,7 +5908,7 @@
+ 		uint32_t v = fp6_smmu_read32(base, block_off + regs[i].off);
+ 		len += (unsigned)snprintf(line + len, sizeof(line) - len, " %s=0x%08x", regs[i].name, v);
+ 		if (len > sizeof(line) - 40u || i + 1u == count || (i % 4u) == 3u) {
+-			printf("QCOM DPU: %s%s\\n", block, line);
++			printf("QCOM DPU: %s%s\n", block, line);
+ 			len = 0;
+ 			line[0] = 0;
+ 		}
+@@ -5920,25 +5920,25 @@
+ {
+ 	int level = 0;
+ 	if (!PE_parse_boot_argn("fp6dpusnap", &level, sizeof(level)) || level < 1) return;
+-	printf("QCOM DPU: read-only display snapshot level %d requested\\n", level);
++	printf("QCOM DPU: read-only display snapshot level %d requested\n", level);
+ 	vm_offset_t gd = ml_io_map(FP6_DISPCC_GDSC_PA & ~0x3fffull, 0x4000u);
+ 	if (!gd) {
+-		printf("QCOM DPU: GDSC mapping failed; no display reads\\n");
++		printf("QCOM DPU: GDSC mapping failed; no display reads\n");
+ 		return;
+ 	}
+ 	uint32_t gdscr = fp6_smmu_read32(gd, (uint32_t)(FP6_DISPCC_GDSC_PA & 0x3fffull));
+-	printf("QCOM DPU: disp_cc_mdss_core_gdsc GDSCR=0x%08x (PWR_ON=%u SW_COLLAPSE=%u)\\n", gdscr,
++	printf("QCOM DPU: disp_cc_mdss_core_gdsc GDSCR=0x%08x (PWR_ON=%u SW_COLLAPSE=%u)\n", gdscr,
+ 	    (gdscr >> 31) & 1u, gdscr & 1u);
+ 	if (!(gdscr & 0x80000000u)) {
+-		printf("QCOM DPU: MDSS core power domain reports off; not touching the MDP block\\n");
++		printf("QCOM DPU: MDSS core power domain reports off; not touching the MDP block\n");
+ 		return;
+ 	}
+ 	vm_offset_t mdp = ml_io_map(FP6_MDSS_PA, FP6_MDSS_SIZE);
+ 	if (!mdp) {
+-		printf("QCOM DPU: MDP mapping failed\\n");
++		printf("QCOM DPU: MDP mapping failed\n");
+ 		return;
+ 	}
+-	printf("QCOM DPU: MDSS HW_VERSION=0x%08x\\n", fp6_smmu_read32(mdp, 0x0u));
++	printf("QCOM DPU: MDSS HW_VERSION=0x%08x\n", fp6_smmu_read32(mdp, 0x0u));
+ 	if (level < 2) return;
+ 	fp6_dpu_dump("CTL0", mdp, 0x16000u, fp6_dpu_ctl_regs, sizeof(fp6_dpu_ctl_regs) / sizeof(fp6_dpu_ctl_regs[0]));
+ 	fp6_dpu_dump("LM0", mdp, 0x45000u, fp6_dpu_lm_regs, sizeof(fp6_dpu_lm_regs) / sizeof(fp6_dpu_lm_regs[0]));
+@@ -5948,7 +5948,7 @@
+ 		fp6_dpu_dump(sspp_name[i], mdp, sspp_off[i], fp6_dpu_sspp_regs,
+ 		    sizeof(fp6_dpu_sspp_regs) / sizeof(fp6_dpu_sspp_regs[0]));
+ 	fp6_dpu_dump("INTF1(DSI)", mdp, 0x36000u, fp6_dpu_intf_regs, sizeof(fp6_dpu_intf_regs) / sizeof(fp6_dpu_intf_regs[0]));
+-	printf("QCOM DPU: snapshot complete (no writes)\\n");
++	printf("QCOM DPU: snapshot complete (no writes)\n");
+ }
+ 
+ static void
