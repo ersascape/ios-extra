@@ -312,13 +312,17 @@ result yet. Exact image, source, checksums and capture are in `GPU_LOG.md` and
 The 0182 code is only Linux-derived: it leaves CP_ME_INIT power-up-list bit 8
 clear, passes a zero-filled placeholder list and does not run `gen8_start()`.
 Linux A810 HWSCHED runs `gen8_start()` before SQE setup, enables bit 8 with an
-initialized `cpu_gpu_lock` list, then configures IRQs and submits CP init. The
-0182 log lacks busy-status2 and CP/SMMU fault registers, so it cannot tell
-whether busy reassertion followed CP init, the direct secure-trust write, or a
-fault. Patch 0183 adds read-only snapshots on each side of that trust write;
-host and sanitizer harnesses pass, local arm64 compilation against the 0182
-CI headers passes, and CI/phone measurement are pending. These diagnostics
-will guide the first Linux-equivalent `gen8_start()` and power-up-list port.
+initialized `cpu_gpu_lock` list, then configures IRQs and submits CP init.
+Patch 0183 passed CI `39912182367` and one phone boot. Read-only snapshots
+showed CB0 FSR moving from `0x400` after GMU firmware init to `0x408` directly
+after CP init; busy=`0x70880004`, busy2=`0x12`, RBBM=`0x00880005`. These values
+were unchanged after writing the no-ZAP secure-trust register. Thus the new
+CB0 fault occurs during CP init and the trust write is not its trigger. The
+memory write was refused before submission. Patch 0184 adds CB0 FAR and
+FSYNR0/1 to identify the faulting address and access syndrome; host tests and
+local arm64 compile pass, with CI and phone measurement pending. Use that
+evidence before choosing the first Linux-equivalent startup and power-up-list
+changes.
 Even a passing memory word would prove only the first GPU command write, not
 draw/readback or Metal.
 

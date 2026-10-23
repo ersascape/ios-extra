@@ -66,17 +66,34 @@ capture was 96 packets / 23,832 bytes. The pagewise fix therefore resolved the
 0181 mapping failure. The 0182 trace does not include busy-status2 or CP fault
 registers, so it does not identify why busy reasserted after CP init.
 
-Patch 0183 adds read-only snapshots after CP init and after the no-ZAP
-`RBBM_SECVID_TRUST_CNTL` transition: busy/status2/mask, RBBM and CP interrupt
-status, CP2GMU/SQE state and SMMU CB0 FSR. This should isolate whether the
-busy transition follows CP init, secure-trust setup or an underlying fault.
-Normal and ASan/UBSan GPU harnesses pass, full suite passes (13 tests, 5
-skipped), and local arm64 compilation against CI 0182 headers passes (0/1
-failed). CI and a follow-up phone measurement are pending. Linux source review
-also confirms A810 HWSCHED runs `gen8_start()` before SQE setup and enables
-`CP_ME_INIT` power-up-list bit 8 with a populated `cpu_gpu_lock` register list;
-the current bounded probe omits those pieces, so its execution path is not yet
-Linux-equivalent.
+Patch 0183 commit `15b75bdfe45710da442bd730e7b0542b641a5e74` passed CI
+`39912182367`; the buildtree `sweet_gpu.c` matches `/tmp/sweet_gpu-0183.c`
+byte-for-byte. Kernel SHA256
+`6f2d7d16406f3976a7b20059359bbc3eede74c0ccc5a7501954439effcdf0b5d` and image
+`/tmp/ios-extra-run-0183/package/fp6-cp-fault-snapshot-0183.img` SHA256
+`faaea5347ec50ffb16e518597380df23cd88701e95acd9505488c09f38e100a2`.
+
+The phone booted once; USB capture received 103 packets / 24,434 bytes. Decoded
+log and raw UDP are `/tmp/ios-extra-run-0183/logs/phone-0183-cp-fault-snapshot.txt`
+and `.udp`, both SHA256
+`78a2eed857220873bbe0e2dc42bbe3b320bea3589839522fc343ee2c7f00eb9d`.
+Measured CB0 FSR was `0x400` after GMU firmware init, then `0x408` immediately
+after `CP_THREAD_CONTROL + CP_ME_INIT`. At that same post-CP snapshot,
+GPU_CX_BUSY_STATUS=`0x70880004`, BUSY_STATUS2=`0x12`, mask=`0`, RBBM=`0x00880005`,
+RBBM_INT0/CP_GLOBAL/CP2GMU=`0`, SQE status=`0xdeafbead`. The entire status
+tuple was unchanged after the no-ZAP secure-trust write. This localizes the
+new CB0 fault to CP init and rules out the trust write as its trigger; the
+current log lacks FAR and FSYNR, so the faulting IOVA and access syndrome are
+not yet known. The CP memory write remains correctly refused.
+
+Patch 0184 adds read-only 64-bit CB0 FAR and FSYNR0/1 to the same snapshots.
+The patch applies to the 0183 CI buildtree; normal and ASan/UBSan GPU harnesses
+pass, the full suite passes (13 tests, 5 skipped), and local arm64 compilation
+against CI headers passes (0/1 failed). CI and a follow-up phone measurement
+are pending. Linux source review confirms A810 HWSCHED runs `gen8_start()`
+before SQE setup and enables CP_ME_INIT power-up-list bit 8 with a populated
+`cpu_gpu_lock` list; the bounded XNU probe omits those pieces. That is a
+candidate path to correct after FAR/FSYNR identifies the failing access.
 
 ## FP6 GMU OOB ACK result 0179 (2026-10-23)
 

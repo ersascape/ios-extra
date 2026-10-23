@@ -50,15 +50,37 @@ The probe reset CM3 and retained SID/context/clock votes. No GPU memory write,
 readback, draw or Metal output is established. The missing 0182 data are
 busy-status2, the busy mask, RBBM/CP fault status and SMMU FSR at the transition.
 
-Patch 0183 adds read-only snapshots after CP init and after the direct
-no-ZAP `RBBM_SECVID_TRUST_CNTL` write, including those status registers and
-CB0 FSR. The source patch applies cleanly to the 0182 CI buildtree. Normal and
-ASan/UBSan `tests/test_gpu_probe.py` pass; the full Python suite passes (13
-tests, 5 skipped); arm64 object compilation against the 0182 CI headers passes
-(0/1 failed). CI and phone measurement are pending. Linux HWSCHED source shows
-`gen8_start()` precedes SQE setup and CP init, and `CP_ME_INIT` enables bit 8
-with a populated `cpu_gpu_lock` list; 0181/0182 omit that setup. This remains a
-source-based next-fix lead, not a measured cause of the busy transition.
+Patch 0183 adds read-only snapshots after CP init and after the direct no-ZAP
+`RBBM_SECVID_TRUST_CNTL` write. It applies to the 0182 buildtree and passes the
+normal/sanitized host harnesses, full suite (13 tests, 5 skipped), and local
+arm64 object compilation (0/1 failed). Commit `15b75bdfe45710da442bd730e7b0542b641a5e74`
+passed CI `39912182367`; kernel SHA256
+`6f2d7d16406f3976a7b20059359bbc3eede74c0ccc5a7501954439effcdf0b5d`, source
+matches `/tmp/sweet_gpu-0183.c`, and generated SQE header hash remains
+`a042cff1cd82853b6d0274a49241e4862fb1764d3dad458db91bcc4853aff2b7`. Image
+`/tmp/ios-extra-run-0183/package/fp6-cp-fault-snapshot-0183.img` SHA256
+`faaea5347ec50ffb16e518597380df23cd88701e95acd9505488c09f38e100a2`.
+
+One temporary boot succeeded and the phone answered ping; user-mode capture
+received 103 packets / 24,434 bytes. Decoded log and raw UDP are
+`/tmp/ios-extra-run-0183/logs/phone-0183-cp-fault-snapshot.txt` and `.udp`,
+both SHA256 `78a2eed857220873bbe0e2dc42bbe3b320bea3589839522fc343ee2c7f00eb9d`.
+CB0 FSR was `0x400` after GMU firmware init. After CP init, the snapshot showed
+`FSR=0x408`, busy=`0x70880004`, busy2=`0x12`, busy mask=`0`, RBBM=`0x00880005`,
+RBBM_INT0/CP_GLOBAL/CP2GMU=`0`, SQE status=`0xdeafbead`. The same tuple
+remained after the secure-trust write. Therefore the new CB0 fault appears
+during CP init, before the trust write; the trust write does not trigger this
+observed busy state. No CP memory write was submitted or verified.
+
+Patch 0184 adds read-only 64-bit CB0 FAR and FSYNR0/1 to the snapshots, to
+identify the faulting IOVA and access type. It applies to the 0183 CI buildtree;
+normal and ASan/UBSan GPU harnesses pass, the full suite passes (13 tests, 5
+skipped), and local arm64 object compilation passes (0/1 failed). CI and phone
+measurement remain pending. Linux HWSCHED source shows `gen8_start()` precedes
+SQE setup and CP init, and CP init enables power-up-list bit 8 with an
+initialized `cpu_gpu_lock` list. The bounded XNU probe omits this setup; FAR
+and FSYNR will guide the next change rather than assuming that omission caused
+the fault.
 
 ## FP6 default HFI votes and GPU OOB ACK result 0179 (2026-10-23)
 

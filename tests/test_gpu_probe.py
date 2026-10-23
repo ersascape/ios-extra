@@ -59,9 +59,12 @@ class GPUProbeTests(unittest.TestCase):
             self.assertIn('fp6_gpu_exec_snapshot(g, gpu, "after-secure-trust")', source,
                           'secure-trust transition must be followed by a read-only snapshot')
             for offset in ('0x57c34u', '0x57c38u', '0x1a8u', '0x22d4u',
-                           '0x2088u', '0x22ecu', 'FP6_SMMU_CB_FSR'):
+                           '0x2088u', '0x22ecu', 'FP6_SMMU_CB_FSR',
+                           '0x0060u', '0x0068u', '0x006cu'):
                 self.assertIn(offset, source,
                               f'GPU fault snapshot must include {offset}')
+            self.assertIn('fp6_smmu_read64(fp6_gpu_smmu_base', source,
+                          'SMMU FAR must be captured at full physical-address width')
             self.assertLess(source.index('"after-cp-init"'),
                             source.index('"after-secure-trust"'),
                             'snapshot ordering must isolate the secure-trust transition')

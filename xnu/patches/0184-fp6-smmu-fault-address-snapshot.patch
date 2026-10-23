@@ -1,0 +1,22 @@
+--- a/bsd/dev/sweet_gpu.c
++++ b/bsd/dev/sweet_gpu.c
+@@ -4339,10 +4339,17 @@
+ 	uint32_t cp_global = fp6_smmu_read32(gpu, 0x22d4u);
+ 	uint32_t cp2gmu = fp6_smmu_read32(gpu, 0x2088u);
+ 	uint32_t sqe = fp6_smmu_read32(gpu, 0x22ecu);
++	uint64_t far = fp6_smmu_read64(fp6_gpu_smmu_base,
++	    fp6_gpu_cb_off + 0x0060u);
+ 	uint32_t fsr = fp6_smmu_read32(fp6_gpu_smmu_base,
+ 	    fp6_gpu_cb_off + FP6_SMMU_CB_FSR);
+-	printf("QCOM GPU EXEC: state=%s busy=0x%08x busy2=0x%08x mask=0x%08x RBBM=0x%08x RBBM_INT0=0x%08x CP_GLOBAL=0x%08x CP2GMU=0x%08x SQE=0x%08x CB0_FSR=0x%08x\n",
+-	    stage, busy, busy2, mask, rbbm, rbbm_int, cp_global, cp2gmu, sqe, fsr);
++	uint32_t fsynr0 = fp6_smmu_read32(fp6_gpu_smmu_base,
++	    fp6_gpu_cb_off + 0x0068u);
++	uint32_t fsynr1 = fp6_smmu_read32(fp6_gpu_smmu_base,
++	    fp6_gpu_cb_off + 0x006cu);
++	printf("QCOM GPU EXEC: state=%s busy=0x%08x busy2=0x%08x mask=0x%08x RBBM=0x%08x RBBM_INT0=0x%08x CP_GLOBAL=0x%08x CP2GMU=0x%08x SQE=0x%08x CB0_FSR=0x%08x FAR=0x%016llx FSYNR0=0x%08x FSYNR1=0x%08x\n",
++	    stage, busy, busy2, mask, rbbm, rbbm_int, cp_global, cp2gmu, sqe, fsr,
++	    (unsigned long long)far, fsynr0, fsynr1);
+ }
+ 
+ static int
