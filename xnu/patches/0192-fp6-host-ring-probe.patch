@@ -1,0 +1,97 @@
+--- a/bsd/dev/sweet_gpu.c
++++ b/bsd/dev/sweet_gpu.c
+@@ -4530,6 +4530,86 @@
+ 	    (unsigned)(sizeof(fp6_gpu_nonctxt_regs) / sizeof(fp6_gpu_nonctxt_regs[0])));
+ }
+ 
++/* Linux gen8_rb_start()/gen8_ringbuffer_submit(): CP_RB_* describe the BR ring,
++ * CP_RB_WPTR_GC is written through the GMU AHB fence (retry once if the write is
++ * dropped). On hwsched the firmware's kind-1 allocations are these rings, so this
++ * only reads the live registers and, if the CP is idle on a firmware ring, appends
++ * one CP_MEM_WRITE. Dword register numbers times four. */
++#define FP6_GPU_CP_RB_BASE_LO  0x2000u /* 0x800 */
++#define FP6_GPU_CP_RB_BASE_HI  0x2004u
++#define FP6_GPU_CP_RB_CNTL     0x2008u /* 0x802 */
++#define FP6_GPU_CP_RB_RPTR_ADDR_LO_BR 0x2010u /* 0x804 */
++#define FP6_GPU_CP_RB_RPTR_ADDR_HI_BR 0x2014u
++#define FP6_GPU_CP_RB_RPTR_BR  0x2018u /* 0x806 */
++#define FP6_GPU_CP_RB_WPTR_GC  0x201cu /* 0x807 */
++#define FP6_GMU_AHB_FENCE_STATUS 0x57c4cu /* GMUAO_AHB_FENCE_STATUS 0x23b13 */
++static int
++fp6_gpu_ring_probe(vm_offset_t g, vm_offset_t gpu)
++{
++	int wanted = 0;
++	uint32_t expected = 0x8100f00du;
++	if (!PE_parse_boot_argn("fp6gpuring", &wanted, sizeof(wanted)) || wanted != 1) {
++		printf("QCOM GPU RING: skipped; fp6gpuring=1 not requested\n");
++		return 1;
++	}
++	uint64_t base = ((uint64_t)fp6_smmu_read32(gpu, FP6_GPU_CP_RB_BASE_HI) << 32) |
++	    fp6_smmu_read32(gpu, FP6_GPU_CP_RB_BASE_LO);
++	uint32_t cntl = fp6_smmu_read32(gpu, FP6_GPU_CP_RB_CNTL);
++	uint32_t rptr = fp6_smmu_read32(gpu, FP6_GPU_CP_RB_RPTR_BR);
++	uint32_t wptr = fp6_smmu_read32(gpu, FP6_GPU_CP_RB_WPTR_GC);
++	printf("QCOM GPU RING: base=0x%llx cntl=0x%08x rptr_addr=0x%08x%08x rptr=0x%08x wptr=0x%08x fence=0x%08x\n",
++	    (unsigned long long)base, cntl,
++	    fp6_smmu_read32(gpu, FP6_GPU_CP_RB_RPTR_ADDR_HI_BR),
++	    fp6_smmu_read32(gpu, FP6_GPU_CP_RB_RPTR_ADDR_LO_BR), rptr, wptr,
++	    fp6_smmu_read32(g, FP6_GMU_AHB_FENCE_STATUS));
++	struct fp6_hfi_mem_alloc *ring = NULL;
++	for (unsigned i = 0; i < fp6_hfi_mem_alloc_count; i++) {
++		if (fp6_hfi_mem_allocs[i].mem_kind == 1u && base &&
++		    fp6_hfi_mem_allocs[i].gpu_address == base) {
++			ring = &fp6_hfi_mem_allocs[i];
++			break;
++		}
++	}
++	if (!ring) {
++		printf("QCOM GPU RING: CP_RB_BASE is not a firmware kind-1 allocation; no ring write\n");
++		return 1;
++	}
++	uint64_t size = (uint64_t)2 << (cntl & 0xffu);
++	if (rptr != wptr || wptr >= size || size - wptr < 4u || size * 4u > ring->desc[7]) {
++		printf("QCOM GPU RING: ring not idle or no room (size=%llu dwords rptr=%u wptr=%u); no ring write\n",
++		    (unsigned long long)size, rptr, wptr);
++		return 1;
++	}
++	volatile uint32_t *slot = (volatile uint32_t *)(void *)(ring->backing.va + 4u * wptr);
++	*(volatile uint32_t *)(void *)fp6_exec_result.va = 0xdeadbeefu;
++	(void)fp6_gpu_kernel_publish(NULL, fp6_exec_result.va, 64u);
++	slot[0] = fp6_cp_type7_packet(0x3du, 3u); /* CP_MEM_WRITE */
++	slot[1] = (uint32_t)fp6_exec_result_va;
++	slot[2] = (uint32_t)(fp6_exec_result_va >> 32);
++	slot[3] = expected;
++	(void)fp6_gpu_kernel_publish(NULL, ring->backing.va + 4u * wptr, 16u);
++	__asm__ volatile("dsb sy" ::: "memory");
++	unsigned dropped = 0;
++	for (unsigned attempt = 0; attempt < 2u; attempt++) {
++		fp6_smmu_write32(gpu, FP6_GPU_CP_RB_WPTR_GC, wptr + 4u);
++		dropped = fp6_smmu_read32(g, FP6_GMU_AHB_FENCE_STATUS) & 1u;
++		if (!dropped) break;
++	}
++	uint32_t observed = 0, now_rptr = 0;
++	for (unsigned i = 0; i < 2000u; i++) {
++		fp6_gpu_invalidate_cpu_cache(fp6_exec_result.va, 64u);
++		observed = *(volatile uint32_t *)(void *)fp6_exec_result.va;
++		now_rptr = fp6_smmu_read32(gpu, FP6_GPU_CP_RB_RPTR_BR);
++		if (observed == expected && now_rptr == wptr + 4u) break;
++		delay(100);
++	}
++	printf("QCOM GPU RING: CP_MEM_WRITE via host ring dropped=%u observed=0x%08x expected=0x%08x rptr=%u wptr=%u passed=%u CB0_FSR=0x%08x\n",
++	    dropped, observed, expected, now_rptr, fp6_smmu_read32(gpu, FP6_GPU_CP_RB_WPTR_GC),
++	    observed == expected,
++	    fp6_smmu_read32(fp6_gpu_smmu_base, fp6_gpu_cb_off + FP6_SMMU_CB_FSR));
++	return observed == expected;
++}
++
+ static int
+ fp6_gpu_exec_probe(vm_offset_t g, vm_offset_t gpu, uint8_t *hfi_mem,
+ 		unsigned *sequence)
+@@ -4620,6 +4700,7 @@
+ 		printf("QCOM GPU EXEC: GPU busy after CP_MEM_WRITE=0x%08x\n", busy);
+ 		return 0;
+ 	}
++	(void)fp6_gpu_ring_probe(g, gpu);
+ 	printf("QCOM GPU EXEC: diagnostic complete; full gen8_start register policy and draw/readback remain pending\n");
+ 	return 1;
+ }

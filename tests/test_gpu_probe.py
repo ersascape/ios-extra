@@ -68,6 +68,12 @@ class GPUProbeTests(unittest.TestCase):
             self.assertLess(source.index('\tfp6_gpu_program_nonctxt(gpu);\n'),
                             source.index('fp6_smmu_write32(gpu, 0x2058u, (uint32_t)fp6_exec_sqe_va)'),
                             'non-context registers must be programmed before SQE start')
+            self.assertIn('PE_parse_boot_argn("fp6gpuring"', source,
+                          'host ring write must remain explicitly opt-in')
+            self.assertIn('FP6_GMU_AHB_FENCE_STATUS 0x57c4cu', source,
+                          'CP_RB_WPTR must be written through the AHB fence check')
+            self.assertIn('fp6_hfi_mem_allocs[i].mem_kind == 1u', source,
+                          'host ring write must target a firmware kind-1 ring only')
             self.assertIn('va != fp6_exec_sqe_va + (uint64_t)i * 4096u', source,
                           'SQE pages must form one contiguous GPU virtual range')
             self.assertLess(
