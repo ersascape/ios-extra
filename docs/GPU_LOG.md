@@ -1892,12 +1892,15 @@ succeeded and USB capture recorded 97 UDP packets. Decoded log
 **Phone measured:** `FW_INIT_RESULT=0x100`; HFI initialized. The startup tables,
 HFI configuration and bootstrap DDR vote were ACKed. With `fp6gmunopreempt=1`,
 the firmware requested kinds 2, 14, 15, GMU-only 16 and GPU kind 1, with no
-secure kind 5. The HFI `START` ACK arrived. The probe immediately reset CM3 and
-retained SMMU/context/clock votes. Thus the non-preempting path passes the secure
-CSW allocation boundary and HFI core-firmware start. It still has no GPU
-core/SQE boot, GPU-master DMA, command write/readback, draw or Metal result.
+secure kind 5. HFI request 14 (`CORE_FW_START`) ACKed at sequence 5 and request
+10 (`START`) ACKed at sequence 6. The probe then reset CM3 and retained
+SMMU/context/clock votes. Thus the non-preempting path passes the secure CSW
+allocation boundary and both HFI start ACKs. It still has no GPU core/SQE boot,
+GPU-master DMA, command write/readback, draw or Metal result.
 The next implementation boundary is Gen8.3 GPU/SQE initialization after HFI
-start, following Fairphone Linux's `gen8_hwsched_gpu_boot()` and ring startup.
+start, following Fairphone Linux's `gen8_hwsched_gpu_boot()` and HWSCHED raw
+command path. The target profile uses HWSCHED; the legacy direct ringbuffer boot
+sequence is not the selected path.
 
 # FP6 guarded CB0 reinitialization and secure HFI allocation boundary 0170 (2026-10-23)
 

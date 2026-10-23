@@ -124,15 +124,23 @@ not where Linux first constructs the context. This is consistent with the
 FP6's GPU-reserved CB0 being distinct from the GMU's later CB2 test context,
 but it does not identify who left the measured disabled CB0 register values.
 
-The cold-boot order is explicit in `gen8_hwsched_first_boot()`: initialize the
-MMU/firmware, run `gen8_hwsched_gmu_first_boot()`, then
-`gen8_hwsched_gpu_boot()`. The latter calls `kgsl_mmu_start()`, takes GMU GPU
-OOB, runs `gen8_start()`, enables GPU IRQs, programs SQE/AQE bases and boots
-the scheduler. Ring startup then programs ring/scratch addresses, starts SQE,
-sends Gen8 CP initialization, loads/authenticates ZAP and leaves secure mode.
-Therefore HFI `MEM_ALLOC` may arrive before GPU command processing is started;
-XNU must finish and publish every requested GPU/GMU mapping before replying,
-and retain its backing until a proven quiesce.
+The FP6 catalog selects `adreno_gen8_hwsched_gpudev`, so its cold-boot path is
+the hardware-scheduler path. `gen8_hwsched_first_boot()` reads SQE firmware,
+initializes Gen8 state, runs `gen8_hwsched_gmu_first_boot()`, then
+`gen8_hwsched_gpu_boot()`. GPU boot starts the MMU, takes GMU GPU OOB, calls
+`gen8_start()`, enables GPU IRQs, programs the SQE base and asks the scheduler
+to boot. On cold boot, the scheduler sends a warmboot-scratch HFI request,
+submits `CP_ME_INIT` as `H2F_MSG_ISSUE_CMD_RAW` through GMU HFI, waits for the
+GPU busy indication to clear, loads/authenticates ZAP and leaves secure mode.
+This is not the legacy `gen8_gpu_boot()` path, which directly programs a
+ringbuffer and submits CP init through that ring.
+
+The Gen8 CP init packet is 10 dwords total: `CP_THREAD_CONTROL`, then
+`CP_ME_INIT` with seven payload dwords, including the GPU address of the
+power-up register list. The A810 register-list backing and its contents must be
+GPU-visible before that command. HFI `MEM_ALLOC` can arrive before GPU command
+processing starts; XNU must publish every requested mapping before replying,
+and retain backing until a proven quiesce.
 
 Patch 0170 has now replaced the measured disabled/unrouted CB0 state under
 explicit guards and the phone read back the GPU TTBR1 context and SID0 route.
@@ -260,6 +268,15 @@ The pinned FairBlobs raw artifact inspected locally was 84,564 bytes, SHA-256
 `38fd00147e8b752dd29c53a0badac8f94b1dbd89dc06f5b1c372d3428cd1b906`; it stays
 in `/tmp` and is not committed. This is source/artifact inspection only: the
 phone has not run SQE, and GPU execution remains unproven.
+
+The next code entry point is the existing HFI-success branch in
+`fp6_gmu_first_boot()`. It currently resets CM3 immediately after HFI `START`.
+The GPU path must instead retain the running GMU, build the A810 core power-up
+register list and mapped SQE payload, perform the Gen8 GPU register/IRQ/OOB
+setup, and send the coldboot HWSCHED CP init over HFI. Preserve a bounded reset
+and keep all published mappings permanently if any startup wait fails. The
+0171 phone log is the baseline proving both `CORE_FW_START` and `START` ACKs and
+the no-preemption allocation set; it proves no GPU command execution.
 
 The existing Darwin patch uses NativeAdreno ABI version 1. Direct discovery
 uses `NativeAdrenoGpuPublished`; its system-plugin route defaults to

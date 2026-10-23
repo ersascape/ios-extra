@@ -32,9 +32,10 @@
 - **Phone measured:** GMU firmware reported `FW_INIT_RESULT=0x100`, HFI
   initialized and ACKed the startup tables/requests and bootstrap DDR vote. With
   preemption omitted, firmware requested GPU allocations kinds 2, 14, 15 and 1,
-  plus GMU-only kind 16; it did not request secure kind 5. The HFI `START` ACK
-  was received. The bounded probe then reset CM3 and retained SMMU/context/clock
-  state. This resolves the secure-CSW allocation boundary for a non-preempting
+  plus GMU-only kind 16; it did not request secure kind 5. HFI request 14
+  (`CORE_FW_START`) ACKed at sequence 5; request 10 (`START`) ACKed at sequence
+  6. The bounded probe then reset CM3 and retained SMMU/context/clock state.
+  This resolves the secure-CSW allocation boundary for a non-preempting
   path, but no GPU core boot, SQE execution, DMA write/readback, draw or Metal
   output occurred. The next code step is Gen8.3 GPU core/SQE initialization after
   this HFI boundary, using the Linux sequence and correctly staged SQE payload.
