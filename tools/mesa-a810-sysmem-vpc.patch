@@ -1,0 +1,16 @@
+diff --git a/src/freedreno/common/freedreno_devices.py b/src/freedreno/common/freedreno_devices.py
+index f74587c..6fc51d2 100644
+--- a/src/freedreno/common/freedreno_devices.py
++++ b/src/freedreno/common/freedreno_devices.py
+@@ -1329,6 +1329,11 @@ add_gpus([
+     ], A6xxGPUInfo(
+         CHIP.A8XX,
+         [a7xx_base, a7xx_gen3, a8xx_base, a8xx_gen1, GPUProps(
++            # fp6 experiment: gen1's sysmem VPC buffers (128+64+32 KiB) plus the CCU caches need 608 KiB
++            # of the A810's 576 KiB GMEM; use the GMEM-mode sizes so the layout fits.
++            sysmem_vpc_attr_buf_size = 16384,
++            sysmem_vpc_pos_buf_size = 12288,
++            sysmem_vpc_bv_pos_buf_size = 20480,
+             gmem_vpc_attr_buf_size = 16384,
+             gmem_vpc_pos_buf_size = 12288,
+             gmem_vpc_bv_pos_buf_size = 20480,

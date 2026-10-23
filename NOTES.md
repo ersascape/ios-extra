@@ -1,5 +1,34 @@
 # ios-extra — current state
 
+## FP6 GPU cache clean changed results, and the CCU/VPC layout overran GMEM (2026-10-23)
+
+**Phone measured:** CI `39997038633` (head `4de8492913561d2ebfbafa3879a3077242a2fcb5`, patch
+0214) passed. Image `/tmp/ios-extra-run-39997038633/package/fp6-scenes-0214.img` (SHA256
+`ce23ec192e6a94919cb676130fbc6f5bbe5b1ee4019a9d8e48dc11a1a3391d04`) booted once via
+`fastboot boot`; no flash, EDL or `getvar`. Log
+`/tmp/ios-extra-run-39997038633/logs/phone-0214-flush.txt`.
+
+With `CCU_CLEAN_COLOR`, `CCU_CLEAN_DEPTH` and `CACHE_CLEAN` before the fence, `vertexbuf` now matches
+(0 of 256 differ, 81 lit), `texture` improved from 78 to 20 differing samples, `texlinear` stayed at 22,
+and `depth` got worse (1 to 24 differing). The 200 ms re-read changed nothing (no "after 200 ms" line),
+so these are not late writes. 7 of 10 scenes match. Results that depend on which caches are cleaned
+point at CCU/GMEM state, not at the data or the descriptors.
+
+Source inspection and host work (no phone yet):
+- The captured texture descriptor decodes to a 4x4 `FMT6_8_8_8_8_UNORM` 2D linear T# with identity
+  swizzle, `TEX_LINE_OFFSET` 2048 (256-byte rows) and `ARRAY_SLICE_OFFSET` 1; this is the layout
+  SnapMetal's `AdrenoLinearViewWords` builds, so the descriptor is not the problem.
+- Mesa's A810 profile (`freedreno_devices.py`, `num_ccu = 1`) overrides only the `gmem_vpc_*` buffer
+  sizes; its sysmem layout uses the gen1 defaults (VPC attr 128 KiB, pos 64 KiB, BV pos 32 KiB, CCU
+  colour 128 KiB, depth 256 KiB), 608 KiB in total, hence the `TU_GMEM=622592` workaround. In every
+  capture so far the in-stream state put the BV position buffer at `0x93000..0x98000`, past the end of the
+  576 KiB GMEM (`0x90000`).
+- `tools/mesa-a810-sysmem-vpc.patch` gives the A810 the GMEM-mode sizes (16384/12288/20480) for sysmem
+  too. A Turnip rebuilt with it and `TU_GMEM=589824` emits a layout ending exactly at `0x90000`
+  (`RB_CCU_CACHE_CNTL` depth offset `0x40000`, colour `0x80000`, VPC base `0x84000`..). Whether the
+  hardware accepts these smaller VPC buffers is not yet known.
+- Patch 0215 swaps the ten scene replays to captures made that way. Not yet built or run on the phone.
+
 ## FP6 GPU replay: UCHE/CCHE invalidation did not change the texture and vertexbuf results (2026-10-23)
 
 **Phone measured:** CI `39994550223` (head `a86f8b4d7d3d4cba2f82f58dbe5e99613a7db456`, patch
