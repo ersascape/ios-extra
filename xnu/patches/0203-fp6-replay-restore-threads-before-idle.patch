@@ -1,0 +1,18 @@
+diff --git a/bsd/dev/sweet_gpu.c b/bsd/dev/sweet_gpu.c
+--- a/bsd/dev/sweet_gpu.c
++++ b/bsd/dev/sweet_gpu.c
+@@ -4966,9 +4966,12 @@
+ 	cmd[n++] = (uint32_t)r->ib_va;
+ 	cmd[n++] = (uint32_t)(r->ib_va >> 32);
+ 	cmd[n++] = ib_dwords;
+-	cmd[n++] = fp6_cp_type7_packet(0x26u, 0u); /* CP_WAIT_FOR_IDLE */
+-	cmd[n++] = fp6_cp_type7_packet(0x17u, 1u); /* CP_THREAD_CONTROL: both, sync (BV drains) */
++	/* Restore both threads (clearing any CONCURRENT_BIN_DISABLE the stream left) and let
++	 * BV drain before waiting for idle; waiting first stalls a prefix that ends in BR-only
++	 * concurrent-bin-disable mode. */
++	cmd[n++] = fp6_cp_type7_packet(0x17u, 1u); /* CP_THREAD_CONTROL: both, sync */
+ 	cmd[n++] = 3u | (1u << 31);
++	cmd[n++] = fp6_cp_type7_packet(0x26u, 0u); /* CP_WAIT_FOR_IDLE */
+ 	cmd[n++] = fp6_cp_type7_packet(0x3du, 3u); /* CP_MEM_WRITE fence */
+ 	cmd[n++] = (uint32_t)(fp6_exec_result_va + 4u * FP6_REPLAY_FENCE_OFFSET);
+ 	cmd[n++] = (uint32_t)((fp6_exec_result_va + 4u * FP6_REPLAY_FENCE_OFFSET) >> 32);

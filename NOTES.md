@@ -1,5 +1,26 @@
 # ios-extra — current state
 
+## FP6 draw replay per-step trace 0202 (2026-10-23)
+
+**Phone measured:** CI `39952430135` (head `a964129928a7137f085ae177cf7338a2859a246b`)
+passed; source matched. Image
+`/tmp/ios-extra-run-39952430135/package/fp6-replay-idle-0202.img` (SHA256
+`add16fbc357157528389ed1b73df7affe1491a668c271ad80eff9753e6f326e3`) booted once via
+`fastboot boot`; no flash, EDL or `getvar`. 103 packets; log
+`/tmp/ios-extra-run-39952430135/logs/phone-0202-idle.txt`.
+
+Draw prefixes 1-63 (up to 146 dwords) all completed cleanly: fence `0x600dcafe`,
+BR and BV read pointers both equal to the target, `RBBM_STATUS=0x00000001`
+(idle). Prefix 64 (148 dwords, `CP_THREAD_CONTROL THREAD=BR|CONCURRENT_BIN_DISABLE`)
+did not: fence fired, BV read pointer reached the target (2460), BR read pointer
+stopped 9 dwords short at 2451 (the `CP_WAIT_FOR_IDLE` after the IB), and
+`RBBM_STATUS=0x00880005` (CP_BUSY + UNSLICE_BUSY_IGN_AHB) stayed busy. Hypothesis
+(not measured): the stall is produced by my footer, which waited for idle before
+restoring `SYNC|BOTH`, so this prefix waits while the CP is in BR-only
+concurrent-bin-disable mode; Mesa's real stream never waits there. Patch 0203
+restores both threads (sync) first and then waits; host tests and arm64 compile
+pass, CI and phone pending. The triangle is still not confirmed drawn.
+
 ## FP6 draw replay with the Linux submit preamble 0201 (2026-10-23)
 
 **Phone measured:** CI `39950912667` (head `12da2b9f6f7179ea3dd91b78da4cae90fc71f224`)
