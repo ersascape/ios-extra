@@ -1,3 +1,22 @@
+## FP6 SMMU fault attribution snapshot 0186 (2026-10-23)
+
+Patch 0186 adds read-only CB0 and CB4 context-bank state, including
+CBFRSYNRA0/4, live SID0 stream route, fault registers from each bank, and the
+CPU-visible L0/L1/L2/SQE leaf descriptors for the recorded FAR. The purpose is
+to resolve why FSYNR0 reports S1CBNDX=4 while prior snapshots sampled CB0, and
+to distinguish a context/route mismatch from a bad SQE PTE. Linux Qualcomm
+SMMU fault reporting reads CBFRSYNRA for the selected context bank. This is
+source-guided instrumentation; no hardware observation is yet available.
+
+Commit `a0a0f83d6fbc09c4a231f00a27d45d630a76ec4c` passed CI
+`39919610871`; full host suite passed (13 tests, 5 skipped), and the changed
+XNU source compiled against the 0185 buildtree. Image
+`/tmp/ios-extra-run-0186/package/fp6-smmu-fault-context-0186.img`, SHA256
+`bf5bffbaea29aa1a62cbc055b0a450802c1aa65285268870f0621f12400b6420`, round-
+tripped with the exact CI kernel/ADT and verified stock DTB. The pre-boot
+fastboot check found zero devices, so no phone test has run. Await fastboot,
+then perform one temporary boot and capture USB logs in user mode.
+
 ## FP6 SQE executable-map test 0185 (2026-10-23)
 
 Patch 0185 (`898c5145b9f1123c54d128df57f3cb0b5fa9e692`) passed CI

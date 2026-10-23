@@ -1,5 +1,30 @@
 # ios-extra — current state
 
+## FP6 SMMU fault attribution snapshot 0186 (2026-10-23)
+
+After the 0185 executable SQE mapping changed the reported access to a data
+read but left a permission fault, patch 0186 adds read-only CB0/CB4 snapshots:
+CBAR/CBA2R, SCTLR/ACTLR, TTBRs, TCR/TCR2, MAIR, FSR/FAR/FSYNR, and Qualcomm
+CBFRSYNRA attribution. It also logs the exact software-walk descriptors and
+SQE leaf PTE for the faulting IOVA, plus the live GPU stream route. This is
+designed to test whether the reported S1CBNDX=4 points to a distinct live
+context or whether the CB0 snapshot matches the actual faulting SID. Linux
+Qualcomm SMMU code uses CBFRSYNRA indexed by context bank in its GPU fault
+reporting path; source evidence is not a phone result.
+
+Commit `a0a0f83d6fbc09c4a231f00a27d45d630a76ec4c` passed CI
+`39919610871`; the new code also compiled as one file against the 0185 CI
+buildtree. The full host suite passed (13 tests, 5 skipped). The temporary
+image is `/tmp/ios-extra-run-0186/package/fp6-smmu-fault-context-0186.img`,
+SHA256 `bf5bffbaea29aa1a62cbc055b0a450802c1aa65285268870f0621f12400b6420`.
+It uses the exact kernel/ADT from that CI run and the verified stock DTB
+(SHA256 `8198534128258bfe7b05bbb5b227affc181aa49b376884c08eae8564fce124e3`).
+Packaging round-trip passed. Phone validation has not run: the required
+pre-boot `fastboot devices` check found zero devices. Next, once the phone is
+visible in fastboot, run one temporary boot with user-mode USB capture and
+decode the CB0/CB4 fault attribution and SQE PTE. No flash, EDL or
+`fastboot getvar` was used.
+
 ## FP6 SQE executable-map test 0185 (2026-10-23)
 
 Patch 0185 (`898c5145b9f1123c54d128df57f3cb0b5fa9e692`) passed CI
