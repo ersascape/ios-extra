@@ -40,35 +40,32 @@ device proof.
 
 ## Current FP6 GPU state (2026-10-23)
 
-Patch 0176 is the latest phone run. Commit
-`88e255c96f36065c1d059744a6a5b11e53c6b2aa` passed CI `39898354731`; XNU build
-passed and hosted FP6 image packaging skipped because `FP6_STOCK_DTB_URL` is
-unset. The exact CI kernel SHA256 is
-`3ba9204c9f2d02697711062740b8f12baa9ec165a3094900d0a48c9c077867ac`; exact
-ADT SHA256 is `e55863175af72b99d82cde7caa6e46ce4ffb92c3712f7fc020aeb235cc89cb05`.
-Packaged them with the verified stock DTB and static init ramdisk as
-`/tmp/ios-extra-run-39898354731/package/fp6-gmu-oob-msgq-0176.img` (SHA256
-`18e79c470afeafb4cbc6bbfd6974dfec6f2ac49fa02095e97a4d908d416ed2e7`). One
-temporary `fastboot boot` succeeded; user-mode USB capture recorded 108 packets
-and ping. Logs are under `/tmp/ios-extra-run-39898354731/logs/`, decoded log
-and raw UDP SHA256 `cfb5d573b24fd3bea02c25607da69879e333ecc16e4a247b977ba1f1f745a703`.
-No flash or EDL command was used.
+Patch 0177 is the latest phone run. Commit
+`d2ea6d0f76ca3e30b4b6a5beaf81fa1e44c4e200` passed CI `39899820723`. The exact
+CI kernel/ADT, verified stock DTB and bounded ramdisk were packaged as
+`/tmp/ios-extra-run-39899820723/package/fp6-gmu-unmask-oob-0177.img` (SHA256
+`0cefafad21267dab70be6b9efadaf315a59344fc7594684d03416e1483da2404`). One
+temporary `fastboot boot` succeeded with user-mode USB capture and ping; no
+flash or EDL was used. The 102-packet decoded log and raw UDP capture are
+`/tmp/ios-extra-run-39899820723/logs/phone-0177-gmu-unmask-oob.txt` and `.udp`,
+both SHA256 `f25bd1db526c22126d5474441b45b58d5abcfd232c40b0e458d2f2cc8ceecb2d`.
 
-Phone measured: HFI startup requests ACKed, then OOB timed out. Unlike 0175,
-HOST2GMU bit 30 was not sampled at all (`raw_seen=0`); GMU2HOST ACK remained
-zero and GX stayed off (`GFX_PWR_CLK_STATUS=3`). HFI debug and response queues
-were empty (`DBGQ ri=0/wi=0`, `MSGQ ri=24/wi=24`). Firmware remained alive
-(`FW_INIT_RESULT=0x100`, `FW_BUSY=0`); CM3 reset was verified and SMMU/context/
-clock votes retained. No GPU command, DMA, readback, draw or Metal output.
+Phone measured: with only GMU2HOST OOB ACK bit 31 unmasked, OOB still timed
+out. HOST2GMU request bit 30 appeared transiently (`raw_seen=0x40000000`), but
+no ACK appeared; HFI debug/message queues were empty, firmware remained alive,
+GX stayed off, and CM3 reset was verified. No GPU command, DMA, memory
+write/readback, draw or Metal output.
 
-Patch 0177 is a targeted OOB ACK mask experiment. XNU currently writes all ones
-to GMU2HOST_INTR_MASK; Qualcomm Gen8 Linux unmasks OOB ACK bits using
-`~HFI_IRQ_MASK`. 0177 exposes only GMU2HOST bit 31 while leaving other GMU2HOST
-bits and AO interrupts masked, then existing cleanup restores all masks. This
-is a focused check of whether the status path was hidden by masking; not yet a
-confirmed fix. Source patch and tests/build are pending. Phone is not currently
-in fastboot; check with serial redaction before requesting or running another
-boot.
+The source-order audit found the prior 0174 Linux-order claim was wrong:
+Qualcomm Gen8 Linux sends HFI `START` in its HFI start routine before requesting
+GPU OOB in GPU boot. Patch 0178 restores that order and retains 0177's ACK
+unmask. The exact source compiles to an arm64 object against the 0177 CI
+buildtree; the GPU probe and full host suites pass (13 tests, 5 skipped). Patch
+0178 is source/host validated only; it has not passed CI or phone testing, and
+no image exists yet. Latest phone log is under `/tmp` above. On continuation,
+run CI for the pushed patch, verify/package its exact artifacts, then check
+`fastboot devices` with serials redacted; request fastboot only if none is
+present. The previous 0177 run left the phone outside fastboot.
 
 ## Historical FP6 GPU state at patch 0170 (2026-10-23)
 

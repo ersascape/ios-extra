@@ -1,15 +1,30 @@
 # ios-extra — current state
 
-## FP6 targeted OOB ACK unmask candidate 0177 (2026-10-23)
+## FP6 GMU OOB latest measured result 0177 and next candidate 0178 (2026-10-23)
 
-- Source comparison found XNU masks every GMU2HOST interrupt (`0xffffffff`)
-  before releasing CM3. Qualcomm Gen8 Linux clears pending IRQs and sets the
-  mask to `~HFI_IRQ_MASK`, leaving OOB ACK bits unmasked. Patch 0177 changes
-  only the GMU2HOST mask to `0x7fffffff`, exposing ACK bit 31 to the existing
-  bounded poll while keeping the other 31 bits and all AO interrupts masked.
-  It restores all masks during cleanup. This tests whether the masked status
-  path explains the OOB timeout; it is not yet a confirmed fix. Local compile,
-  CI and phone result are pending.
+- Patch 0177 commit `d2ea6d0f76ca3e30b4b6a5beaf81fa1e44c4e200` passed CI
+  `39899820723`; the exact CI kernel and ADT were packaged with the verified
+  stock DTB and bounded ramdisk as
+  `/tmp/ios-extra-run-39899820723/package/fp6-gmu-unmask-oob-0177.img`
+  (SHA256 `0cefafad21267dab70be6b9efadaf315a59344fc7594684d03416e1483da2404`).
+  One temporary `fastboot boot` succeeded with user-mode USB capture and ping;
+  no flash or EDL was used. The 102-packet decoded log and raw UDP capture are
+  `/tmp/ios-extra-run-39899820723/logs/phone-0177-gmu-unmask-oob.txt` and `.udp`,
+  both SHA256 `f25bd1db526c22126d5474441b45b58d5abcfd232c40b0e458d2f2cc8ceecb2d`.
+- **Phone measured:** unmasking only GMU2HOST OOB ACK bit 31 did not resolve
+  the timeout. HOST2GMU OOB request bit 30 was seen transiently
+  (`raw_seen=0x40000000`), but no GMU2HOST ACK appeared. HFI debug and message
+  queues were empty, firmware remained alive, GX stayed off, and CM3 reset was
+  verified. No GPU command, DMA, memory write/readback, draw or Metal output.
+- A source-order audit corrected a prior claim: Qualcomm Gen8 Linux sends HFI
+  `START` in `gen8_hwsched_hfi_start()` before `gen8_hwsched_gpu_boot()` requests
+  GPU OOB. Patch 0174 moved `START` after OOB and therefore did **not** match
+  Linux; its phone result is still useful evidence that OOB timed out in that
+  ordering. Patch 0178 restores Linux's HFI `START`-before-OOB sequence while
+  retaining the 0177 ACK unmask. The exact patched source compiles to an arm64
+  object against the 0177 CI build tree; `tests/test_gpu_probe.py` and the full
+  host suite pass (13 tests, 5 skipped). Patch 0178 has not yet had CI or phone
+  validation; no image exists for it. Latest phone log is under `/tmp` above.
 
 ## FP6 HFI response-queue phone result 0176 (2026-10-23)
 

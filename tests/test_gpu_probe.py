@@ -32,6 +32,12 @@ class GPUProbeTests(unittest.TestCase):
                     subprocess.run(['git', 'apply', '--include=bsd/dev/sweet_gpu.c',
                                     str(patch)], cwd=work, check=True)
             source = (work / 'bsd/dev/sweet_gpu.c').read_text()
+            self.assertLess(
+                source.index('HFI START ACK; core firmware initialized'),
+                source.index('!fp6_gmu_gpu_oob('),
+                'Gen8 HFI START must be acknowledged before the GPU OOB request')
+            self.assertIn('fp6_smmu_write32(g, 0x4764cu, 0x7fffffffu);', source,
+                          'the OOB ACK interrupt must remain unmasked during polling')
             source = source.replace('__asm__ volatile("dsb sy" ::: "memory");', '')
             for name in ('fp6_gmu_loader.h',):
                 shutil.copyfile(ROOT / 'xnu/helpers' / name, work / name)

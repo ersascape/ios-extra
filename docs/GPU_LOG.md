@@ -1,3 +1,31 @@
+## FP6 HFI START order correction candidate 0178 (2026-10-23)
+
+The Qualcomm Gen8 Linux source order is `gen8_hwsched_hfi_start()` sending HFI
+`START`, followed by `gen8_hwsched_gpu_boot()` requesting GPU OOB. This corrects
+the earlier mistaken claim that OOB-before-START in patch 0174 matched Linux.
+Patch 0178 restores Linux's order and retains patch 0177's GMU2HOST ACK bit 31
+unmask. The host regression check asserts START precedes the OOB call. The exact
+source compiles to an arm64 object against the patch 0177 CI buildtree, and the
+host suite passes (13 tests, 5 skipped). Patch 0178 has no CI result or phone
+measurement yet.
+
+## OOB ACK mask result 0177 (2026-10-23)
+
+Commit `d2ea6d0f76ca3e30b4b6a5beaf81fa1e44c4e200` passed CI `39899820723`.
+The exact CI kernel/ADT were packaged with the verified stock DTB and bounded
+ramdisk as `/tmp/ios-extra-run-39899820723/package/fp6-gmu-unmask-oob-0177.img`
+(SHA256 `0cefafad21267dab70be6b9efadaf315a59344fc7594684d03416e1483da2404`).
+One temporary `fastboot boot` succeeded with user-mode USB capture and ping;
+no flash or EDL was used. The 102-packet decoded log and raw UDP are
+`/tmp/ios-extra-run-39899820723/logs/phone-0177-gmu-unmask-oob.txt` and `.udp`,
+both SHA256 `f25bd1db526c22126d5474441b45b58d5abcfd232c40b0e458d2f2cc8ceecb2d`.
+
+The phone still timed out waiting for OOB. HOST2GMU request bit 30 was seen
+transiently (`raw_seen=0x40000000`), but no GMU2HOST ACK appeared. The HFI debug
+and response queues were empty, firmware remained alive, GX stayed off and CM3
+reset was verified. No GPU command, DMA, memory write/readback, draw or Metal
+output occurred. Thus unmasking bit 31 alone did not resolve the timeout.
+
 ## HFI version-offset correction and OOB instrumentation result 0173 (2026-10-23)
 
 The 0172 phone log prints DTCM words from `+0x3fe0` through `+0x3ff0`:
@@ -39,20 +67,23 @@ write/readback, draw, or Metal output occurred.
 
 The raw HOST2GMU values were zero at the sampled times; they do not rule out a
 transient request latch consumed by firmware. `GFX_PWR_CLK_STATUS=3` indicates
-GX off by Linux's Gen8 predicate. The failure point is not established. Patch
-0174 tests the Linux ordering of GPU OOB before HFI `START`; do not treat this
-run as GPU power-on.
+GX off by Linux's Gen8 predicate. The failure point is not established. The
+later source-order audit found that Qualcomm Linux sends HFI `START` before GPU
+OOB; patch 0174's opposite ordering did not match Linux.
 
 ## OOB-before-HFI-START result 0174 (2026-10-23)
 
-Patch 0174 moved HFI `START` to after GPU OOB, matching Linux's Gen8 GPU boot
-order. CI run `39894842246` passed. The correctly flagged temporary image
+Patch 0174 moved HFI `START` to after GPU OOB based on an incorrect source-order
+interpretation; Qualcomm Gen8 Linux sends HFI `START` first. CI run
+`39894842246` passed. The correctly flagged temporary image
 booted successfully and ran the bounded sequence. HFI performance/BW tables,
 feature controls, core firmware start and context queue query ACKed; the GPU
 OOB request still timed out, so HFI `START` was not sent. Timeout status was
 `GMU2HOST_INTR_INFO=0`, `GFX_PWR_CLK_STATUS=3`, `FW_INIT_RESULT=0x100`,
 `FW_BUSY=0`, `CB0_FSR=0x400`, `sGFSR=0`. CM3 reset was verified and context and
-clock votes retained. This rules out ordering alone; no GPU execution occurred.
+clock votes retained. This run shows OOB also timed out with `START` delayed,
+but does not isolate ordering as the cause because Linux uses the reverse
+sequence. No GPU execution occurred.
 The first temporary image from this CI run omitted the opt-in GMU flags and
 only booted init; the actual measurement used a repackaged image from the same
 kernel with the known flags. Full log and packet capture are under
@@ -2108,6 +2139,6 @@ observed during the poll (`raw_seen=0`). GMU2HOST ACK remained zero and GX was
 off. Source comparison found XNU masks all GMU2HOST interrupts before CM3
 release, whereas Qualcomm Gen8 Linux writes `~HFI_IRQ_MASK`, leaving OOB ACK
 bits unmasked. Candidate 0177 unmasks only bit 31, the expected GPU OOB ACK,
-while keeping all other GMU2HOST bits and AO interrupts masked. This is a
-focused status-visibility experiment, not a proven fix. 0177 is not yet built
-or phone-tested.
+while keeping all other GMU2HOST bits and AO interrupts masked. The resulting
+CI and phone measurement, including the unchanged timeout, are recorded at the
+top of this file.
