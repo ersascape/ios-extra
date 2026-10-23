@@ -32,6 +32,10 @@ device proof.
 - Confirm hardware-write steps that are new in kind (the first write to a new block)
   with the user in one line; they have been approving by putting the phone in fastboot.
 - Keep device serials, dumps, Apple files and downloaded firmware out of Git.
+- The display is a BOE NT37705 AMOLED (command mode). Do not risk burn-in or panel
+  damage: display probes are read-only unless the user approves a specific write;
+  never hold a static image, never send panel on-commands, reset the panel or change
+  brightness/DSI/DPU timing without explicit confirmation of that step.
 - Do not add Claude/Codex attribution to commits or docs. Commit messages describe
   the change only. Commit completed changes; push to `main` triggers the CI build.
 - Say what you measured vs. what you only read. Do not estimate completion dates

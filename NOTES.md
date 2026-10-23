@@ -1,5 +1,18 @@
 # ios-extra — current state
 
+## Display safety constraint and panel confirmation (2026-10-23)
+
+The user confirmed the panel is the BOE NT37705 (the `dsi-panel-nt37705-boe-amoled-cmd.dtsi`
+file above is the right one, closing the "exact panel" caveat), and instructed: "don't
+burn the display up!". The panel is AMOLED, so burn-in and damage are irreversible.
+Rule going forward (also in `HANDOFF.md`): display probes stay read-only unless a
+specific write is approved; no long holds of static images, no full-white or
+max-brightness patterns, and no panel on-commands, panel reset, brightness/backlight
+or DSI/DPU timing changes without explicit confirmation. The earlier scanout test
+wrote one 512x512 patch (dark blue with an orange triangle) once during boot, for
+seconds; it did not hold the image. A proposed 20-second hold patch was declined by
+the user and is not in the tree.
+
 ## FP6 panel description found: downstream devicetrees (2026-10-23)
 
 Correction to the previous entry: the panel node *is* available. The Lineage kernel
