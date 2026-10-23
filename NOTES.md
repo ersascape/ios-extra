@@ -1,5 +1,32 @@
 # ios-extra — current state
 
+## FP6 GPU texture failure fixed by flushing before the draw: Turnip flushall renders it exactly (2026-10-24)
+
+**Phone measured:** CI `40007189649` (head `c8fe667d18e6b82ca655b4f01bd316c77ccb3d36`, patch 0218)
+passed. Image `/tmp/ios-extra-run-40007189649/package/fp6-texbatch-0218.img` (SHA256
+`115e14d8dea1370f22002614973e7175bc5d90ac1060bcb9a392e66b452cba5d`; cmdline adds
+`fp6gpureplayonly=tex fp6gpureplayrepeat=1`) booted once via `fastboot boot`; no flash, EDL or `getvar`.
+Log `/tmp/ios-extra-run-40007189649/logs/phone-0218-texbatch.txt`. All 24 replays reached their fence.
+
+| variant (all the same host-written 4x4 linear texture unless noted) | differing samples of 256 |
+|---|---|
+| baseline `texlinear` | 29 |
+| `texfullsync`, `texfullnop`, both, `texnopre`, `texnoearly` (ir3 flags) | 19 to 21 |
+| `texbig` (16x16 texture), `texlin` (linear filter) | 19, 20 |
+| `texflushall` (`TU_DEBUG=sysmem,noubwc,flushall,syncdraw`) | **0, all 169 pixels lit** |
+
+Shader scheduling and texture size do not matter. Comparing the stream packets of `texlinear` and
+`texflushall` (host walk, `tools/fp6-pm4-state.py` walker) shows the only differences are cache events:
+`flushall` adds, immediately before the draw, `CCU_CLEAN_COLOR`, `CCU_CLEAN_DEPTH`, `CCU_INVALIDATE_COLOR`,
+`CCU_INVALIDATE_DEPTH`, `CACHE_CLEAN`, `CACHE_INVALIDATE7` and a wait-for-idle (and the same after the
+draw, plus a `CACHE_CLEAN` earlier). Source reading only, not yet proven: this looks like a write-ordering
+hazard between the render-pass clear and the draw (the clear's dirty lines reach memory after the draw's
+pixels, leaving clear-colour black where the draw should be, which is what the failing samples show).
+It also explains why cleaning before the final fence changed some scenes (0214) but did not fix this one.
+A real driver and the PM4 builder must emit such a flush between the clear and the first draw on this
+part. Next: one boot with `flushall` captures of all ten scenes, and injected-packet variants of the
+baseline stream to find the smallest flush that is enough.
+
 ## FP6 GPU: the preamble descriptor prefetch is not the texture failure (2026-10-23)
 
 **Phone measured:** CI `40005336557` (head `22a99d4ac2bd03c6ba9de0473b6fb3cc31272b9c`, patch 0217)
