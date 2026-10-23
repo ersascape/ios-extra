@@ -60,6 +60,14 @@ class GPUProbeTests(unittest.TestCase):
             self.assertLess(source.index('\tfp6_gpu_program_uche(gpu);\n'),
                             source.index('fp6_smmu_write32(gpu, 0x2058u, (uint32_t)fp6_exec_sqe_va)'),
                             'UCHE bases must be programmed before SQE start')
+            self.assertIn('fp6_gpu_nonctxt_regs[]', source,
+                          'A810 non-context register table must be present')
+            self.assertEqual(source.count('/* RB_GC_GMEM_PROTECT */'), 1)
+            self.assertNotIn('CP_SMMU_STREAM_ID_LPAC', source.split('fp6_gpu_nonctxt_regs[] = {')[1].split('};')[0],
+                             'LPAC is not enabled on A810')
+            self.assertLess(source.index('\tfp6_gpu_program_nonctxt(gpu);\n'),
+                            source.index('fp6_smmu_write32(gpu, 0x2058u, (uint32_t)fp6_exec_sqe_va)'),
+                            'non-context registers must be programmed before SQE start')
             self.assertIn('va != fp6_exec_sqe_va + (uint64_t)i * 4096u', source,
                           'SQE pages must form one contiguous GPU virtual range')
             self.assertLess(

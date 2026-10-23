@@ -1,0 +1,80 @@
+--- a/bsd/dev/sweet_gpu.c
++++ b/bsd/dev/sweet_gpu.c
+@@ -4467,6 +4467,69 @@
+ 	    fp6_smmu_read32(gpu, 0x381cu), fp6_smmu_read32(gpu, 0x3818u));
+ }
+ 
++/* Linux gen8_3_0_nonctxt_regs[] (adreno-gpulist.h), applied by
++ * gen8_nonctxt_regconfig() once per listed pipe through the CP aperture.
++ * Pipe mask bits: 0 NONE, 1 BR, 2 BV. The LPAC stream-id entry is omitted
++ * because A810 does not enable LPAC. Offsets are byte offsets (dword * 4). */
++struct fp6_gpu_nonctxt_reg { uint32_t offset, value, pipes; };
++static const struct fp6_gpu_nonctxt_reg fp6_gpu_nonctxt_regs[] = {
++	{ 0x21c08u, 0x00f80800u, 0x6u }, /* GRAS_DBG_ECO_CNTL */
++	{ 0x27828u, 0x00000001u, 0x6u }, /* PC_AUTO_VERTEX_STRIDE */
++	{ 0x27834u, 0x10010000u, 0x6u }, /* PC_VIS_STREAM_CNTL */
++	{ 0x27990u, 0x00000002u, 0x6u }, /* PC_CONTEXT_SWITCH_STABILIZE_CNTL_1 */
++	{ 0x27940u, 0x00000003u, 0x2u }, /* PC_CHICKEN_BITS_1 */
++	{ 0x27940u, 0x00000023u, 0x4u }, /* PC_CHICKEN_BITS_1 */
++	{ 0x27c80u, 0x00000200u, 0x6u }, /* PC_CHICKEN_BITS_2 */
++	{ 0x27888u, 0x00500000u, 0x6u }, /* PC_CHICKEN_BITS_3 */
++	{ 0x2788cu, 0x00500050u, 0x6u }, /* PC_CHICKEN_BITS_4 */
++	{ 0x2381cu, 0x00000068u, 0x2u }, /* RB_CCU_CNTL */
++	{ 0x23c04u, 0x00000007u, 0x2u }, /* RB_RESOLVE_PREFETCH_CNTL */
++	{ 0x23c08u, 0x00004000u, 0x2u }, /* RB_CMP_DBG_ECO_CNTL */
++	{ 0x01100u, 0x00000001u, 0x1u }, /* RBBM_NC_MODE_CNTL */
++	{ 0x017b0u, 0x00000001u, 0x1u }, /* RBBM_SLICE_NC_MODE_CNTL */
++	{ 0x00040u, 0x00000030u, 0x1u }, /* RBBM_WAIT_IDLE_CLOCKS_CNTL */
++	{ 0x00044u, 0x00000030u, 0x1u }, /* RBBM_WAIT_IDLE_CLOCKS_CNTL2 */
++	{ 0x03848u, 0x010240e0u, 0x1u }, /* UCHE_GBIF_GX_CONFIG */
++	{ 0x00020u, 0x22122212u, 0x1u }, /* RBBM_GBIF_CLIENT_QOS_CNTL */
++	{ 0x00274u, 0x00000040u, 0x1u }, /* RBBM_CGC_P2S_CNTL */
++	{ 0x2b824u, 0x00c00000u, 0x1u }, /* SP_CHICKEN_BITS_2 */
++	{ 0x2b828u, 0x00300000u, 0x1u }, /* SP_CHICKEN_BITS_3 */
++	{ 0x2b83cu, 0x0000003fu, 0x1u }, /* SP_PERFCTR_SHADER_MASK */
++	{ 0x2b9acu, 0x00000080u, 0x1u }, /* SP_HLSQ_TIMEOUT_THRESHOLD_DP */
++	{ 0x2d800u, 0x10000000u, 0x1u }, /* TPL1_DBG_ECO_CNTL */
++	{ 0x2d808u, 0x04000724u, 0x1u }, /* TPL1_DBG_ECO_CNTL1 */
++	{ 0x03804u, 0x00020000u, 0x1u }, /* UCHE_MODE_CNTL */
++	{ 0x03c04u, 0x00001000u, 0x1u }, /* UCHE_CCHE_MODE_CNTL */
++	{ 0x03c08u, 0x00000800u, 0x1u }, /* UCHE_CCHE_CACHE_WAYS */
++	{ 0x03858u, 0x00000100u, 0x1u }, /* UCHE_HW_DBG_CNTL */
++	{ 0x03840u, 0x00000020u, 0x1u }, /* UCHE_VARB_IDLE_TIMEOUT */
++	{ 0x29800u, 0x00008000u, 0x6u }, /* VFD_DBG_ECO_CNTL */
++	{ 0x298e4u, 0x00500050u, 0x6u }, /* VFD_CB_BV_THRESHOLD */
++	{ 0x298e8u, 0x00600060u, 0x6u }, /* VFD_CB_BR_THRESHOLD */
++	{ 0x298ecu, 0x00200020u, 0x6u }, /* VFD_CB_BUSY_REQ_CNT */
++	{ 0x298f0u, 0x00100020u, 0x6u }, /* VFD_CB_LP_REQ_CNT */
++	{ 0x25d04u, 0x00000001u, 0x6u }, /* VPC_FLATSHADE_MODE_CNTL */
++	{ 0x23824u, 0x00900000u, 0x2u }, /* RB_GC_GMEM_PROTECT */
++};
++static void
++fp6_gpu_program_nonctxt(vm_offset_t gpu)
++{
++	unsigned written = 0;
++	for (uint32_t pipe = 0; pipe <= 2u; pipe++) {
++		fp6_smmu_write32(gpu, FP6_GPU_CP_APERTURE_CNTL_HOST, pipe << 12);
++		for (unsigned i = 0; i < sizeof(fp6_gpu_nonctxt_regs) / sizeof(fp6_gpu_nonctxt_regs[0]); i++) {
++			if (fp6_gpu_nonctxt_regs[i].pipes & (1u << pipe)) {
++				fp6_smmu_write32(gpu, fp6_gpu_nonctxt_regs[i].offset,
++				    fp6_gpu_nonctxt_regs[i].value);
++				written++;
++			}
++		}
++	}
++	fp6_smmu_write32(gpu, FP6_GPU_CP_APERTURE_CNTL_HOST, 0u);
++	printf("QCOM GPU EXEC: nonctxt registers written=%u of %u table entries\n", written,
++	    (unsigned)(sizeof(fp6_gpu_nonctxt_regs) / sizeof(fp6_gpu_nonctxt_regs[0])));
++}
++
+ static int
+ fp6_gpu_exec_probe(vm_offset_t g, vm_offset_t gpu, uint8_t *hfi_mem,
+ 		unsigned *sequence)
+@@ -4503,6 +4566,7 @@
+ 	}
+ 	fp6_gpu_program_apriv(gpu);
+ 	fp6_gpu_program_uche(gpu);
++	fp6_gpu_program_nonctxt(gpu);
+ 	fp6_smmu_write32(gpu, 0x2058u, (uint32_t)fp6_exec_sqe_va); /* SQE base LO */
+ 	fp6_smmu_write32(gpu, 0x205cu, (uint32_t)(fp6_exec_sqe_va >> 32)); /* SQE base HI */
+ 	fp6_smmu_write32(gpu, 0x2054u, 1u); /* SQE start */
