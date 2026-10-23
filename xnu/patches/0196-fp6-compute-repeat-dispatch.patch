@@ -1,0 +1,55 @@
+diff --git a/bsd/dev/sweet_gpu.c b/bsd/dev/sweet_gpu.c
+--- a/bsd/dev/sweet_gpu.c
++++ b/bsd/dev/sweet_gpu.c
+@@ -4631,12 +4631,16 @@
+ 	}
+ }
+ 
++static int fp6_gpu_compute_submit(vm_offset_t g, vm_offset_t gpu, unsigned iteration);
++
++/* fp6gpucompute=N runs the dispatch N times (1..16) back to back; every run adds 5
++ * again, so run K must leave the buffer at initial + 5 * K. */
+ static int
+ fp6_gpu_compute_probe(vm_offset_t g, vm_offset_t gpu)
+ {
+ 	int wanted = 0;
+-	if (!PE_parse_boot_argn("fp6gpucompute", &wanted, sizeof(wanted)) || wanted != 1) {
+-		printf("QCOM GPU COMPUTE: skipped; fp6gpucompute=1 not requested\n");
++	if (!PE_parse_boot_argn("fp6gpucompute", &wanted, sizeof(wanted)) || wanted < 1 || wanted > 16) {
++		printf("QCOM GPU COMPUTE: skipped; fp6gpucompute=1..16 not requested\n");
+ 		return 1;
+ 	}
+ 	if (!fp6_exec_pages_ready) {
+@@ -4668,6 +4672,19 @@
+ 		    (unsigned long long)fp6_cs_data_va,
+ 		    (unsigned long long)(fp6_exec_result_va + 4u * FP6_CS_FENCE_OFFSET));
+ 	}
++	for (unsigned iteration = 1; iteration <= (unsigned)wanted; iteration++) {
++		if (!fp6_gpu_compute_submit(g, gpu, iteration)) {
++			printf("QCOM GPU COMPUTE: stopped at run %u of %d\n", iteration, wanted);
++			return 0;
++		}
++	}
++	printf("QCOM GPU COMPUTE: %d back-to-back runs passed\n", wanted);
++	return 1;
++}
++
++static int
++fp6_gpu_compute_submit(vm_offset_t g, vm_offset_t gpu, unsigned iteration)
++{
+ 	uint64_t base = ((uint64_t)fp6_smmu_read32(gpu, FP6_GPU_CP_RB_BASE_HI) << 32) |
+ 	    fp6_smmu_read32(gpu, FP6_GPU_CP_RB_BASE_LO);
+ 	uint32_t cntl = fp6_smmu_read32(gpu, FP6_GPU_CP_RB_CNTL);
+@@ -4738,9 +4755,9 @@
+ 	const volatile uint32_t *data = (const volatile uint32_t *)(const void *)fp6_cs_data_page.va;
+ 	unsigned good = 0;
+ 	for (unsigned i = 0; i < FP6_CS_ELEMENTS; i++)
+-		good += data[i] == fp6_cs_data_init[i] + 5u;
+-	printf("QCOM GPU COMPUTE: submit dwords=%u dropped=%u fence=0x%08x scratch=0x%08x rptr=%u/%u data=%u,%u,%u,%u,%u,%u,%u,%u correct=%u/%u CB0_FSR=0x%08x\n",
+-	    n, dropped, seen, scratch_seen, now_rptr, wptr + n, data[0], data[1], data[2], data[3], data[4], data[5],
++		good += data[i] == fp6_cs_data_init[i] + 5u * iteration;
++	printf("QCOM GPU COMPUTE: run=%u submit dwords=%u dropped=%u fence=0x%08x scratch=0x%08x rptr=%u/%u data=%u,%u,%u,%u,%u,%u,%u,%u correct=%u/%u CB0_FSR=0x%08x\n",
++	    iteration, n, dropped, seen, scratch_seen, now_rptr, wptr + n, data[0], data[1], data[2], data[3], data[4], data[5],
+ 	    data[6], data[7], good, FP6_CS_ELEMENTS,
+ 	    fp6_smmu_read32(fp6_gpu_smmu_base, fp6_gpu_cb_off + FP6_SMMU_CB_FSR));
+ 	fp6_gpu_exec_snapshot(g, gpu, "after-compute");

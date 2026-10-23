@@ -76,6 +76,10 @@ class GPUProbeTests(unittest.TestCase):
                           'host ring write must target a firmware kind-1 ring only')
             self.assertIn('PE_parse_boot_argn("fp6gpucompute"', source,
                           'compute dispatch must remain explicitly opt-in')
+            self.assertIn('wanted < 1 || wanted > 16', source,
+                          'repeat count must be bounded')
+            self.assertIn('fp6_cs_data_init[i] + 5u * iteration', source,
+                          'each repeat must verify the accumulated result')
             self.assertIn('fp6_cs_patch(stream, fp6_cs_scratch_reloc', source,
                           'every pointer operand in the stream, including the event scratch, must be relocated')
             self.assertIn('fp6_cs_patch(stream, fp6_cs_control_reloc', source,
