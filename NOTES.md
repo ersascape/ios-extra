@@ -1,5 +1,27 @@
 # ios-extra — current state
 
+## FP6 GPU: the preamble descriptor prefetch is not the texture failure (2026-10-23)
+
+**Phone measured:** CI `40005336557` (head `22a99d4ac2bd03c6ba9de0473b6fb3cc31272b9c`, patch 0217)
+passed. Image `/tmp/ios-extra-run-40005336557/package/fp6-texnp-0217.img` (SHA256
+`e41a2b74ae4680752d4d127a016fedcbdab80f261645bc8d1934bd2dbf36aed3`; cmdline adds
+`fp6gpureplayonly=tex fp6gpureplayrepeat=2`) booted once via `fastboot boot`; no flash, EDL or `getvar`.
+Log `/tmp/ios-extra-run-40005336557/logs/phone-0217-texnp.txt`. All 16 replays reached their fence.
+
+The textured fragment shader Turnip compiles for the A810 starts with a preamble (`shps`/`getone`/`shpe`)
+holding `sam.base0 (f32)(xyzw) r63.x, r48.x, s#1, t#0`, a descriptor prefetch (`ir3_nir_opt_prefetch_descriptors`,
+gen >= 7, not gated by `has_fs_tex_prefetch`). `IR3_SHADER_DEBUG=nodescprefetch` removes it.
+Both shader versions fail the same way: with prefetch 19 to 23 differing samples, without it 19 to 22
+(`texlinearnp` 22 and 20, `texturenp` 19 and 19). So the prefetch is not the cause.
+
+Also decoded from the capture: the sampler is word0 `0x1240` (nearest, clamp to edge, LOD 0, mip filtering
+not disabled), the T# matches the SnapMetal layout; the register delta between the flat and the textured
+scene (oracle, `tools/fp6-pm4-state.py`) is only the expected texture and varying state
+(`SP_GFX_BINDLESS_BASE_DESCRIPTOR` `0x2f003`, `SP_PS_CONFIG` `0x103`, `SP_PS_WAVE_CNTL` 2, the varying
+linkage). Ruled out so far: data, descriptors, UCHE/CCHE invalidation, cache clean at the end, 576 KiB layout,
+descriptor prefetch, cold start. Next: a single boot with a batch of host-built variants (compile flags,
+texture size and filter) instead of one boot per guess.
+
 ## FP6 GPU texture repeat test: a persistent failure, not a cold start (2026-10-23)
 
 **Phone measured:** CI `40000677292` (head `54369bceec0805d1ed195001cc27205c4b6c64fb`, patch 0216)
