@@ -1,5 +1,38 @@
 # ios-extra — current state
 
+## FP6 GPU: fitting the sysmem layout into 576 KiB did not fix texture sampling (2026-10-23)
+
+**Phone measured:** CI `39998754954` (head `39e5063b7bf9e576c304900b8768850b29e69bc8`, patch
+0215) passed. Image `/tmp/ios-extra-run-39998754954/package/fp6-scenes-0215.img` (SHA256
+`d349997d0371527f6f13168a1b880422c5325815ac3c26a52b769e65178b8018`) booted once via
+`fastboot boot`; no flash, EDL or `getvar`. Log
+`/tmp/ios-extra-run-39998754954/logs/phone-0215-fit.txt`. All 13 replays reached their fence.
+
+With the scene captures remade on a layout that ends exactly at the 576 KiB GMEM end (0214's cache
+cleans kept): `texture` 20 and `texlinear` 21 samples differ (unchanged from the old layout), `vertexbuf`
+still matches, `blend` now has 12 differing samples (was 0), and `depth` draws nothing (71 differ, 0 lit;
+was 24 differ). So the 608 KiB layout overrunning GMEM is not what breaks texture sampling, and the
+smaller sysmem VPC buffers are worse for depth. The GMEM-fitting Mesa change stays in
+`tools/mesa-a810-sysmem-vpc.patch` as an experiment only; patch 0216 returns the scene captures to the
+original layout (`TU_GMEM=622592`).
+
+The remaining texture failures are confined to texel rows 0 and 1 (rows 2 and 3 are always right) and are
+partial inside those texels: 20 of 256 samples, black (the clear colour), at nearly the same pixels in
+`texture` (staging blit) and `texlinear` (host-written texture), but not exactly the same (for example
+texel (0,0) 3 of 9 against 4 of 9). Same place and almost the same set for two different upload paths
+suggests an effect of timing or of early pixels, not of the data. Patch 0216 adds
+`fp6gpureplayonly=PREFIX` and `fp6gpureplayrepeat=N` to run selected captures several times, and a
+`texdouble` scene (the same quad drawn twice) to separate a cold start from a persistent failure.
+
+Source reading of the Snapintosh files (`SnapMetal/AdrenoMetal/AdrenoDrawCommands/*.m`,
+`compat/adreno-ib-command.h`, `compat/adreno-submit.h`) for the PM4 builder: the emitter is a port of
+Turnip's A8XX sysmem path (`fd6_emit_restore`, `emit_flushes`, 2D clear) with the X2-90's GMEM and CCU
+constants written inline, and register fields come from a header generated from Mesa's A8XX registers.
+`tools/gen-a8xx-regs.py` from that repository ran against our pinned Mesa (`6a7d302`) and produced the
+same 8763-line header. Its kernel side (user IB package with relocations, allowlist validator) is the
+design to follow for AdrenoGPU. `tools/fp6-pm4-state.py` is a new oracle that walks a Turnip capture and
+returns the register state at the draw (350 registers for the flat scene).
+
 ## FP6 GPU cache clean changed results, and the CCU/VPC layout overran GMEM (2026-10-23)
 
 **Phone measured:** CI `39997038633` (head `4de8492913561d2ebfbafa3879a3077242a2fcb5`, patch
