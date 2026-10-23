@@ -1,5 +1,24 @@
 # ios-extra — current state
 
+## FP6 first GPU command executed: 0188-0190 (2026-10-23)
+
+**Phone measured:** CI `39927497414` (head `dd2a6fbdeec91894b8ba5a8bc2241f53cfe8ad13`)
+passed; the build tree `sweet_gpu.c` matched the local source byte-for-byte.
+Image `/tmp/ios-extra-run-39927497414/package/fp6-apriv-uche-0190.img` (SHA256
+`947c84fcc8df6d614c7745c3f72113c5bb8c905180fbfa87e08b753a49db714e`, exact CI
+kernel/ADT, verified stock DTB, 0187's bounded init and cmdline) was booted once
+via `fastboot boot`; no flash, EDL or `getvar`. 94 packets; log
+`/tmp/ios-extra-run-39927497414/logs/phone-0190-apriv-uche.txt`.
+
+With APRIV (0188), the HFI GMU_ACC/EXEC flag fix (0189) and the UCHE trap bases
+(0190), CB0 FSR is `0x400` (format bit only; no permission fault) after CP init,
+`RBBM_STATUS` returns idle, and `CP_MEM_WRITE` wrote `0x8100cafe` which the CPU
+read back (`passed=1`). This is the first measured GPU command execution and GPU
+write to memory through the GPU SMMU context. APRIV readback matched for pipes 1
+and 2; pipes 6 and 7 (DDE) read `0xdeafbead`, so those writes are unverified.
+CM3 reset was verified afterwards. Not measured: draw, shaders, ring/submission,
+the rest of `gen8_start()`, the CP power-up list, Metal.
+
 ## FP6 CP privilege setup 0188 (2026-10-23)
 
 **Phone measured (0187):** image `fp6-sqe-unprivileged-0187.img` (SHA256
