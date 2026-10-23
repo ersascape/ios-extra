@@ -1,5 +1,21 @@
 # ios-extra — current state
 
+## FP6 A810 non-context registers 0191 (2026-10-23)
+
+**Phone measured:** CI `39929355300` (head `8b4b68336aa099d7925cd61396586cfc1c9e2127`)
+passed; build-tree `sweet_gpu.c` matched the local source. Image
+`/tmp/ios-extra-run-39929355300/package/fp6-nonctxt-0191.img` (SHA256
+`102468ae02aac20d2bb629ab173c8a5766a0197f673dfca7224dadd9c1712de2`) booted once
+via `fastboot boot`; no flash, EDL or `getvar`. 104 packets; log
+`/tmp/ios-extra-run-39929355300/logs/phone-0191-nonctxt.txt`.
+
+Patch 0191 writes Linux's `gen8_3_0_nonctxt_regs[]` (37 entries, LPAC omitted;
+50 pipe writes for NONE/BR/BV) before SQE start. After it, CP init still leaves
+CB0 FSR at `0x400` (no fault), `CP_MEM_WRITE` again read back `0x8100cafe`
+(`passed=1`), and CM3 reset was verified. APRIV pipes 6/7 still read
+`0xdeafbead`. Not measured: ring/submission, power-up list, compute dispatch,
+draw, Metal.
+
 ## FP6 first GPU command executed: 0188-0190 (2026-10-23)
 
 **Phone measured:** CI `39927497414` (head `dd2a6fbdeec91894b8ba5a8bc2241f53cfe8ad13`)
