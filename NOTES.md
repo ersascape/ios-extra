@@ -1,27 +1,35 @@
 # ios-extra — current state
 
-## FP6 GPU power-on OOB probe candidate 0172 (2026-10-23)
+## FP6 GPU power-on OOB probe 0172 (2026-10-23)
 
-- Patch `0172-fp6-gmu-gpu-oob-probe.patch` continues after the already measured
-  HFI `START` ACK. It follows Fairphone Gen8 `gen8_gmu_oob_set(oob_gpu)`: set
-  HOST2GMU bit 30, wait up to 100 ms for GMU2HOST bit 31, then clear the ACK.
-  After ACK it maps the stock GPU core range and reads only Gen8
-  `RBBM_STATUS` (dword 0x12 / byte offset 0x48). It then requests OOB clear
-  using Linux's bit-31 operation and follows the existing CM3 reset path. All
-  SMMU mappings, backing and power votes remain retained. Timeout also ends in
-  CM3 reset with SMMU/votes retained.
-- Fairphone source evidence: `adreno_gen8_hwsched.c` orders GPU OOB before
-  `gen8_start()`, SQE base setup and HWSCHED CP init;
-  `adreno_gen8_gmu.c` defines OOB GPU request bit 30 and ACK bit 31. DT maps
-  core MMIO at `0x03d00000..0x03d3ffff`; `gen8_reg.h` defines
-  `GEN8_RBBM_STATUS=0x12`. This probe establishes only GMU-confirmed GPU
-  power-on and a readable core status register. It submits no GPU command and
-  proves no DMA, write/readback, draw or Metal output.
-- Local arm64 compile against the pinned CI buildtree for run `39845816435`
-  reports `0 of 1 files failed`; the patch applies to the matching source. CI,
-  image packaging and phone observation are pending. The phone is currently in
-  fastboot per the user; run a single temporary boot only after CI passes and
-  the exact image is packaged.
+- Commit `dc61567a02f8877fb9cbbdc80e9c05cb6cafe1a5` passed XNU CI run
+  `39889495686`; the kernel build succeeded. CI skipped hosted image creation
+  because `FP6_STOCK_DTB_URL` is unset. Kernel SHA-256:
+  `ee915124f4bc00a7180556676677b153909e13490165e0fbf39d903ca0f8e576`.
+  Packaged the exact CI kernel and matching ADT with verified stock DTB
+  (`8198534128258bfe7b05bbb5b227affc181aa49b376884c08eae8564fce124e3`) and
+  bounded RAM-disk init. Header-v2 kernel/DTB/ramdisk round-trip passed.
+  Temporary image `/tmp/ios-extra-run-39889495686/package/fp6-gpu-oob-0172.img`,
+  SHA-256 `25dd97d6f506c54b8b26a15a366fde1f8538993718ee039b5b0877bc965c82c6`.
+- One bounded `fastboot boot` succeeded and the phone answered ping. No flash or
+  EDL command was used. The capture contains 108 UDP packets; decoded log and
+  raw UDP are `/tmp/ios-extra-run-39889495686/logs/phone-0172-gpu-oob.txt` and
+  `.udp`, both SHA-256
+  `19e40ae622f3194c477cd176fcdb587dbba4f390c2ce7c8db88ee4d7b3d6f13b`.
+- **Phone measured:** GMU firmware init and HFI init succeeded; HFI `START` was
+  ACKed. Patch 0172 then wrote GPU OOB request bit 30 and waited 100 ms.
+  `GMU2HOST_INTR_INFO` remained zero; the probe reported timeout before reading
+  GPU `RBBM_STATUS`, asserted CM3 reset and verified reset while retaining SMMU,
+  context and clock votes. Therefore this test did not confirm GPU-domain
+  power-on and produced no GPU register read, command, DMA, memory readback,
+  draw or Metal result.
+- Linux Gen8.3 sets `gmu_clk` to `GMU_FREQ_MIN` (350 MHz from the FP6 DT table)
+  after HFI start and before GPU OOB. XNU’s existing clock setup already holds
+  GMU at 350 MHz, so this rate match does not explain the timeout by itself.
+  Next diagnostic should capture whether HOST2GMU raw OOB bit 30 latched, the
+  post-timeout GMU interrupt/status words, and the GPUCC CX/GX domain status
+  before reset. The phone has since left fastboot for this temporary XNU boot;
+  check `fastboot devices` before any future boot request.
 
 ## FP6 HFI no-preemption probe candidate 0171 (2026-10-23)
 

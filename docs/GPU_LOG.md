@@ -1,22 +1,30 @@
-## Gen8 GPU power-on OOB probe candidate 0172 (2026-10-23)
+## Gen8 GPU power-on OOB probe 0172 (2026-10-23)
 
-Patch 0172 continues after the phone-measured HFI `START` ACK. Fairphone's
-`gen8_hwsched_gpu_boot()` issues `gen8_gmu_oob_set(oob_gpu)` before its first
-`gen8_start()` register setup. The matching Gen8 driver constants yield request
-bit 30 at GMU `HOST2GMU_INTR_SET`, response bit 31 at `GMU2HOST_INTR_INFO`, and
-ACK clear at `GMU2HOST_INTR_CLR`. XNU now performs this bounded request, maps the
-stock `0x03d00000` GPU-core window, reads only `GEN8_RBBM_STATUS` at byte offset
-`0x48`, requests the Linux OOB clear, then returns to the existing CM3 reset
-containment. On timeout it still asserts CM3 reset and retains SMMU/context and
-clock votes.
+Commit `dc61567a02f8877fb9cbbdc80e9c05cb6cafe1a5` passed CI run
+`39889495686`. The kernel SHA-256 is
+`ee915124f4bc00a7180556676677b153909e13490165e0fbf39d903ca0f8e576`; hosted
+image packaging was skipped because no stock-DTB URL is configured. The exact
+CI kernel/ADT, verified DTB and bounded init were packaged locally as
+`/tmp/ios-extra-run-39889495686/package/fp6-gpu-oob-0172.img` (SHA-256
+`25dd97d6f506c54b8b26a15a366fde1f8538993718ee039b5b0877bc965c82c6`).
+Header-v2 round-trip passed.
 
-The source probe cross-compiles as arm64 against CI buildtree `39845816435`
-(`0 of 1 files failed`) and applies to that patched source. No CI run, packaged
-image or phone measurement exists yet. Expected useful evidence is whether
-GMU ACKs the GPU power request and the actual RBBM status value; neither result
-will prove command execution. The next implementation still must cover Gen8
-core initialization, staged SQE firmware, the GPU-visible power-up register
-list, HFI `ISSUE_CMD_RAW` CP init and GPU write/readback.
+The one temporary phone boot succeeded and answered ping. No flash or EDL was
+used. Raw USB UDP and decoded log are
+`/tmp/ios-extra-run-39889495686/logs/phone-0172-gpu-oob.udp` and
+`phone-0172-gpu-oob.txt`, both SHA-256
+`19e40ae622f3194c477cd176fcdb587dbba4f390c2ce7c8db88ee4d7b3d6f13b` (108
+packets). Phone output confirms `FW_INIT_RESULT=0x100`,
+`HFI_CTRL_STATUS=1`, and HFI `START` ACK. The subsequent GPU OOB request
+(bit 30) got no response within 100 ms (`GMU2HOST_INTR_INFO=0`). CM3 reset was
+verified; SMMU/context/clock votes were retained. Since the ACK did not arrive,
+RBBM_STATUS was not read. This establishes neither GPU power-on nor GPU MMIO,
+command execution, DMA, memory readback, draw or Metal.
+
+Linux sets `gmu_clk` to the FP6 table’s minimum 350 MHz after HFI start and
+before issuing GPU OOB. XNU’s existing setup already holds 350 MHz, so the
+nominal frequency is not by itself a mismatch. Next capture the raw HOST2GMU
+OOB latch, post-timeout GMU status, and GPUCC CX/GX status before reset.
 
 ## FP6 request-ID HFI ACK follow-up 0166 (2026-10-22)
 
