@@ -32,6 +32,8 @@ class GPUProbeTests(unittest.TestCase):
                     subprocess.run(['git', 'apply', '--include=bsd/dev/sweet_gpu.c',
                                     str(patch)], cwd=work, check=True)
             source = (work / 'bsd/dev/sweet_gpu.c').read_text()
+            self.assertIn('FP6_REPLAY_CHECK_GRID', source,
+                          'scene renders must be compared with their lavapipe reference grids')
             self.assertIn('PE_parse_boot_argn("fp6gpuexec"', source,
                           'SQE/CP execution must remain explicitly opt-in')
             self.assertIn('fp6_hfi_hdr(131u, cmd_dwords + 1u)', source,
@@ -279,6 +281,9 @@ class GPUProbeTests(unittest.TestCase):
                            cwd=work / 'replay', check=True)
             subprocess.run(['git', 'apply', '--include=bsd/dev/fp6_gpu_replay_data.h',
                             str(ROOT / 'xnu/patches/0206-fp6-replay-scanout-framebuffer.patch')],
+                           cwd=work / 'replay', check=True)
+            subprocess.run(['git', 'apply', '--include=bsd/dev/fp6_gpu_replay_data.h',
+                            str(ROOT / 'xnu/patches/0211-fp6-replay-scene-grid-check.patch')],
                            cwd=work / 'replay', check=True)
             shutil.copyfile(replay_dir / 'fp6_gpu_replay_data.h', work / 'fp6_gpu_replay_data.h')
             (work / 'test.c').write_text(HARNESS)

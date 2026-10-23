@@ -12,7 +12,9 @@ zero pages carry no data.
 
 CHECK is `add5` (computerator buf-init: every element of the UAV buffer grew by
 5) or `color` (a Vulkan draw: count RGBA8 words equal to 0xff4080ff in the
-capture's zero-initialised buffers).
+capture's zero-initialised buffers). `grid=REF.txt` is a tools/fp6-vk-scenes scene: the
+result buffer is the one BO filled with SENTINEL, and REF.txt holds the 16x16
+`grid16:` line the same scene printed under lavapipe.
 """
 import gzip
 import re
@@ -20,7 +22,8 @@ import struct
 import sys
 
 RD_GPUADDR, RD_BUFFER_CONTENTS, RD_CMDSTREAM_ADDR, RD_CHIP_ID = 3, 12, 6, 14
-CHECK = {'add5': 0, 'color': 1, 'scanout': 2}
+CHECK = {'add5': 0, 'color': 1, 'scanout': 2, 'grid': 3}
+SENTINEL = 0xa5a5a5a5  # fp6-vk-scenes pre-fills its result buffer with this
 PAGE = 4096
 SMALL_BO = 0x200000  # map every page of BOs up to this size; otherwise sparse
 SCANOUT_MIN = 0x800000  # a zero BO at least this big is the scanout framebuffer
@@ -85,7 +88,7 @@ def cbd_payloads(bos):
     return out
 
 
-def build(path, check):
+def build(path, check, grid=None):
     bos, cmd, chip = parse(path)
     if chip != 0x44010000:
         raise SystemExit('%s is not an A810 capture: chip 0x%x' % (path, chip or 0))
@@ -99,11 +102,19 @@ def build(path, check):
         if len(big) != 1:
             raise SystemExit('%s: expected exactly one zero scanout BO, found %d' % (path, len(big)))
         scanout = big[0]
+    result_bo = None
+    if check == 'grid':
+        found = [(b, sz) for b, sz, bl in bos if sz and all(x == SENTINEL for x in words(bl))]
+        if len(found) != 1:
+            raise SystemExit('%s: expected exactly one sentinel result BO, found %d' % (path, len(found)))
+        result_bo = found[0]
     pages, zero_bo_pages = {}, set()
     for base, size, blob in bos:
         if scanout and base == scanout[0]:
             continue  # backed by the real framebuffer on the device
         w = words(blob)
+        if result_bo and base == result_bo[0]:
+            w = [0] * len(w)  # the render overwrites every texel; do not store the sentinel
         for p in range(0, size, PAGE):
             chunk = w[p // 4:(p + PAGE) // 4]
             nz = [(i, v) for i, v in enumerate(chunk) if v]
@@ -135,6 +146,9 @@ def build(path, check):
               'ib2_va': ib2_va, 'ib2_dwords': ib2_dwords,
               'scanout_va': scanout[0] if scanout else 0, 'scanout_bytes': scanout[1] if scanout else 0,
               'check': check, 'check_va': 0, 'elements': 0, 'init': []}
+    if check == 'grid':
+        result['check_va'], result['elements'] = result_bo[0], len(grid)
+        result['init'] = grid
     if check == 'add5':
         # The UAV descriptor (TYPE=TEX_BUFFER, nonzero count) names the data buffer.
         for base, size, blob in bos:
@@ -176,6 +190,7 @@ def main():
            '#define FP6_REPLAY_CHECK_ADD5  0u',
            '#define FP6_REPLAY_CHECK_COLOR 1u',
            '#define FP6_REPLAY_CHECK_SCANOUT 2u',
+           '#define FP6_REPLAY_CHECK_GRID 3u',
            'struct fp6_replay_page {',
            '\tuint64_t va;',
            '\tconst uint32_t *pairs; /* (dword index, value) pairs; NULL for a zero page */',
@@ -210,9 +225,16 @@ def main():
             if len(geometry) != 5:
                 raise SystemExit('scanout needs FBW,FBH,X,Y,SIZE')
             check = 'scanout'
-        if check not in CHECK or not re.fullmatch(r'[a-z0-9_]+', name):
+        if check.split('=', 1)[0] not in CHECK or not re.fullmatch(r'[a-z0-9_]+', name):
             raise SystemExit('bad spec %r' % spec)
-        r = build(path, check)
+        grid = None
+        if check.startswith('grid='):
+            line = open(check.split('=', 1)[1]).read().split('grid16:', 1)[1]
+            grid = [int(v, 16) for v in line.split()]
+            if len(grid) != 256:
+                raise SystemExit('%s: grid reference needs 256 words, has %d' % (spec, len(grid)))
+            check = 'grid'
+        r = build(path, check, grid)
         r['geometry'] = geometry
         page_rows = []
         for va in sorted(r['pages']):

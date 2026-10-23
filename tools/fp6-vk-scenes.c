@@ -145,7 +145,8 @@ int main(int argc, char **argv)
 		depth = make_image(VK_FORMAT_D32_SFLOAT, W, H, VK_IMAGE_USAGE_DEPTH_STENCIL_ATTACHMENT_BIT,
 		    VK_IMAGE_ASPECT_DEPTH_BIT);
 	struct buf readback = make_buffer(W * H * 4, VK_BUFFER_USAGE_TRANSFER_DST_BIT);
-	memset(readback.map, 0, W * H * 4);
+	/* A sentinel marks the result buffer in a capture; the render covers every texel. */
+	memset(readback.map, 0xa5, W * H * 4);
 
 	/* Render pass: colour (+ depth). */
 	VkAttachmentDescription att[2] = {
