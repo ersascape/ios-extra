@@ -1,5 +1,25 @@
 # ios-extra — current state
 
+## FP6 host-driven ringbuffer 0192 (2026-10-23)
+
+**Phone measured:** CI `39934932431` (head `2cda1cc7ac04ed88c71e1ab1a2f6d7dbe3b72412`)
+passed; build-tree `sweet_gpu.c` matched the tested source. Image
+`/tmp/ios-extra-run-39934932431/package/fp6-host-ring-0192.img` (SHA256
+`ff89c5fe1e9f104ff42f28e96406db697943dc27bdd65954e967eb179b162771`; cmdline adds
+`fp6gpuring=1`) booted once via `fastboot boot`; no flash, EDL or `getvar`.
+104 packets; log `/tmp/ios-extra-run-39934932431/logs/phone-0192-host-ring.txt`.
+
+After the proven raw-HFI `CP_MEM_WRITE`, the probe read the live ring registers:
+`CP_RB_BASE=0x1ff8000003000` (the first firmware kind-1 allocation, 32 KiB),
+`CP_RB_CNTL=0x20c`, `RPTR=WPTR=14`, AHB fence status 0. It appended one
+`CP_MEM_WRITE` (value `0x8100f00d`) at WPTR from the CPU, wrote `CP_RB_WPTR_GC`
+through the GMU AHB fence (not dropped), and the CP executed it: the CPU read
+back `0x8100f00d`, RPTR and WPTR both ended at 18, CB0 FSR `0x400` (no fault),
+CM3 reset verified. This shows the hwsched firmware leaves its BR ring usable
+by a host writer when idle, as Snapintosh's X2-90 setup does. Not measured:
+sustained use alongside GMU scheduling, wrap handling, BV pipe, power-up list,
+compute dispatch, draw, Metal.
+
 ## FP6 A810 non-context registers 0191 (2026-10-23)
 
 **Phone measured:** CI `39929355300` (head `8b4b68336aa099d7925cd61396586cfc1c9e2127`)
