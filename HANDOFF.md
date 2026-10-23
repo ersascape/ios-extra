@@ -9,6 +9,70 @@ You are taking over an in-progress, hardware-in-the-loop driver bring-up. Read `
 file top to bottom, `NOTES.md` (state), then `docs/GPU_GMU_BOOT.md`
 (mainline reference + everything measured). `docs/GPU_LOG.md` is the full history.
 
+## Where things stand (2026-10-24) and what to do next
+
+The GPU executes real draws on the phone. Read `NOTES.md` (top entries), `docs/ADRENOGPU_DESIGN.md` and
+`drivers/adrenogpu/`. Short version:
+
+- **Proven on the phone** (patches 0187 to 0220): GMU/HFI, ring, compute, a per-context TTBR0 address space
+  at user addresses, Turnip A810 draws (flat, varying, UBO, blend, depth, textures, vertex and index fetch).
+  All ten test scenes render exactly when the stream drains each draw (`TU_DEBUG=syncdraw`).
+- **Root cause of the texture failures:** on this part the end-of-pass cache cleans do not wait for the last
+  draw's fragments. The stream needs `CP_WAIT_FOR_IDLE`, then `CCU_CLEAN_COLOR/DEPTH` and `CACHE_CLEAN`,
+  after a draw (`NOTES.md`, "wait for idle after the draw"). The PM4 builder's pass epilogue does this.
+- **AdrenoGPU driver, host-tested cores** (`tests/test_adrenogpu*.py`): `adrenogpu_vm` (page tables, the
+  exact descriptor the phone runs), `adrenogpu_ring` (submit framing), `pm4/adrenogpu_pm4` (restore sequence,
+  A810 GMEM layout, sysmem pass begin, auto draw, drained pass end). The builder's state matches Turnip's
+  A810 state for 134 of 174 registers at the draw; the rest is later pipeline state.
+
+Milestones (details in the design doc): M1 VM core, M2 ring framing: done. M6 PM4 builder: restore, pass and
+draw done; **next in M6** the load-action clear (2D engine blit, `emit_2d_clear` in Snapintosh's
+`SharedPassState.m`), then shader program state (VS/FS registers from compiled shaders, `emit_program` in its
+`ProgramState.m`), vertex fetch, UBOs and textures, each checked against `tools/fp6-pm4-state.py` on a Turnip
+capture of the same scene. **Next in the driver:** M3 buffer and context objects on the kernel allocator,
+M4 submit with fences, timeout and reset, M5 the `AdrenoGPU` IOService and user client.
+**Next on the phone:** put our own builder's flat triangle through the replay path (turn the builder's stream
+and a shader blob into a replay entry), compare with the lavapipe grid, then retest the 576 KiB-fitting GMEM
+layout (`tools/mesa-a810-sysmem-vpc.patch`) with the drain rule in place.
+
+Host test and capture recipes (nothing here needs the phone):
+
+```sh
+python3 -m unittest discover -s tests -q                    # all host tests, including the C cores under ASan/UBSan
+python3 tools/fp6-pm4-state.py CAPTURE.rd --regs drivers/adrenogpu/pm4/Fp6A8xxRegs.h   # register state at the draw
+python3 tools/gen-a8xx-regs.py --mesa <mesa> --out drivers/adrenogpu/pm4/Fp6A8xxRegs.h # must reproduce byte for byte
+```
+
+Scene captures use Mesa at `6a7d3020a781` (`tu: Match SW depth clear value packing with HW`), configured with
+`meson setup build-vk -Dvulkan-drivers=freedreno -Dgallium-drivers= -Dtools=freedreno,drm-shim -Dfreedreno-kmds=msm
+-Dllvm=disabled -Dopengl=false` (a second tree, `build`, with `-Dvulkan-drivers=` empty gives `cffdump` and the noop
+`libfreedreno_noop_drm_shim.so`). Then, per scene:
+
+```sh
+glslangValidator -V tools/fp6-vk-scenes/NAME.vert -o spv/NAME.vert.spv     # tools/fp6-vk-scenes/build.sh does all
+gcc -I<mesa>/include -o fp6-vk-scenes tools/fp6-vk-scenes.c -lvulkan -lm
+VK_DRIVER_FILES=/usr/share/vulkan/icd.d/lvp_icd.json ./fp6-vk-scenes NAME spv       # reference grid (lavapipe)
+LD_PRELOAD=<shim> FD_GPU_ID=810 FD_RD_DUMP=enable,full FD_RD_DUMP_PATH=cap/NAME TU_GMEM=622592 \
+  TU_DEBUG=sysmem,noubwc,syncdraw VK_DRIVER_FILES=<build-vk>/src/freedreno/vulkan/freedreno_devenv_icd.x86_64.json \
+  ./fp6-vk-scenes NAME spv                                                           # Turnip A810 capture
+python3 tools/fp6-gen-replay.py OUT.h NAME:cap/NAME/*.rd:grid=REF.txt[:inject=KEYS][:post=KEYS] ...
+```
+
+The generated header becomes a patch against `bsd/dev/fp6_gpu_replay_data.h` (see patches 0216 to 0220 for the
+pattern: stage the previous header in a scratch git repo, copy the new one in, `git diff` without the `index`
+lines), the test list in `tests/test_gpu_probe.py` gets the new patch, CI builds, and the image is packaged with
+`tools/fp6-package.py` (`--allow-no-product`, the stock DTB and the init ramdisk from an earlier run's package) and
+booted once with `tools/gpu-phone-test.py --capture-mode user`. Boot arguments for replays:
+`fp6pas=1 rd=md0 fp6usb=2 fp6smmu=2 fp6smmupower=1 fp6smmuirq=1 fp6gmuload=1 fp6gmuboot=1 fp6gmunopreempt=1
+fp6gpuexec=1 fp6gpuring=1 fp6gpucompute=1 fp6gpureplay=1 fp6gpureplaycb=1`, plus `fp6gpureplayonly=PREFIX` and
+`fp6gpureplayrepeat=N` to select captures. The kernel currently clears `CONCURRENT_BIN_DISABLE` in replayed streams
+(`fp6gpureplaycb=1`); a stream our own builder produces should not contain it.
+
+Open: the true A810 sysmem layout (Mesa's needs 608 KiB, the part has 576 KiB, and a smaller VPC layout drew
+nothing for depth before the drain fix); interrupts, power management, unprivileged IB execution, faults and
+recovery, several contexts; UBWC and GMEM-mode rendering. The project will later move to iOS 27 (SPTM and TXM),
+so the driver must not need writable-executable memory or runtime kernel-text changes.
+
 ## Goal and ground rules
 
 Goal: bring up the Fairphone 6 Adreno 810 (Gen8.3) from authenticated firmware
