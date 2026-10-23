@@ -30,7 +30,8 @@ the main 0x3d00000 region.
 | HFI_QTBL_INFO / HFI_QTBL_ADDR | 0x1f984 / 0x1f985 | +0x47610 / +0x47614 |
 | HFI_CTRL_INIT | 0x1f986 | +0x47618 |
 | GMU2HOST_INTR_CLR / INFO / MASK | 0x1f991 / 0x1f992 / 0x1f993 | +0x47644 / +0x47648 / +0x4764c |
-| HOST2GMU_INTR_SET | 0x1f994 | +0x47650 |
+| HOST2GMU_INTR_SET / CLR / RAW_INFO | 0x1f994 / 0x1f995 / 0x1f996 | +0x47650 / +0x47654 / +0x47658 |
+| GFX_PWR_CLK_STATUS / RPMH_POWER_STATE | 0x1f7e8 / 0x1f7e9 | +0x46fa0 / +0x46fa4 |
 | GENERAL_8 / 9 / 10 / 11 | 0x1f9c8..0x1f9cb | +0x47720 .. +0x4772c |
 | POWER_COUNTER_SELECT_XOCLK_0 | 0x1fc40 | +0x48100 |
 | AO_HOST_INTERRUPT_CLR / MASK | 0x23b04 / 0x23b06 | +0x57c10 / +0x57c18 |
@@ -68,6 +69,14 @@ controls 0x3d9e040..0x3d9e050, AO counter 0x3d9e200/0x3d9e204.
 
 KGSL hwsched first boot runs the GMU at its top table rate (650 MHz); the
 current FP6 clock path uses the 350 MHz table rate.
+
+Phone test 0173: after HFI `START` ACK, the bit-30 GPU OOB request timed out;
+HOST2GMU raw info remained zero before/after, `GFX_PWR_CLK_STATUS=3`,
+`RPMH_POWER_STATE=0xf`, and SMMU global fault status was zero. Gen8 KGSL's
+`is_on()` predicate says either status bit 0 or bit 1 means GX is off. The
+register address matches the adjacent HFI request register already used
+successfully, but the OOB latch itself has not been demonstrated. See
+`NOTES.md` and `GPU_LOG.md` for exact image and log identities.
 
 No host RSCC/PDC init on Gen8 (firmware/AOP). The RSCC wake handshake
 (`RSCC_CONTROL_REQ`=BIT1, ACK BIT1, rscc `SEQ_BUSY_DRV0` 0x3d50404 == 0) is

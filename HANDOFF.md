@@ -38,9 +38,35 @@ device proof.
   beyond "N more measured steps".
 - Do not write product roadmaps or future-feature lists into NOTES/README.
 
-## Active FP6 GPU state (2026-10-23)
+## Current FP6 GPU state (2026-10-23)
 
-Patch 0170 is the latest phone run. CI `39842360411` passed, and the
+Patch 0173 is the latest phone run. Commit
+`0a1c0c10779d19ce2d17dd4d6fb442979f841565` passed CI `39891466280`; the CI
+kernel SHA-256 is `37b2f290b7f6132cc4bb5b8b551bc1c753600966514ef00b0e84273f2a1cfa3e`.
+The exact kernel/ADT, verified stock DTB and bounded ramdisk were packaged as
+`/tmp/ios-extra-run-39891466280/package/fp6-hfi-version-oob-0173.img/fp6-hfi-version-oob-0173.img`
+(SHA-256 `c962435ac5f920da54c09697e43087468f933f9cc2da70c522c9486d2207166b`).
+One temporary user-capture `fastboot boot` succeeded; no flash or EDL command
+was used. USB log and raw UDP are in `/tmp/ios-extra-run-39891466280/logs/`,
+both SHA-256 `7104517924257c8a343ce46ac9244519d8ac37e2d351137e14ec9700b2513214`.
+
+Phone measured: corrected HFI version handling queried context queues and got
+`context queues=1`; HFI `START` was ACKed. GPU OOB bit 30 timed out with
+HOST2GMU raw info 0 before/after, `GMU2HOST_INTR_INFO=0`,
+`GFX_PWR_CLK_STATUS=3`, `RPMH_POWER_STATE=0xf`, `FW_INIT_RESULT=0x100`,
+`FW_BUSY=0`, and `sGFSR=0`. Linux's Gen8 predicate treats status bit 0 or 1
+as GX off, so this does not demonstrate power-on. CM3 reset was verified;
+SMMU/context/clock votes were retained. No GPU MMIO read beyond status, DMA,
+command execution, readback, draw or Metal output occurred. CB0 FSR briefly
+sampled `0x400` at firmware-init logging and was zero at the OOB timeout.
+The immediate next engineering question is why the bit-30 request does not
+remain in the raw latch; verify the live Gen8 register mapping and inspect the
+transient CB0 FSR before changing power sequencing. Do not assume the phone is
+in fastboot after this boot.
+
+## Historical FP6 GPU state at patch 0170 (2026-10-23)
+
+Patch 0170 was the last measured run before 0173. CI `39842360411` passed, and the
 header-v2 diagnostic image is
 `/tmp/ios-extra-run-39842360411/package-correct/fp6-cb0-reinit-0170.img`
 (SHA-256 `678ae82e3565a403f33abfa0b1ba6ae4629325637e918da158e9d087a15f90a8`).

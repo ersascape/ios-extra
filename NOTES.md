@@ -11,11 +11,37 @@
   `+0x3ff0`. It also logs HOST2GMU raw OOB before/after the request, GMU
   graphics power/clock and RPMh status, firmware init/busy, CB0 FSR and SMMU
   global fault status if OOB times out.
-- This is source-derived from the just-captured phone log and Fairphone's
-  HFI version semantics. Local arm64 compile against CI buildtree `39889495686`
-  reports `0 of 1 files failed`; the patch applies to the 0172 source. CI,
-  packaging and phone measurement are pending. `fastboot devices` currently
-  shows exactly one phone.
+## FP6 HFI version and OOB diagnostics phone result 0173 (2026-10-23)
+
+- Commit `0a1c0c10779d19ce2d17dd4d6fb442979f841565` passed CI run
+  `39891466280`. CI kernel SHA-256:
+  `37b2f290b7f6132cc4bb5b8b551bc1c753600966514ef00b0e84273f2a1cfa3e`;
+  hosted packaging skipped because `FP6_STOCK_DTB_URL` is unset. The exact
+  kernel and matching ADT were packaged with verified stock DTB
+  (`8198534128258bfe7b05bbb5b227affc181aa49b376884c08eae8564fce124e3`) and
+  bounded ramdisk. Header-v2 round-trip passed. Image:
+  `/tmp/ios-extra-run-39891466280/package/fp6-hfi-version-oob-0173.img/fp6-hfi-version-oob-0173.img`,
+  SHA-256 `c962435ac5f920da54c09697e43087468f933f9cc2da70c522c9486d2207166b`.
+- One temporary `fastboot boot` succeeded using user-mode USB capture; no flash
+  or EDL command was used. Decoded log and raw UDP are
+  `/tmp/ios-extra-run-39891466280/logs/phone-0173-hfi-version-oob.txt` and
+  `.udp`, SHA-256
+  `7104517924257c8a343ce46ac9244519d8ac37e2d351137e14ec9700b2513214` (107
+  packets). Fastboot transcript SHA-256 is
+  `eddbe5a728b90dcca20c5587705af64d1b47b53c2efcb9f01ac6ff1cb9261340`.
+- **Phone measured:** corrected HFI version handling caused the context queue
+  capability query; firmware returned `context queues=1`, then ACKed HFI
+  `START`. GPU OOB still timed out. HOST2GMU raw info stayed zero before/after,
+  `GMU2HOST_INTR_INFO=0`, `GFX_PWR_CLK_STATUS=3`, `RPMH_POWER_STATE=0xf`,
+  `FW_INIT_RESULT=0x100`, `FW_BUSY=0`, and SMMU global fault status was zero.
+  Linux Gen8's power predicate treats either bit 0 or bit 1 of the graphics
+  power/clock status as GX off; this boot did not report GX on. CB0 FSR sampled
+  `0x400` during firmware init and `0` at timeout. CM3 reset was verified and
+  SMMU/context/clock votes retained. No GPU core read, command, DMA,
+  write/readback, draw or Metal output was measured.
+- The zero raw request latch places the failure before a GMU response or GPU
+  register failure. Next isolate the bit-30 OOB request write and transient
+  CB0 FSR; do not claim GPU power-on.
 
 ## FP6 GPU power-on OOB probe 0172 (2026-10-23)
 
