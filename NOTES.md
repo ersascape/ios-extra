@@ -1,5 +1,33 @@
 # ios-extra — current state
 
+## FP6 TTBR0 replay validated; draw stall localized 0199 (2026-10-23)
+
+**Phone measured:** CI `39947768204` (head `d5ee1ca5610e509479fbf8efe608621e89fddabd`)
+passed; build-tree source matched. Image
+`/tmp/ios-extra-run-39947768204/package/fp6-replay-0199.img` (SHA256
+`44d1b4f4169c1bc335c5792095ef9c1d1d106a62b5e59c38160305c8ff7c687f`) booted once via
+`fastboot boot`; no flash, EDL or `getvar`. 106 packets; log
+`/tmp/ios-extra-run-39947768204/logs/phone-0199-replay.txt`.
+
+- **TTBR0 address space works.** The `buf_init` capture replayed with zero
+  relocation through a 6-page / 6-table TTBR0 space at Mesa's original IOVAs via
+  `CP_INDIRECT_BUFFER`: fence `0x600dcafe`, RPTR 849/849, data `6..13` (8/8), CB0
+  FSR `0x400`. First per-context GPU address space on the FP6.
+- **Draw replay still stalls, now localized.** The Mesa Turnip A810 draw (sysmem,
+  no UBWC, fake GMEM 608 KiB) mapped 56 pages / 10 tables total; submission was
+  accepted and CB0 reports no fault, but the fence never fires. Dump after the
+  stall: BR pipe IB1 base `0x10002e000`, `rem=0`, `init=343` (the CP fetched the
+  whole stream); BV pipe idle (IB1 0). `RBBM_STATUS=0x00880005` decodes
+  (a6xx.xml, A8XX layout) as CP_BUSY + UNSLICE_BUSY_IGN_AHB + GPU_BUSY_IGN_AHB;
+  no HLSQ/SP/VPC/PC/UCHE/CMP/DCMP slice-unit bit is set. So the shader pipeline is
+  not what is busy: the CP is waiting on something (candidates: BV/BR thread
+  sync, `CP_WAIT_FOR_ME`, `CP_REG_TEST`, a wait on memory) or a per-pipe
+  prerequisite the Linux kernel normally provides. Not yet established.
+- Patch 0200 adds `fp6gpureplaystep=1`: replay increasing packet-boundary prefixes
+  of the draw stream (121 boundaries) and report the first prefix whose fence does
+  not fire, with the IB dump. Host tests and arm64 compile pass; CI and phone
+  pending.
+
 ## FP6 TTBR0 capture replay, first draw attempt 0198 (2026-10-23)
 
 **Phone measured:** CI `39946365030` (head `79244af8d1ccf75430b80164a3a8bf61a9ec274c`)

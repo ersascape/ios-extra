@@ -76,6 +76,8 @@ class GPUProbeTests(unittest.TestCase):
                           'host ring write must target a firmware kind-1 ring only')
             self.assertIn('PE_parse_boot_argn("fp6gpucompute"', source,
                           'compute dispatch must remain explicitly opt-in')
+            self.assertIn('PE_parse_boot_argn("fp6gpureplaystep"', source,
+                          'prefix bisection must be explicitly opt-in')
             self.assertIn('PE_parse_boot_argn("fp6gpureplay"', source,
                           'TTBR0 capture replay must remain explicitly opt-in')
             self.assertIn('#define FP6_AS_TCR_TTBR0 0xa0102010u', source,
@@ -238,9 +240,15 @@ class GPUProbeTests(unittest.TestCase):
             (work / 'fp6_gpu_compute_tests.h').write_text(added_header(
                 ROOT / 'xnu/patches/0197-fp6-compute-multi-kernel-batch.patch',
                 'bsd/dev/fp6_gpu_compute_tests.h'))
-            (work / 'fp6_gpu_replay_data.h').write_text(added_header(
+            replay_dir = work / 'replay' / 'bsd' / 'dev'
+            replay_dir.mkdir(parents=True)
+            (replay_dir / 'fp6_gpu_replay_data.h').write_text(added_header(
                 ROOT / 'xnu/patches/0198-fp6-ttbr0-capture-replay.patch',
                 'bsd/dev/fp6_gpu_replay_data.h'))
+            subprocess.run(['git', 'apply', '--include=bsd/dev/fp6_gpu_replay_data.h',
+                            str(ROOT / 'xnu/patches/0200-fp6-replay-prefix-bisection.patch')],
+                           cwd=work / 'replay', check=True)
+            shutil.copyfile(replay_dir / 'fp6_gpu_replay_data.h', work / 'fp6_gpu_replay_data.h')
             (work / 'test.c').write_text(HARNESS)
             build = subprocess.run([shutil.which('cc') or 'cc', '-std=c11', '-Wall',
                                     '-Wextra', '-Werror', *os.environ.get('IOS_EXTRA_CFLAGS', '').split(), '-I', str(work),

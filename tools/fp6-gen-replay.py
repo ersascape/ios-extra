@@ -50,6 +50,24 @@ def words(blob):
     return list(struct.unpack('<%dI' % (len(blob) // 4), blob))
 
 
+def packet_ends(stream):
+    """Dword offsets where each top-level packet ends (bisection points)."""
+    ends, i = [], 0
+    while i < len(stream):
+        header = stream[i]
+        kind = header >> 28
+        if kind == 7:
+            i += 1 + (header & 0x7fff)
+        elif kind == 4:
+            i += 1 + (header & 0x7f)
+        else:
+            raise SystemExit('unexpected packet 0x%08x at dword %d' % (header, i))
+        ends.append(i)
+    if i != len(stream):
+        raise SystemExit('packet walk overran the stream: %d != %d' % (i, len(stream)))
+    return ends
+
+
 def build(path, check):
     bos, cmd, chip = parse(path)
     if chip != 0x44010000:
@@ -74,7 +92,7 @@ def build(path, check):
             if base <= v < base + size and (sw[i + 1] == 0 or (
                     i and sw[i - 1] < 0x10000 and sw[i + 1] < 0x10000 and sw[i + 2] == 0)):
                 pages.setdefault(base + ((v - base) // PAGE) * PAGE, [])
-    result = {'pages': pages, 'ib_va': cmd_va, 'ib_dwords': cmd_dwords,
+    result = {'pages': pages, 'ib_va': cmd_va, 'ib_dwords': cmd_dwords, 'steps': packet_ends(sw),
               'check': check, 'check_va': 0, 'elements': 0, 'init': []}
     if check == 'add5':
         # The UAV descriptor (TYPE=TEX_BUFFER, nonzero count) names the data buffer.
@@ -131,6 +149,8 @@ def main():
            '\tuint64_t check_va;',
            '\tunsigned elements;',
            '\tconst uint32_t *init;',
+           '\tconst uint16_t *steps; /* top-level packet end offsets, for prefix bisection */',
+           '\tunsigned nsteps;',
            '};']
     rows, summary = [], []
     for spec in specs:
@@ -152,11 +172,13 @@ def main():
         init = emit('fp6_replay_%s_init' % name, r['init'])
         if init:
             out.append(init)
+        out.append(emit('fp6_replay_%s_steps' % name, r['steps'], 'uint16_t'))
         rows.append('\t{ "%s", fp6_replay_%s_pages, %d, 0x%xull, %d, FP6_REPLAY_CHECK_%s,\n'
-                    '\t  0x%xull, %d, %s },' % (name, name, len(page_rows), r['ib_va'],
+                    '\t  0x%xull, %d, %s, fp6_replay_%s_steps, %d },' % (name, name, len(page_rows), r['ib_va'],
                                                 r['ib_dwords'], check.upper(), r['check_va'],
                                                 r['elements'],
-                                                'fp6_replay_%s_init' % name if r['init'] else 'NULL'))
+                                                'fp6_replay_%s_init' % name if r['init'] else 'NULL',
+                                                name, len(r['steps'])))
         summary.append('%s: %d pages (%d with data) ib=0x%x/%d dwords check=%s'
                        % (name, len(page_rows), sum(1 for v in r['pages'].values() if v),
                           r['ib_va'], r['ib_dwords'], check))
