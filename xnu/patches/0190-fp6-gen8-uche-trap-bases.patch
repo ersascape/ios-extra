@@ -1,0 +1,39 @@
+--- a/bsd/dev/sweet_gpu.c
++++ b/bsd/dev/sweet_gpu.c
+@@ -4445,6 +4445,28 @@
+ 	fp6_smmu_write32(gpu, FP6_GPU_CP_APERTURE_CNTL_HOST, 0u);
+ }
+ 
++/* Linux gen8_start(): UCHE trap/write-through bases at 0x1fffffffff000 and the
++ * all-blocks GPU BUSY mask. Offsets are dword register numbers times four. */
++#define FP6_GPU_UCHE_TRAP_BASE 0x0001fffffffff000ULL
++static void
++fp6_gpu_program_uche(vm_offset_t gpu)
++{
++	static const uint32_t regs[] = {
++		0x3818u, /* UCHE_WRITE_THRU_BASE_LO 0xe06 */
++		0x3820u, /* UCHE_TRAP_BASE_LO 0xe08 */
++		0x3c10u, /* UCHE_CCHE_WRITE_THRU_BASE_LO 0xf04 */
++		0x3c18u, /* UCHE_CCHE_TRAP_BASE_LO 0xf06 */
++	};
++	fp6_smmu_write32(gpu, 0x678u, 0xffffffffu); /* RBBM_PERFCTR_GPU_BUSY_MASKED 0x19e */
++	for (unsigned i = 0; i < sizeof(regs) / sizeof(regs[0]); i++) {
++		fp6_smmu_write32(gpu, regs[i], (uint32_t)FP6_GPU_UCHE_TRAP_BASE);
++		fp6_smmu_write32(gpu, regs[i] + 4u, (uint32_t)(FP6_GPU_UCHE_TRAP_BASE >> 32));
++	}
++	printf("QCOM GPU EXEC: UCHE trap=0x%08x%08x write_thru=0x%08x%08x\n",
++	    fp6_smmu_read32(gpu, 0x3824u), fp6_smmu_read32(gpu, 0x3820u),
++	    fp6_smmu_read32(gpu, 0x381cu), fp6_smmu_read32(gpu, 0x3818u));
++}
++
+ static int
+ fp6_gpu_exec_probe(vm_offset_t g, vm_offset_t gpu, uint8_t *hfi_mem,
+ 		unsigned *sequence)
+@@ -4480,6 +4502,7 @@
+ 		    (unsigned long long)fp6_exec_result_va);
+ 	}
+ 	fp6_gpu_program_apriv(gpu);
++	fp6_gpu_program_uche(gpu);
+ 	fp6_smmu_write32(gpu, 0x2058u, (uint32_t)fp6_exec_sqe_va); /* SQE base LO */
+ 	fp6_smmu_write32(gpu, 0x205cu, (uint32_t)(fp6_exec_sqe_va >> 32)); /* SQE base HI */
+ 	fp6_smmu_write32(gpu, 0x2054u, 1u); /* SQE start */

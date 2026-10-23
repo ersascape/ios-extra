@@ -53,6 +53,13 @@ class GPUProbeTests(unittest.TestCase):
             self.assertLess(source.index('\tfp6_gpu_program_apriv(gpu);\n'),
                             source.index('fp6_smmu_write32(gpu, 0x2058u, (uint32_t)fp6_exec_sqe_va)'),
                             'APRIV must be programmed before the SQE base and start')
+            self.assertIn('flags & (FP6_GPU_GLOBAL_GFX_PRIV | FP6_GPU_GLOBAL_GFX_WRITE)', source,
+                          'HFI GMU_ACC (bit 3) must not become GPU EXEC in the global map')
+            self.assertIn('FP6_GPU_UCHE_TRAP_BASE 0x0001fffffffff000ULL', source,
+                          'UCHE trap base must match Linux gen8_get_uche_trap_base()')
+            self.assertLess(source.index('\tfp6_gpu_program_uche(gpu);\n'),
+                            source.index('fp6_smmu_write32(gpu, 0x2058u, (uint32_t)fp6_exec_sqe_va)'),
+                            'UCHE bases must be programmed before SQE start')
             self.assertIn('va != fp6_exec_sqe_va + (uint64_t)i * 4096u', source,
                           'SQE pages must form one contiguous GPU virtual range')
             self.assertLess(
