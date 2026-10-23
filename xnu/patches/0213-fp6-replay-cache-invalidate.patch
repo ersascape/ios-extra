@@ -1,0 +1,32 @@
+diff --git a/bsd/dev/sweet_gpu.c b/bsd/dev/sweet_gpu.c
+--- a/bsd/dev/sweet_gpu.c
++++ b/bsd/dev/sweet_gpu.c
+@@ -4966,7 +4966,7 @@ fp6_replay_submit(vm_offset_t g, vm_offset_t gpu, const struct fp6_replay *r,
+ 	/* Linux gen8_rb_context_switch() + gen8_ringbuffer_submitcmd() preamble: Mesa's
+ 	 * CP_BV_BR_COUNT_OPS PIPE_SET_BR_OFFSET assumes the kernel cleared the BV/BR
+ 	 * counters with CP_RESET_CONTEXT_STATE before the user IB. */
+-	uint32_t cmd[32];
++	uint32_t cmd[40];
+ 	unsigned n = 0;
+ 	cmd[n++] = fp6_cp_type7_packet(0x17u, 1u); /* CP_THREAD_CONTROL: both, sync */
+ 	cmd[n++] = 3u | (1u << 31);
+@@ -4980,6 +4980,19 @@ fp6_replay_submit(vm_offset_t g, vm_offset_t gpu, const struct fp6_replay *r,
+ 	cmd[n++] = 0x101u;
+ 	cmd[n++] = fp6_cp_type7_packet(0x17u, 1u); /* CP_THREAD_CONTROL: BR */
+ 	cmd[n++] = 1u;
++	/* Every capture reuses the same IOVAs with different data, and the GPU's caches are tagged
++	 * by virtual address. Mesa's A7xx+ sequences invalidate UCHE (CACHE_INVALIDATE7) and the
++	 * write-through CCHE behind it (CP_CCHE_INVALIDATE; its incoherent copies are not covered
++	 * by every UCHE invalidate) before reads of memory the CPU wrote. fp6gpureplaynoinv=1 skips
++	 * this to reproduce the earlier runs. */
++	int noinv = 0;
++	(void)PE_parse_boot_argn("fp6gpureplaynoinv", &noinv, sizeof(noinv));
++	if (noinv != 1) {
++		cmd[n++] = fp6_cp_type7_packet(0x46u, 1u); /* CP_EVENT_WRITE7: CACHE_INVALIDATE7 */
++		cmd[n++] = 0x33u;
++		cmd[n++] = fp6_cp_type7_packet(0x3au, 0u); /* CP_CCHE_INVALIDATE */
++		cmd[n++] = fp6_cp_type7_packet(0x26u, 0u); /* CP_WAIT_FOR_IDLE */
++	}
+ 	cmd[n++] = fp6_cp_type7_packet(0x3fu, 3u); /* CP_INDIRECT_BUFFER */
+ 	cmd[n++] = (uint32_t)r->ib_va;
+ 	cmd[n++] = (uint32_t)(r->ib_va >> 32);
