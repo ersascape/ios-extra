@@ -1,5 +1,24 @@
 # ios-extra — current state
 
+## FP6 GPU diagnostics measured: fetch paths work alone, two combinations still fail (2026-10-23)
+
+**Phone measured:** CI `39992573473` (head `70253f55e0dd6f25088ebc4898d879132bd01248`, patch
+0212) passed. Image `/tmp/ios-extra-run-39992573473/package/fp6-scenes-0212.img` (SHA256
+`eb390e8e01407a555a97d251715a5445f575207d0bb8a36b85628e7190c713de`; same cmdline as 0211)
+booted once via `fastboot boot`; no flash, EDL or `getvar`. Log
+`/tmp/ios-extra-run-39992573473/logs/phone-0212-diag.txt`. All 13 replays reached their fence.
+
+- `idxonly` (index buffer, no vertex buffer): 0 of 256 differ. `vbufdraw` (vertex buffer, no
+  index buffer): 0 differ. So each fetch path works on its own.
+- `vertexbuf` (both together, indexed draw with vertex input): still nothing drawn, 0 lit.
+- `texlinear` (host-written linear texture, no upload blit): 21 differ (texture with blit: 78).
+  The blit is therefore not the cause; sampling a texture is.
+- flat, varying, ubo, blend, depth still match; the run reports 7 of 10 scenes matching.
+
+Source inspection of the texlinear capture: texel rows sit 256 bytes apart in one mapped page
+and the descriptor base `0x2e000` points at it, so missing data is not the explanation. No
+cause established for either failure.
+
 ## FP6 GPU scene batch measured: 5 of 7 Turnip renders match lavapipe on the Adreno 810 (2026-10-23)
 
 **Phone measured:** CI `39990503899` (head `a5fe62960adbc51ed9b7e3589b03818537f280ed`, patch
