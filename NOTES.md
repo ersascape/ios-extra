@@ -1,5 +1,28 @@
 # ios-extra — current state
 
+## UniXNU-sheng package reference list (2026-10-23)
+
+Source reading only (`github.com/UniXNU/UniXNU-sheng`, `package/`, 99 files; the sheng
+board is an SM8550-class Adreno 7xx phone, so details differ from the FP6). Files
+fetched read-only into scratch: `ShengGmuCommandDb.c` (RPMh command-db parser for GMU
+vote inputs: ARC `gfx.lvl`/`mx.lvl`/`cx.lvl`/`gmxc.lvl` on slave 3, BCM `SH0`/`MC0`/
+`ACV`/`CN0` on slave 5; checks address alignment, slave id in address bits `[18:16]`,
+bounds, overlap and duplicates; its comment records that every slave type must be
+searched and the table ends at the first zero slave id, the behaviour we adopted in
+patch 0156), `OriginalMetalAsyncDiagnostic.mm` (six lines that set
+`OFFLINE_RENDERBOX_ENABLE_ASYNC`, `OFFLINE_METAL_FENCE_DIAGNOSTIC` and
+`OFFLINE_METAL_ASYNC_DIAGNOSTIC` and include `OriginalMetalLayerDiagnostic.mm`; a
+harness running Apple's own Metal against their device with a drawable and GPU events),
+`ShengDpuObservation.c/.h` (read-only DPU observation: MDSS/MDP versions, IRQ
+status, and per DSI interface status `0x26c`, timing enable `0x0`, count enable
+`0xa8`, command trigger `0x84`, frame `0xac`, line `0xb0`, hsync `0x08`, vsync period
+`0x0c`; takes two samples and accepts them only if configuration and frame counters
+agree, up to three attempts). Our level-2 interface offsets match theirs. Not fetched
+but listed as relevant: `ShengGmu.c`, `ShengGmuVotes.c`, `GpuPowerProbe.cpp`,
+`GpuPowerBoard.h`, `ShengGpuSmmu.c`, `LegacyDisplayProbe.cpp`,
+`MobileDisplayProviderProbe.cpp`, `OfflineMetalSharedEvents.mm`,
+`OfflineMetalSharedSurfaces.mm`, `AdrenoPM4Probe.c`, `AdrenoCompilerProbe.c`.
+
 ## Brightness reference: UniXNU-sheng AppleARMBacklight.cpp (2026-10-23)
 
 Source reading only; nothing implemented or measured. The file the user pointed to
