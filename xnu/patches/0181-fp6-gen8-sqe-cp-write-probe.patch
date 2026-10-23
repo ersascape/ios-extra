@@ -1,0 +1,228 @@
+--- a/bsd/dev/sweet_gpu.c
++++ b/bsd/dev/sweet_gpu.c
+@@ -2809,6 +2809,7 @@
+ #include "fp6_gmu_loader.h"
+ #include "fp6_gmu_domain.h"
+ #include "fp6_gpu_global_domain.h"
++#include "fp6_sqe_fw.h"
+ 
+ static int fp6_gmu_clocks_prepare(struct fp6_smmu_clocks *);
+ 
+@@ -4104,7 +4105,7 @@
+ 
+ static int
+ fp6_gmu_hfi_start_sequence(vm_offset_t smmu, uint32_t cb_off, vm_offset_t g,
+-		uint32_t hfi_version, uint8_t *mem)
++		uint32_t hfi_version, uint8_t *mem, unsigned *sequence_out)
+ {
+ 	static const uint32_t ddr_levels[] = { 0, 0x000bebc2u, 0x00209a8eu };
+ 	static const uint32_t cnoc_levels[] = { 0, 0x64u };
+@@ -4214,6 +4215,183 @@
+ 	if (!fp6_gmu_hfi_send_req(smmu, cb_off, g, mem, gpu_start, 1u, &seq, NULL)) return 0;
+ 	printf("QCOM GMU: HFI START ACK; core firmware initialized\n");
+ 	if (!fp6_gmu_hfi_default_votes(smmu, cb_off, g, mem, &seq)) return 0;
++	if (sequence_out) *sequence_out = seq;
++	return 1;
++}
++
++/* Small bounded Gen8 CP diagnostic. This deliberately does not claim to
++ * replace gen8_start(): it loads the pinned A810 SQE, submits Linux's exact
++ * CP_THREAD_CONTROL/CP_ME_INIT envelope with the optional power-up-list bit
++ * disabled, then asks CP to write one known word through SID0/CB0. */
++static struct fp6_gpu_global_page fp6_exec_sqe, fp6_exec_pwrup, fp6_exec_result;
++static uint64_t fp6_exec_sqe_va, fp6_exec_pwrup_va, fp6_exec_result_va;
++static int fp6_exec_pages_ready;
++
++static unsigned
++fp6_cp_odd_parity_bit(uint32_t val)
++{
++	return (0x9669u >> (0x0fu & (val ^ (val >> 4) ^ (val >> 8) ^
++	    (val >> 12) ^ (val >> 16) ^ (val >> 20) ^ (val >> 24) ^
++	    (val >> 28)))) & 1u;
++}
++
++static uint32_t
++fp6_cp_type7_packet(unsigned opcode, unsigned count)
++{
++	return 0x70000000u | count | (fp6_cp_odd_parity_bit(count) << 15) |
++	    ((opcode & 0x7fu) << 16) | (fp6_cp_odd_parity_bit(opcode) << 23);
++}
++
++static void
++fp6_gpu_invalidate_cpu_cache(void *address, uint32_t size)
++{
++	uintptr_t start = (uintptr_t)address & ~(uintptr_t)63u;
++	uintptr_t end = ((uintptr_t)address + size + 63u) & ~(uintptr_t)63u;
++	for (uintptr_t p = start; p < end; p += 64u)
++		__asm__ volatile("dc ivac, %0" :: "r"(p) : "memory");
++	__asm__ volatile("dsb sy" ::: "memory");
++}
++
++static int
++fp6_gpu_exec_alloc(uint32_t size, uint32_t flags,
++		struct fp6_gpu_global_page *page, uint64_t *gpu_va)
++{
++	uint32_t mapped = 0;
++	if (fp6_gpu_global_va(&fp6_gpu_global_domain, size, 12u, gpu_va, &mapped) ||
++	    mapped != ((size + 4095u) & ~4095u) ||
++	    fp6_gpu_kernel_alloc(NULL, mapped, page) ||
++	    fp6_gpu_global_map_live(fp6_gpu_smmu_base, *gpu_va, mapped,
++		page->pa, flags)) return 0;
++	return 1;
++}
++
++static int
++fp6_gpu_exec_wait_idle(vm_offset_t g, uint32_t *last)
++{
++	for (unsigned i = 0; i < 2000u; i++) { /* Linux Gen8 bound: 200 ms */
++		*last = fp6_smmu_read32(g, 0x57c30u); /* GPU_CX_BUSY_STATUS */
++		if (!(*last & (1u << 23))) return 1;
++		delay(100);
++	}
++	return 0;
++}
++
++static int
++fp6_gpu_exec_raw(vm_offset_t g, uint8_t *hfi_mem, unsigned *sequence,
++		vm_offset_t gpu, const uint32_t *cmd, unsigned cmd_dwords,
++		const char *label)
++{
++	uint32_t message[16] = {0}, busy = 0;
++	if (!hfi_mem || !sequence || !cmd || cmd_dwords == 0 || cmd_dwords > 15 ||
++	    !fp6_gpu_exec_wait_idle(g, &busy)) {
++		printf("QCOM GPU EXEC: %s refused before submit busy=0x%08x\n", label, busy);
++		return 0;
++	}
++	message[0] = fp6_hfi_hdr(131u, cmd_dwords + 1u); /* H2F_MSG_ISSUE_CMD_RAW */
++	memcpy(&message[1], cmd, cmd_dwords * sizeof(uint32_t));
++	if (!fp6_gmu_hfi_enqueue(g, hfi_mem, message, cmd_dwords + 1u, sequence)) {
++		printf("QCOM GPU EXEC: %s HFI raw enqueue failed\n", label);
++		return 0;
++	}
++	if (!fp6_gpu_exec_wait_idle(g, &busy)) {
++		printf("QCOM GPU EXEC: %s timeout busy=0x%08x RBBM_STATUS=0x%08x CP_SQE_CNTL=0x%08x\n",
++		    label, busy, fp6_smmu_read32(gpu, 0x48u), fp6_smmu_read32(gpu, 0x2054u));
++		return 0;
++	}
++	printf("QCOM GPU EXEC: %s completion busy=0x%08x RBBM_STATUS=0x%08x\n",
++	    label, busy, fp6_smmu_read32(gpu, 0x48u));
++	return 1;
++}
++
++static int
++fp6_gpu_exec_probe(vm_offset_t g, vm_offset_t gpu, uint8_t *hfi_mem,
++		unsigned *sequence)
++{
++	int wanted = 0;
++	uint32_t expected = 0x8100cafeu;
++	uint32_t init_cmd[10], write_cmd[4], busy = 0;
++	if (!PE_parse_boot_argn("fp6gpuexec", &wanted, sizeof(wanted)) || wanted != 1) {
++		printf("QCOM GPU EXEC: skipped; fp6gpuexec=1 not requested\n");
++		return 1;
++	}
++	if (!fp6_gpu_smmu_live || !fp6_gpu_global_domain.l0.va || !gpu || !g) {
++		printf("QCOM GPU EXEC: refused; SID0/CB0, global page table, or MMIO unavailable\n");
++		return 0;
++	}
++	if (!fp6_exec_pages_ready) {
++		if (!fp6_gpu_exec_alloc(FP6_SQE_FW_SIZE, FP6_HFI_MEMFLAG_GFX_PRIV,
++		    &fp6_exec_sqe, &fp6_exec_sqe_va) ||
++		    !fp6_gpu_exec_alloc(4096u, FP6_HFI_MEMFLAG_GFX_PRIV,
++		    &fp6_exec_pwrup, &fp6_exec_pwrup_va) ||
++		    !fp6_gpu_exec_alloc(4096u, FP6_HFI_MEMFLAG_GFX_PRIV | FP6_HFI_MEMFLAG_GFX_WRITEABLE,
++		    &fp6_exec_result, &fp6_exec_result_va)) {
++			printf("QCOM GPU EXEC: permanent GPU buffer mapping failed; mappings retained\n");
++			return 0;
++		}
++		memcpy(fp6_exec_sqe.va, fp6_sqe_fw, FP6_SQE_FW_SIZE);
++		memset(fp6_exec_pwrup.va, 0, 4096u);
++		*(volatile uint32_t *)(void *)fp6_exec_result.va = 0xdeadbeefu;
++		(void)fp6_gpu_kernel_publish(NULL, fp6_exec_sqe.va, FP6_SQE_FW_SIZE);
++		(void)fp6_gpu_kernel_publish(NULL, fp6_exec_pwrup.va, 4096u);
++		(void)fp6_gpu_kernel_publish(NULL, fp6_exec_result.va, 4096u);
++		fp6_exec_pages_ready = 1;
++		printf("QCOM GPU EXEC: staged SQE v0x%08x bytes=%u gpu=0x%llx result=0x%llx; mappings permanent\n",
++		    FP6_SQE_FW_VERSION, FP6_SQE_FW_SIZE,
++		    (unsigned long long)fp6_exec_sqe_va,
++		    (unsigned long long)fp6_exec_result_va);
++	}
++	fp6_smmu_write32(gpu, 0x2058u, (uint32_t)fp6_exec_sqe_va); /* SQE base LO */
++	fp6_smmu_write32(gpu, 0x205cu, (uint32_t)(fp6_exec_sqe_va >> 32)); /* SQE base HI */
++	fp6_smmu_write32(gpu, 0x2054u, 1u); /* SQE start */
++	if (fp6_smmu_read32(gpu, 0x2058u) != (uint32_t)fp6_exec_sqe_va ||
++	    fp6_smmu_read32(gpu, 0x205cu) != (uint32_t)(fp6_exec_sqe_va >> 32)) {
++		printf("QCOM GPU EXEC: SQE base readback mismatch lo=0x%08x hi=0x%08x\n",
++		    fp6_smmu_read32(gpu, 0x2058u), fp6_smmu_read32(gpu, 0x205cu));
++		return 0;
++	}
++	printf("QCOM GPU EXEC: SQE base programmed lo=0x%08x hi=0x%08x cntl=0x%08x\n",
++	    fp6_smmu_read32(gpu, 0x2058u), fp6_smmu_read32(gpu, 0x205cu),
++	    fp6_smmu_read32(gpu, 0x2054u));
++
++	/* Linux Gen8 CP init packet. Bit 8 enables the Linux cpu_gpu_lock list;
++	 * leave it clear for this isolated probe while preserving the other exact
++	 * A810 init fields. The address remains valid and permanently mapped. */
++	init_cmd[0] = fp6_cp_type7_packet(0x17u, 1u); /* CP_THREAD_CONTROL */
++	init_cmd[1] = 1u << 27;
++	init_cmd[2] = fp6_cp_type7_packet(0x48u, 7u); /* CP_ME_INIT */
++	init_cmd[3] = (1u << 0) | (1u << 1) | (1u << 3) | (1u << 6);
++	init_cmd[4] = 3u;
++	init_cmd[5] = 0x20000000u;
++	init_cmd[6] = 2u;
++	init_cmd[7] = (uint32_t)fp6_exec_pwrup_va;
++	init_cmd[8] = (uint32_t)(fp6_exec_pwrup_va >> 32);
++	init_cmd[9] = 1u << 31;
++	if (!fp6_gpu_exec_raw(g, hfi_mem, sequence, gpu, init_cmd, 10u, "CP_THREAD_CONTROL+CP_ME_INIT"))
++		return 0;
++	/* Same fallback Linux uses when no ZAP image is loaded. */
++	fp6_smmu_write32(gpu, 0x3d000u, 0u); /* RBBM_SECVID_TRUST_CNTL dword 0xf400 */
++	if (fp6_smmu_read32(gpu, 0x3d000u) != 0u) {
++		printf("QCOM GPU EXEC: secure-trust fallback readback failed\n");
++		return 0;
++	}
++	*(volatile uint32_t *)(void *)fp6_exec_result.va = 0xdeadbeefu;
++	(void)fp6_gpu_kernel_publish(NULL, fp6_exec_result.va, 64u);
++	write_cmd[0] = fp6_cp_type7_packet(0x3du, 3u); /* CP_MEM_WRITE */
++	write_cmd[1] = (uint32_t)fp6_exec_result_va;
++	write_cmd[2] = (uint32_t)(fp6_exec_result_va >> 32);
++	write_cmd[3] = expected;
++	if (!fp6_gpu_exec_raw(g, hfi_mem, sequence, gpu, write_cmd, 4u, "CP_MEM_WRITE"))
++		return 0;
++	fp6_gpu_invalidate_cpu_cache(fp6_exec_result.va, 64u);
++	uint32_t observed = *(volatile uint32_t *)(void *)fp6_exec_result.va;
++	printf("QCOM GPU EXEC: CP_MEM_WRITE result observed=0x%08x expected=0x%08x passed=%u\n",
++	    observed, expected, observed == expected);
++	if (observed != expected) return 0;
++	if (!fp6_gpu_exec_wait_idle(g, &busy)) {
++		printf("QCOM GPU EXEC: GPU busy after CP_MEM_WRITE=0x%08x\n", busy);
++		return 0;
++	}
++	printf("QCOM GPU EXEC: diagnostic complete; full gen8_start register policy and draw/readback remain pending\n");
+ 	return 1;
+ }
+ 
+@@ -4407,8 +4585,9 @@
+ 		    v, hfi ? "(HFI initialized)" : "(HFI init timeout)");
+ 		if (hfi) {
+ 			uint8_t *hfi_mem = fp6_gmu_range_va(fp6_gmu_hfi_va);
++			unsigned hfi_sequence = 0;
+ 			if (!hfi_mem || !fp6_gmu_hfi_start_sequence(smmu, cb_off, g,
+-			    fp6_smmu_read32(g, 0x3dff0u), hfi_mem)) {
++			    fp6_smmu_read32(g, 0x3dff0u), hfi_mem, &hfi_sequence)) {
+ 				printf("QCOM GMU: HFI startup sequence stopped; GMU will be reset\n");
+ 			} else {
+ 				vm_offset_t gpu = ml_io_map(0x03d00000u, 0x40000u);
+@@ -4428,9 +4607,11 @@
+ 					(void)fp6_gmu_hfi_msgq_dump(hfi_mem);
+ 				} else {
+ 					uint32_t rbbm = fp6_smmu_read32(gpu, 0x048u); /* GEN8_RBBM_STATUS */
+-					printf("QCOM GMU: GPU OOB ACK raw_before=0x%08x raw_after=0x%08x intr_info=0x%08x RBBM_STATUS=0x%08x; status read only\n", raw_before, raw_after, info, rbbm);
++					printf("QCOM GMU: GPU OOB ACK raw_before=0x%08x raw_after=0x%08x intr_info=0x%08x RBBM_STATUS=0x%08x\n", raw_before, raw_after, info, rbbm);
++					if (!fp6_gpu_exec_probe(g, gpu, hfi_mem, &hfi_sequence))
++						printf("QCOM GPU EXEC: diagnostic stopped with GPU OOB held; reset containment follows\n");
+ 					fp6_smmu_write32(g, 0x47650u, 1u << 31); /* Linux oob_clear(oob_gpu) */
+-					printf("QCOM GMU: GPU OOB clear requested; no GPU command submitted\n");
++					printf("QCOM GMU: GPU OOB clear requested\n");
+ 				}
+ 			}
+ 		}

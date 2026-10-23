@@ -32,6 +32,12 @@ class GPUProbeTests(unittest.TestCase):
                     subprocess.run(['git', 'apply', '--include=bsd/dev/sweet_gpu.c',
                                     str(patch)], cwd=work, check=True)
             source = (work / 'bsd/dev/sweet_gpu.c').read_text()
+            self.assertIn('PE_parse_boot_argn("fp6gpuexec"', source,
+                          'SQE/CP execution must remain explicitly opt-in')
+            self.assertIn('fp6_hfi_hdr(131u, cmd_dwords + 1u)', source,
+                          'raw CP packets must use the Gen8 HFI raw-command message')
+            self.assertIn('fp6_cp_type7_packet(0x3du, 3u)', source,
+                          'write/readback probe must use CP_MEM_WRITE')
             self.assertLess(
                 source.index('HFI START ACK; core firmware initialized'),
                 source.index('if (!fp6_gmu_hfi_default_votes('),
@@ -43,6 +49,7 @@ class GPUProbeTests(unittest.TestCase):
             self.assertIn('fp6_smmu_write32(g, 0x4764cu, 0x7fffffffu);', source,
                           'the OOB ACK interrupt must remain unmasked during polling')
             source = source.replace('__asm__ volatile("dsb sy" ::: "memory");', '')
+            source = source.replace('__asm__ volatile("dc ivac, %0" :: "r"(p) : "memory");', '(void)p;')
             for name in ('fp6_gmu_loader.h',):
                 shutil.copyfile(ROOT / 'xnu/helpers' / name, work / name)
             domain_patch = (ROOT / 'xnu/patches/0133-fp6-gmu-persistent-domain.patch').read_text()
@@ -135,6 +142,10 @@ class GPUProbeTests(unittest.TestCase):
             (work / 'fp6_zap_fw.h').write_text(
                 'static const unsigned char fp6_zap_metadata[0xfcc] = {1,2,3};\n'
                 'static const unsigned char fp6_zap_segment[0x378] = {4,5,6};\n')
+            (work / 'fp6_sqe_fw.h').write_text(
+                '#define FP6_SQE_FW_VERSION 0x01100067u\n'
+                '#define FP6_SQE_FW_SIZE 16u\n'
+                'static const unsigned char fp6_sqe_fw[FP6_SQE_FW_SIZE] = {0};\n')
             (work / 'test.c').write_text(HARNESS)
             build = subprocess.run([shutil.which('cc') or 'cc', '-std=c11', '-Wall',
                                     '-Wextra', '-Werror', *os.environ.get('IOS_EXTRA_CFLAGS', '').split(), '-I', str(work),
@@ -557,6 +568,7 @@ int PE_parse_boot_argn(const char *name, void *value, int length)
 		return fp6_mode != 0;
 	}
 	if (strcmp(name, "fp6gmuload") == 0) { return 0; }
+	if (strcmp(name, "fp6gpuexec") == 0) { return 0; }
 	if (strcmp(name, "fp6gmunopreempt") == 0) {
 		assert(length == sizeof(fp6_gmu_no_preempt_mode));
 		if (fp6_gmu_no_preempt_mode) memcpy(value, &fp6_gmu_no_preempt_mode, sizeof(fp6_gmu_no_preempt_mode));
@@ -790,6 +802,16 @@ static void irq_defaults(void)
 
 int main(void)
 {
+    /* PM4 type-7 parity and the opt-in refusal path are independent checks. */
+    assert(fp6_cp_type7_packet(0x17u, 1u) == 0x70970001u);
+    assert(fp6_cp_type7_packet(0x48u, 7u) == 0x70c80007u);
+    assert(fp6_cp_type7_packet(0x3du, 3u) == 0x703d8003u);
+    int writes_before_exec_skip = all_mmio_writes;
+    output[0] = 0;
+    assert(fp6_gpu_exec_probe(0, 0, NULL, NULL));
+    assert(all_mmio_writes == writes_before_exec_skip);
+    assert(strstr(output, "skipped; fp6gpuexec=1 not requested"));
+
     /* Gen8 HFI v5 GET_VALUE returns data in ACK[2], status in ACK[3]. */
     uint32_t hfi_result = 0xffffffffu;
     uint32_t hfi_ack_v5[] = {0, 0, 1, 0};

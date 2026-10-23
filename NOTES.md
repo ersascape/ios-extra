@@ -1,5 +1,27 @@
 # ios-extra — current state
 
+## FP6 SQE/CP execution candidate 0181 (2026-10-23)
+
+Built a bounded opt-in candidate from the 0179 measured OOB state. Patch 0180
+validates the pinned `gen80300_sqe.fw` input (84,564 bytes, version
+`0x01100067`, SHA256
+`38fd00147e8b752dd29c53a0badac8f94b1dbd89dc06f5b1c372d3428cd1b906`) and
+stages its 84,560-byte instruction payload without committing firmware.
+Patch 0181, enabled only by `fp6gpuexec=1`, maps that payload and a writable
+result page through SID0/CB0 TTBR1, starts SQE, submits the A810 Gen8 raw CP
+initialization packet with Linux's optional power-up-list bit disabled, then
+submits `CP_MEM_WRITE` and checks the known result after CPU cache invalidation.
+Each raw request has Linux's 200 ms GPU-busy bound; reset containment and
+permanent backing retention remain active on both success and failure. This
+does not port Linux's full `gen8_start()` register programming, power-up list,
+draw setup or Metal path.
+
+The generated stage header was checked against the pinned blob. The cached XNU
+arm64 compile passed (0/1 failed); GPU harness and ASan/UBSan passed, checking
+PM4 type-7 packet parity and that the test is skipped with no MMIO writes
+unless explicitly enabled. Full host suite passed (13 tests, 5 skipped). CI
+build and phone run are pending; no GPU command success is claimed yet.
+
 ## FP6 GMU OOB ACK result 0179 (2026-10-23)
 
 Source audit found that Linux `gen8_hwsched_hfi_start()` sends HFI `START`,
