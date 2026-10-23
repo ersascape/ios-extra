@@ -78,6 +78,12 @@ class GPUProbeTests(unittest.TestCase):
                           'compute dispatch must remain explicitly opt-in')
             self.assertIn('fp6_cp_type7_packet(0x1fu, 1u); /* CP_RESET_CONTEXT_STATE */', source,
                           'replay must clear BV/BR counters like the Linux gen8 submit path')
+            self.assertIn('video.v_baseAddr != FP6_SCANOUT_PA', source,
+                          'scanout mapping must verify the exact ADT framebuffer geometry first')
+            self.assertIn('#define FP6_SCANOUT_PA 0xe3940000ull', source,
+                          'scanout base must be the ADT / upstream FP6 simple-framebuffer address')
+            self.assertIn('PE_parse_boot_argn("fp6gpuscanout"', source,
+                          'writing into the display framebuffer must be explicitly opt-in')
             self.assertIn('PE_parse_boot_argn("fp6gpureplaycb"', source,
                           'clearing CONCURRENT_BIN_DISABLE must be explicitly opt-in')
             self.assertIn('PE_parse_boot_argn("fp6gpureplaystep"', source,
@@ -223,7 +229,11 @@ class GPUProbeTests(unittest.TestCase):
                                 '#define KMA_PERMANENT 4\n#define VM_KERN_MEMORY_IOKIT 0\n'
                                 'kern_return_t kmem_alloc_contig(vm_map_t, vm_offset_t *, vm_size_t, '
                                 'vm_offset_t, unsigned, unsigned, unsigned, int);\n',
-                'pexpert/pexpert.h': 'int PE_parse_boot_argn(const char *, void *, int);\n',
+                'pexpert/pexpert.h': '#ifndef PEXPERT_STUB_H\n#define PEXPERT_STUB_H\n'
+                                     'int PE_parse_boot_argn(const char *, void *, int);\n'
+                                     'typedef struct PE_Video { unsigned long v_baseAddr, v_rowBytes, '
+                                     'v_width, v_height, v_depth; } PE_Video;\n'
+                                     'int PE_current_console(PE_Video *);\n#endif\n',
             }
             for name, text in headers.items():
                 path = work / name
@@ -254,6 +264,9 @@ class GPUProbeTests(unittest.TestCase):
                            cwd=work / 'replay', check=True)
             subprocess.run(['git', 'apply', '--include=bsd/dev/fp6_gpu_replay_data.h',
                             str(ROOT / 'xnu/patches/0204-fp6-replay-clear-concurrent-bin-disable.patch')],
+                           cwd=work / 'replay', check=True)
+            subprocess.run(['git', 'apply', '--include=bsd/dev/fp6_gpu_replay_data.h',
+                            str(ROOT / 'xnu/patches/0206-fp6-replay-scanout-framebuffer.patch')],
                            cwd=work / 'replay', check=True)
             shutil.copyfile(replay_dir / 'fp6_gpu_replay_data.h', work / 'fp6_gpu_replay_data.h')
             (work / 'test.c').write_text(HARNESS)
@@ -658,6 +671,12 @@ static int probe_printf(const char *fmt, ...)
     va_end(ap);
     assert(count >= 0 && (size_t)count < sizeof(output) - used);
     return count;
+}
+
+int PE_current_console(PE_Video *video)
+{
+    memset(video, 0, sizeof(*video));
+    return -1;
 }
 
 int PE_parse_boot_argn(const char *name, void *value, int length)

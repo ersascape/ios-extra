@@ -10,7 +10,13 @@
  *     FD_RD_DUMP=enable,full FD_RD_DUMP_PATH=DIR ./fp6-vk-draw vert.spv frag.spv
  *
  * Nothing is read back meaningfully under the shim; only the submitted command
- * streams and buffers matter. */
+ * streams and buffers matter.
+ *
+ * Optional screen mode, to make a stream that draws straight into a scanout
+ * framebuffer of the given geometry:
+ *   fp6-vk-draw vert.spv frag.spv SIZE FBW FBH X Y
+ * renders a SIZE x SIZE B8G8R8A8 image and copies it into a FBW x FBH x 4 byte
+ * buffer at pixel (X, Y) with bufferRowLength = FBW (the scanout pitch). */
 #include <stdint.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -19,8 +25,8 @@
 
 #define CHECK(x) do { VkResult r_ = (x); if (r_ != VK_SUCCESS) { \
 	fprintf(stderr, "%s failed: %d (line %d)\n", #x, r_, __LINE__); exit(1); } } while (0)
-#define W 64
-#define H 64
+static unsigned W = 64, H = 64;
+static unsigned FBW, FBH, FBX, FBY; /* screen mode when FBW != 0 */
 
 static uint32_t *load(const char *path, size_t *size)
 {
@@ -57,7 +63,19 @@ static VkShaderModule module(VkDevice dev, const char *path)
 
 int main(int argc, char **argv)
 {
-	if (argc != 3) { fprintf(stderr, "usage: %s vert.spv frag.spv\n", argv[0]); return 2; }
+	if (argc != 3 && argc != 8) {
+		fprintf(stderr, "usage: %s vert.spv frag.spv [SIZE FBW FBH X Y]\n", argv[0]);
+		return 2;
+	}
+	if (argc == 8) {
+		W = H = (unsigned)atoi(argv[3]);
+		FBW = (unsigned)atoi(argv[4]); FBH = (unsigned)atoi(argv[5]);
+		FBX = (unsigned)atoi(argv[6]); FBY = (unsigned)atoi(argv[7]);
+		if (!W || !FBW || !FBH || FBX + W > FBW || FBY + H > FBH) {
+			fprintf(stderr, "bad geometry\n");
+			return 2;
+		}
+	}
 	VkApplicationInfo app = { VK_STRUCTURE_TYPE_APPLICATION_INFO, 0, "fp6-vk-draw", 1, "none", 1,
 	    VK_API_VERSION_1_1 };
 	VkInstanceCreateInfo ici = { VK_STRUCTURE_TYPE_INSTANCE_CREATE_INFO, 0, 0, &app };
@@ -79,7 +97,8 @@ int main(int argc, char **argv)
 	vkGetDeviceQueue(dev, 0, 0, &queue);
 
 	VkImageCreateInfo img = { VK_STRUCTURE_TYPE_IMAGE_CREATE_INFO };
-	img.imageType = VK_IMAGE_TYPE_2D; img.format = VK_FORMAT_R8G8B8A8_UNORM;
+	img.imageType = VK_IMAGE_TYPE_2D;
+	img.format = FBW ? VK_FORMAT_B8G8R8A8_UNORM : VK_FORMAT_R8G8B8A8_UNORM;
 	img.extent = (VkExtent3D){ W, H, 1 }; img.mipLevels = 1; img.arrayLayers = 1;
 	img.samples = VK_SAMPLE_COUNT_1_BIT; img.tiling = VK_IMAGE_TILING_OPTIMAL;
 	img.usage = VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT | VK_IMAGE_USAGE_TRANSFER_SRC_BIT;
@@ -99,7 +118,8 @@ int main(int argc, char **argv)
 	VkImageView view;
 	CHECK(vkCreateImageView(dev, &vci, 0, &view));
 
-	VkBufferCreateInfo bci = { VK_STRUCTURE_TYPE_BUFFER_CREATE_INFO, 0, 0, W * H * 4,
+	VkBufferCreateInfo bci = { VK_STRUCTURE_TYPE_BUFFER_CREATE_INFO, 0, 0,
+	    FBW ? (VkDeviceSize)FBW * FBH * 4 : (VkDeviceSize)W * H * 4,
 	    VK_BUFFER_USAGE_TRANSFER_DST_BIT };
 	VkBuffer buf;
 	CHECK(vkCreateBuffer(dev, &bci, 0, &buf));
@@ -166,14 +186,15 @@ int main(int argc, char **argv)
 	CHECK(vkAllocateCommandBuffers(dev, &cbai, &cmd));
 	VkCommandBufferBeginInfo bi = { VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO };
 	CHECK(vkBeginCommandBuffer(cmd, &bi));
-	VkClearValue clear = { .color = { { 0.0f, 0.0f, 0.0f, 1.0f } } };
+	VkClearValue clear = { .color = { { 0.0f, 0.0f, FBW ? 0.3f : 0.0f, 1.0f } } };
 	VkRenderPassBeginInfo rpbi = { VK_STRUCTURE_TYPE_RENDER_PASS_BEGIN_INFO, 0, rp, fb,
 	    { { 0, 0 }, { W, H } }, 1, &clear };
 	vkCmdBeginRenderPass(cmd, &rpbi, VK_SUBPASS_CONTENTS_INLINE);
 	vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, pipe);
 	vkCmdDraw(cmd, 3, 1, 0, 0);
 	vkCmdEndRenderPass(cmd);
-	VkBufferImageCopy copy = { 0, 0, 0, { VK_IMAGE_ASPECT_COLOR_BIT, 0, 0, 1 }, { 0, 0, 0 }, { W, H, 1 } };
+	VkBufferImageCopy copy = { FBW ? ((VkDeviceSize)FBY * FBW + FBX) * 4 : 0, FBW, 0,
+	    { VK_IMAGE_ASPECT_COLOR_BIT, 0, 0, 1 }, { 0, 0, 0 }, { W, H, 1 } };
 	vkCmdCopyImageToBuffer(cmd, image, VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL, buf, 1, &copy);
 	CHECK(vkEndCommandBuffer(cmd));
 	VkSubmitInfo si = { VK_STRUCTURE_TYPE_SUBMIT_INFO, 0, 0, 0, 0, 1, &cmd };

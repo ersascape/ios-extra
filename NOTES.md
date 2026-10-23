@@ -1,5 +1,24 @@
 # ios-extra — current state
 
+## FP6 display stage 1: GPU copy into the scanout framebuffer, candidate 0206 (2026-10-23)
+
+Source/host only; no phone result yet. The ADT's `sweet-fbcon` node and upstream
+FP6 DTS give the bootloader's simple-framebuffer: `0xe3940000`, 1116x2484, stride
+4464, 32 bpp; the kernel's own display code treats it as BGRA (`0xAARRGGBB`
+words). Patch 0206 replays a Mesa Turnip A810 capture whose copy target is a
+buffer with `bufferRowLength = 1116`: a 512x512 B8G8R8A8 triangle copied to
+screen pixel (302, 986) of an 1116x2484 buffer (`tools/fp6-vk-draw.c` screen
+mode, captured with `TU_GMEM=622592 TU_DEBUG=sysmem,noubwc`; two command streams,
+4092 and 3919 dwords; 312 anonymous pages plus an 11 MB zero scanout BO). The
+generator (`tools/fp6-gen-replay.py`, `scanout=FBW,FBH,X,Y,SIZE`) omits the
+scanout BO's pages; the kernel maps the real framebuffer pages at that BO's VA in
+the TTBR0 address space (after verifying base, size and stride from
+`PE_current_console`), submits both IBs, then reads the screen region back through
+an uncached mapping and counts triangle-coloured words (expect ~32768) with a
+64x64 sampled preview. Opt-in: `fp6gpureplay=1 fp6gpuscanout=1 fp6gpureplaycb=1`.
+Host tests and arm64 compile pass; CI and phone pending. Whether the display keeps
+scanning that memory unchanged after the bootloader handoff is unmeasured.
+
 ## FP6 triangle rendered and read back 0205 (2026-10-23)
 
 **Phone measured:** CI `39966763160` (head `19190d4d7380858b22cb468a60d9e2723bc3c29d`)

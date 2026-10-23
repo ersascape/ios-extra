@@ -20,14 +20,15 @@ import struct
 import sys
 
 RD_GPUADDR, RD_BUFFER_CONTENTS, RD_CMDSTREAM_ADDR, RD_CHIP_ID = 3, 12, 6, 14
-CHECK = {'add5': 0, 'color': 1}
+CHECK = {'add5': 0, 'color': 1, 'scanout': 2}
 PAGE = 4096
-SMALL_BO = 0x40000  # map every page of BOs up to this size; otherwise sparse
+SMALL_BO = 0x200000  # map every page of BOs up to this size; otherwise sparse
+SCANOUT_MIN = 0x800000  # a zero BO at least this big is the scanout framebuffer
 
 
 def parse(path):
     data = gzip.open(path).read()
-    off, bos, cur, cmd, chip = 0, [], None, None, None
+    off, bos, cur, cmd, chip = 0, [], None, [], None
     while off < len(data):
         kind, size = struct.unpack_from('<II', data, off)
         off += 8
@@ -40,7 +41,7 @@ def parse(path):
             bos.append((cur[0], cur[1], payload))
         elif kind == RD_CMDSTREAM_ADDR:
             lo, dwords, hi = struct.unpack_from('<III', payload)
-            cmd = ((hi << 32) | lo, dwords)
+            cmd.append(((hi << 32) | lo, dwords))
         elif kind == RD_CHIP_ID:
             chip = struct.unpack_from('<I', payload)[0]
     return bos, cmd, chip
@@ -88,9 +89,20 @@ def build(path, check):
     bos, cmd, chip = parse(path)
     if chip != 0x44010000:
         raise SystemExit('%s is not an A810 capture: chip 0x%x' % (path, chip or 0))
-    cmd_va, cmd_dwords = cmd
+    if not 1 <= len(cmd) <= 2:
+        raise SystemExit('%s: expected one or two command streams, found %d' % (path, len(cmd)))
+    cmd_va, cmd_dwords = cmd[0]
+    ib2_va, ib2_dwords = cmd[1] if len(cmd) == 2 else (0, 0)
+    scanout = None
+    if check == 'scanout':
+        big = [(b, sz) for b, sz, bl in bos if sz >= SCANOUT_MIN and not any(bl)]
+        if len(big) != 1:
+            raise SystemExit('%s: expected exactly one zero scanout BO, found %d' % (path, len(big)))
+        scanout = big[0]
     pages, zero_bo_pages = {}, set()
     for base, size, blob in bos:
+        if scanout and base == scanout[0]:
+            continue  # backed by the real framebuffer on the device
         w = words(blob)
         for p in range(0, size, PAGE):
             chunk = w[p // 4:(p + PAGE) // 4]
@@ -102,13 +114,26 @@ def build(path, check):
                     zero_bo_pages.add(base + p)
     # Sparse (large) BOs also need the pages the stream names as pointers.
     stream_bo = next((b, s, bl) for b, s, bl in bos if b <= cmd_va < b + s)
+    if ib2_va:
+        stream2 = next((b, s, bl) for b, s, bl in bos if b <= ib2_va < b + s)
+        sw2 = words(stream2[2][ib2_va - stream2[0]:ib2_va - stream2[0] + ib2_dwords * 4])
+    else:
+        sw2 = []
     sw = words(stream_bo[2][cmd_va - stream_bo[0]:cmd_va - stream_bo[0] + cmd_dwords * 4])
-    for i, v in enumerate(sw[:-2]):
-        for base, size, _ in bos:
-            if base <= v < base + size and (sw[i + 1] == 0 or (
-                    i and sw[i - 1] < 0x10000 and sw[i + 1] < 0x10000 and sw[i + 2] == 0)):
-                pages.setdefault(base + ((v - base) // PAGE) * PAGE, [])
+    for stream in (sw, sw2):
+        for i, v in enumerate(stream[:-2]):
+            for base, size, _ in bos:
+                if scanout and base == scanout[0]:
+                    continue
+                if base <= v < base + size and (stream[i + 1] == 0 or (
+                        i and stream[i - 1] < 0x10000 and stream[i + 1] < 0x10000 and stream[i + 2] == 0)):
+                    pages.setdefault(base + ((v - base) // PAGE) * PAGE, [])
+    if scanout:
+        for va in [v for v in pages if scanout[0] <= v < scanout[0] + scanout[1]]:
+            del pages[va]
     result = {'pages': pages, 'ib_va': cmd_va, 'ib_dwords': cmd_dwords, 'steps': packet_ends(sw), 'cbd': cbd_payloads(bos),
+              'ib2_va': ib2_va, 'ib2_dwords': ib2_dwords,
+              'scanout_va': scanout[0] if scanout else 0, 'scanout_bytes': scanout[1] if scanout else 0,
               'check': check, 'check_va': 0, 'elements': 0, 'init': []}
     if check == 'add5':
         # The UAV descriptor (TYPE=TEX_BUFFER, nonzero count) names the data buffer.
@@ -150,6 +175,7 @@ def main():
            '#define FP6_GPU_REPLAY_DATA_H',
            '#define FP6_REPLAY_CHECK_ADD5  0u',
            '#define FP6_REPLAY_CHECK_COLOR 1u',
+           '#define FP6_REPLAY_CHECK_SCANOUT 2u',
            'struct fp6_replay_page {',
            '\tuint64_t va;',
            '\tconst uint32_t *pairs; /* (dword index, value) pairs; NULL for a zero page */',
@@ -169,13 +195,25 @@ def main():
            '\tunsigned nsteps;',
            '\tconst uint64_t *cbd; /* CP_THREAD_CONTROL payload addresses with CONCURRENT_BIN_DISABLE */',
            '\tunsigned ncbd;',
+           '\tuint64_t ib2_va; /* optional second command stream (0 = none) */',
+           '\tunsigned ib2_dwords;',
+           '\tuint64_t scanout_va; /* BO the device backs with the real framebuffer (0 = none) */',
+           '\tunsigned scanout_bytes;',
+           '\tunsigned fbw, fbh, tri_x, tri_y, tri_size;',
            '};']
     rows, summary = [], []
     for spec in specs:
-        name, path, check = spec.split(':')
+        name, path, check = spec.split(':', 2)
+        geometry = (0, 0, 0, 0, 0)
+        if check.startswith('scanout='):
+            geometry = tuple(int(v) for v in check.split('=', 1)[1].split(','))
+            if len(geometry) != 5:
+                raise SystemExit('scanout needs FBW,FBH,X,Y,SIZE')
+            check = 'scanout'
         if check not in CHECK or not re.fullmatch(r'[a-z0-9_]+', name):
             raise SystemExit('bad spec %r' % spec)
         r = build(path, check)
+        r['geometry'] = geometry
         page_rows = []
         for va in sorted(r['pages']):
             flat = [x for pair in r['pages'][va] for x in pair]
@@ -195,13 +233,15 @@ def main():
         if cbd:
             out.append(cbd)
         rows.append('\t{ "%s", fp6_replay_%s_pages, %d, 0x%xull, %d, FP6_REPLAY_CHECK_%s,\n'
-                    '\t  0x%xull, %d, %s, fp6_replay_%s_steps, %d, %s, %d },' % (name, name, len(page_rows), r['ib_va'],
+                    '\t  0x%xull, %d, %s, fp6_replay_%s_steps, %d, %s, %d,' % (name, name, len(page_rows), r['ib_va'],
                                                 r['ib_dwords'], check.upper(), r['check_va'],
                                                 r['elements'],
                                                 'fp6_replay_%s_init' % name if r['init'] else 'NULL',
                                                 name, len(r['steps']),
                                                 'fp6_replay_%s_cbd' % name if r['cbd'] else 'NULL',
-                                                len(r['cbd'])))
+                                                len(r['cbd'])) +
+                    '\n\t  0x%xull, %d, 0x%xull, %d, %d, %d, %d, %d, %d },' % (
+                        r['ib2_va'], r['ib2_dwords'], r['scanout_va'], r['scanout_bytes'], *r['geometry']))
         summary.append('%s: %d pages (%d with data) ib=0x%x/%d dwords check=%s'
                        % (name, len(page_rows), sum(1 for v in r['pages'].values() if v),
                           r['ib_va'], r['ib_dwords'], check))
