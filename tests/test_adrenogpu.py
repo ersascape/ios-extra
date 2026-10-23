@@ -10,14 +10,15 @@ DRIVER = ROOT / 'drivers' / 'adrenogpu'
 
 
 class AdrenoGpuCoreTests(unittest.TestCase):
-    def run_core(self, source, test, expected):
+    def run_core(self, sources, test, expected):
         cc = shutil.which('cc')
         if not cc:
             self.skipTest('no host C compiler')
         with tempfile.TemporaryDirectory(prefix='adrenogpu-') as work:
             exe = Path(work) / 'test'
             build = subprocess.run([cc, '-std=c11', '-Wall', '-Wextra', '-Werror', '-fsanitize=address,undefined',
-                                    '-I', str(DRIVER), str(DRIVER / source), str(DRIVER / test), '-o', str(exe)],
+                                    '-I', str(DRIVER), *[str(DRIVER / name) for name in sources.split()],
+                                    str(DRIVER / test), '-o', str(exe)],
                                    capture_output=True, text=True)
             self.assertEqual(build.returncode, 0, build.stderr)
             run = subprocess.run([str(exe)], capture_output=True, text=True)
@@ -29,6 +30,12 @@ class AdrenoGpuCoreTests(unittest.TestCase):
         self.run_core('adrenogpu_vm.c', 'test_vm.c', [
             'PASS: descriptor matches the proven FP6_AS_PTE_PAGE',
             'PASS: a failed map_range leaves nothing mapped'])
+
+    def test_context_core(self):
+        self.run_core('adrenogpu_vm.c adrenogpu_ctx.c', 'test_ctx.c', [
+            'PASS: a scattered buffer object is mapped page by page',
+            'PASS: a failed mapping leaves nothing behind and can be retried',
+            'PASS: fences are ordered and survive 32-bit wrap'])
 
     def test_ring_framing(self):
         self.run_core('adrenogpu_ring.c', 'test_ring.c', [
