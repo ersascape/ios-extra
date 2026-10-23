@@ -300,6 +300,9 @@ class GPUProbeTests(unittest.TestCase):
             subprocess.run(['git', 'apply', '--include=bsd/dev/fp6_gpu_replay_data.h',
                             str(ROOT / 'xnu/patches/0218-fp6-replay-texture-variant-batch.patch')],
                            cwd=work / 'replay', check=True)
+            subprocess.run(['git', 'apply', '--include=bsd/dev/fp6_gpu_replay_data.h',
+                            str(ROOT / 'xnu/patches/0219-fp6-replay-flush-variants.patch')],
+                           cwd=work / 'replay', check=True)
             shutil.copyfile(replay_dir / 'fp6_gpu_replay_data.h', work / 'fp6_gpu_replay_data.h')
             (work / 'test.c').write_text(HARNESS)
             build = subprocess.run([shutil.which('cc') or 'cc', '-std=c11', '-Wall',

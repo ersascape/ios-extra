@@ -8,7 +8,10 @@ used, so the command stream can be replayed unchanged through a
 CP_INDIRECT_BUFFER. Pages are stored sparsely as (dword index, value) pairs;
 zero pages carry no data.
 
-  fp6-gen-replay.py OUT.h NAME:CAPTURE.rd:CHECK [...]
+  fp6-gen-replay.py OUT.h NAME:CAPTURE.rd:CHECK[:inject=KEY+KEY...] [...]
+
+inject=KEYS (ccu_clean, ccu_inv, cache_clean, cache_inv, wfi) inserts those cache events before the
+draw packet, for A/B tests of which flush the hardware needs.
 
 CHECK is `add5` (computerator buf-init: every element of the UAV buffer grew by
 5) or `color` (a Vulkan draw: count RGBA8 words equal to 0xff4080ff in the
@@ -88,13 +91,82 @@ def cbd_payloads(bos):
     return out
 
 
-def build(path, check, grid=None):
+INJECT = {  # CP_EVENT_WRITE7 events (adreno_pm4.xml) and wait-for-idle, as Turnip's flushall emits them
+    'ccu_clean': [('event', 0x21), ('event', 0x20)],
+    'ccu_inv': [('event', 0x19), ('event', 0x18)],
+    'cache_clean': [('event', 0x31)],
+    'cache_inv': [('event', 0x33)],
+    'wfi': [('wfi', 0)],
+}
+
+
+def pkt7(op, count):
+    def odd(x):
+        return bin(x).count('1') & 1 ^ 1
+    return 0x70000000 | count | (odd(count) << 15) | (op << 16) | (odd(op) << 23)
+
+
+def inject_words(keys):
+    words = []
+    for key in keys:
+        for kind, arg in INJECT[key]:
+            if kind == 'event':
+                words += [pkt7(0x46, 1), arg]
+            else:
+                words += [pkt7(0x26, 0)]
+    return words
+
+
+def inject_before_draw(bos, cmd_va, cmd_dwords, keys):
+    """Insert packets before CP_DRAW_INDX_OFFSET and grow the CP_INDIRECT_BUFFER that runs that stream."""
+    extra = inject_words(keys)
+    draws = []
+    for index, (base, size, blob) in enumerate(bos):
+        w = words(blob)
+        for i, h in enumerate(w):
+            if h >> 28 == 7 and (h >> 16) & 0x7f == 0x38 and (h & 0x3fff) in (3, 7):
+                draws.append((index, base, i))
+    if len(draws) != 1:
+        raise SystemExit('inject: expected one draw packet, found %d' % len(draws))
+    bo_index, bo_base, at = draws[0]
+    base, size, blob = bos[bo_index]
+    w = words(blob)
+    if w[-len(extra):] != [0] * len(extra):
+        raise SystemExit('inject: no room at the end of the draw stream buffer')
+    w = w[:at] + extra + w[at:len(w) - len(extra)]
+    bos[bo_index] = (base, size, struct.pack('<%dI' % len(w), *w))
+    # The stream that calls it: its CP_INDIRECT_BUFFER covers the draw's address.
+    draw_va = bo_base + 4 * at
+    owner = next((i for i, (b, s, bl) in enumerate(bos) if b <= cmd_va < b + s))
+    ob, osz, oblob = bos[owner]
+    ow = words(oblob)
+    start = (cmd_va - ob) // 4
+    i = start
+    patched = 0
+    while i < start + cmd_dwords:
+        h = ow[i]
+        count = h & 0x3fff if h >> 28 == 7 else (h & 0x7f)
+        if h >> 28 == 7 and (h >> 16) & 0x7f == 0x3f and count == 3:
+            lo, hi, ibsz = ow[i + 1], ow[i + 2], ow[i + 3]
+            va = lo | (hi << 32)
+            if va <= draw_va < va + 4 * (ibsz & 0xfffff):
+                ow[i + 3] = (ibsz & ~0xfffff) | ((ibsz & 0xfffff) + len(extra))
+                patched += 1
+        i += 1 + count
+    if patched != 1:
+        raise SystemExit('inject: expected one CP_INDIRECT_BUFFER covering the draw, found %d' % patched)
+    bos[owner] = (ob, osz, struct.pack('<%dI' % len(ow), *ow))
+
+
+def build(path, check, grid=None, inject=()):
     bos, cmd, chip = parse(path)
     if chip != 0x44010000:
         raise SystemExit('%s is not an A810 capture: chip 0x%x' % (path, chip or 0))
     if not 1 <= len(cmd) <= 2:
         raise SystemExit('%s: expected one or two command streams, found %d' % (path, len(cmd)))
     cmd_va, cmd_dwords = cmd[0]
+    if inject:
+        inject_before_draw(bos, cmd_va, cmd_dwords, inject)
     ib2_va, ib2_dwords = cmd[1] if len(cmd) == 2 else (0, 0)
     scanout = None
     if check == 'scanout':
@@ -218,7 +290,15 @@ def main():
            '};']
     rows, summary = [], []
     for spec in specs:
-        name, path, check = spec.split(':', 2)
+        fields = spec.split(':')
+        name, path, check = fields[:3]
+        inject = ()
+        for extra in fields[3:]:
+            if not extra.startswith('inject='):
+                raise SystemExit('bad spec option %r' % extra)
+            inject = tuple(extra.split('=', 1)[1].split('+'))
+            if any(k not in INJECT for k in inject):
+                raise SystemExit('unknown inject key in %r (have %s)' % (extra, ', '.join(sorted(INJECT))))
         geometry = (0, 0, 0, 0, 0)
         if check.startswith('scanout='):
             geometry = tuple(int(v) for v in check.split('=', 1)[1].split(','))
@@ -234,7 +314,7 @@ def main():
             if len(grid) != 256:
                 raise SystemExit('%s: grid reference needs 256 words, has %d' % (spec, len(grid)))
             check = 'grid'
-        r = build(path, check, grid)
+        r = build(path, check, grid, inject)
         r['geometry'] = geometry
         page_rows = []
         for va in sorted(r['pages']):
