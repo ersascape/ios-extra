@@ -6,11 +6,13 @@ After the 0185 executable SQE mapping changed the reported access to a data
 read but left a permission fault, patch 0186 adds read-only CB0/CB4 snapshots:
 CBAR/CBA2R, SCTLR/ACTLR, TTBRs, TCR/TCR2, MAIR, FSR/FAR/FSYNR, and Qualcomm
 CBFRSYNRA attribution. It also logs the exact software-walk descriptors and
-SQE leaf PTE for the faulting IOVA, plus the live GPU stream route. This is
-designed to test whether the reported S1CBNDX=4 points to a distinct live
-context or whether the CB0 snapshot matches the actual faulting SID. Linux
-Qualcomm SMMU code uses CBFRSYNRA indexed by context bank in its GPU fault
-reporting path; source evidence is not a phone result.
+SQE leaf PTE for the faulting IOVA, plus the live GPU stream route. This should
+identify the SID using CBFRSYNRA0 and expose the live CB0 translation state.
+ARM SMMUv2 specifies S1CBNDX as unknown for stage-1 translation; this SMMU has
+IDR0.NTS clear, so `S1CBNDX=4` is not evidence of CB4 involvement. The CB4
+sample is ancillary. Linux Qualcomm SMMU code uses CBFRSYNRA indexed by
+context bank in its GPU fault reporting path; source evidence is not a phone
+result.
 
 Commit `a0a0f83d6fbc09c4a231f00a27d45d630a76ec4c` passed CI
 `39919610871`; the new code also compiled as one file against the 0185 CI
@@ -22,7 +24,7 @@ It uses the exact kernel/ADT from that CI run and the verified stock DTB
 Packaging round-trip passed. Phone validation has not run: the required
 pre-boot `fastboot devices` check found zero devices. Next, once the phone is
 visible in fastboot, run one temporary boot with user-mode USB capture and
-decode the CB0/CB4 fault attribution and SQE PTE. No flash, EDL or
+decode CBFRSYNRA0, CB0 state, the active route and SQE PTE. No flash, EDL or
 `fastboot getvar` was used.
 
 ## FP6 SQE executable-map test 0185 (2026-10-23)
@@ -150,9 +152,10 @@ Phone measurement: after CP init, CB0 FSR=`0x408`, FAR=`0x1ff800000b000`
 busy/CP status tuple matches 0183. Linux ARM SMMUv2 field definitions decode
 FSR `0x408` as UUT (bit 8) plus PF (bit 3); FSYNR0 has PLVL=3, WNR=0 (read),
 IND=1, and S1CBNDX=4. This is evidence of a faulting read at the expected SQE
-IOVA, despite the CPU page-table walk and software mapping checks. The
-S1CBNDX value differs from the CB0 register bank where FSR was sampled; its
-meaning for this stream/context configuration remains to be verified. No
+IOVA, despite the CPU page-table walk and software mapping checks. ARM SMMUv2
+specifies S1CBNDX as unknown for stage-1 translation; this SMMU reports
+IDR0.NTS=0, so the value `4` does not indicate CB4. CBFRSYNRA0 is needed to
+confirm the faulting SID. No
 `CP_MEM_WRITE` was submitted, and there is no GPU write/readback or draw result.
 
 Source comparison changes the leading diagnosis: ARM defines FSYNR0.IND as
@@ -164,9 +167,10 @@ only to SQE pages. Its host TTBR1 test verifies SQE XN bits clear and data XN
 bits stay set; the full 13-test suite (5 skipped), GPU-probe ASan/UBSan test,
 and local arm64 compile against the 0184 CI buildtree pass. CI and phone
 validation are pending. This is a source-supported fix hypothesis, not yet a
-device-confirmed resolution. If the next phone log still faults, capture
-CBFRSYNRA0, live CB0 registers and the SQE walk descriptors; also resolve the
-reported S1CBNDX=4 / CB0 attribution difference before further startup changes.
+device-confirmed resolution. If the next phone log still faults, use
+CBFRSYNRA0, live CB0 registers and the SQE walk descriptors to confirm the SID,
+effective translation context and leaf permissions before further startup
+changes.
 
 ## FP6 GMU OOB ACK result 0179 (2026-10-23)
 

@@ -1,12 +1,14 @@
 ## FP6 SMMU fault attribution snapshot 0186 (2026-10-23)
 
-Patch 0186 adds read-only CB0 and CB4 context-bank state, including
-CBFRSYNRA0/4, live SID0 stream route, fault registers from each bank, and the
-CPU-visible L0/L1/L2/SQE leaf descriptors for the recorded FAR. The purpose is
-to resolve why FSYNR0 reports S1CBNDX=4 while prior snapshots sampled CB0, and
-to distinguish a context/route mismatch from a bad SQE PTE. Linux Qualcomm
-SMMU fault reporting reads CBFRSYNRA for the selected context bank. This is
-source-guided instrumentation; no hardware observation is yet available.
+Patch 0186 adds read-only CB0 and CB4 snapshots, including CBFRSYNRA0/4, the
+live SID0 stream route, fault registers and CPU-visible L0/L1/L2/SQE leaf
+descriptors for the recorded FAR. ARM SMMUv2 specifies S1CBNDX as unknown for
+stage-1 translation, and this SMMU reports IDR0.NTS=0. Thus FSYNR0's
+`S1CBNDX=4` is not evidence that CB4 handled the fault; the CB4 sample is
+ancillary. The useful evidence will be CBFRSYNRA0, CB0 translation state, the
+active route and SQE leaf PTE. Linux Qualcomm SMMU fault reporting also reads
+CBFRSYNRA for the selected bank. This is source-guided instrumentation; no
+hardware observation is yet available.
 
 Commit `a0a0f83d6fbc09c4a231f00a27d45d630a76ec4c` passed CI
 `39919610871`; full host suite passed (13 tests, 5 skipped), and the changed
@@ -128,10 +130,11 @@ FSYNR1=`0`. Busy=`0x70880004`, busy2=`0x12`, mask=`0`, RBBM=`0x00880005`,
 CP interrupt registers=`0`, SQE status=`0xdeafbead`. Values are unchanged
 after the no-ZAP secure-trust write. Linux ARM SMMUv2 definitions identify
 FSR bits 8/3 as UUT/PF; FSYNR0 fields decode as PLVL=3, WNR=0, IND=1, and
-S1CBNDX=4. The fault is on a read at the SQE base IOVA. The reported S1CBNDX
-does not match the CB0 bank from which FSR was read, so bank/stream attribution
-needs corroboration (especially CBFRSYNRA0 and the live CB0 translation
-registers). The mapped SQE VA therefore is not yet proven usable by the GPU.
+S1CBNDX=4. The fault is on a read at the SQE base IOVA. IDR0.NTS=0 and the
+context is stage 1, for which ARM SMMUv2 defines S1CBNDX as unknown; `4` does
+not identify CB4. CBFRSYNRA0 and live CB0 registers are needed to confirm the
+faulting SID and translation state. The mapped SQE VA therefore is not yet
+proven usable by the GPU.
 CP memory write remains refused before submission; no GPU write/readback or
 draw has succeeded.
 
@@ -145,8 +148,8 @@ result buffers keep both XN bits. The host domain test now checks these two
 distinct PTE policies. Full suite (13 tests, 5 skipped), GPU-probe ASan/UBSan,
 patch application and local arm64 compilation against the 0184 CI buildtree
 pass. CI and phone validation are pending. This is a reasoned fix hypothesis;
-it is not device-confirmed yet. `S1CBNDX=4` while FSR was read from CB0 and the
-additional UUT bit remain to be explained if the fault persists.
+it is not device-confirmed yet. The additional UUT bit remains to be explained
+if the fault persists.
 
 ## FP6 default HFI votes and GPU OOB ACK result 0179 (2026-10-23)
 
