@@ -1,5 +1,29 @@
 # ios-extra — current state
 
+## FP6 SQE executable-map test 0185 (2026-10-23)
+
+Patch 0185 (`898c5145b9f1123c54d128df57f3cb0b5fa9e692`) passed CI
+`39916509697`. The CI kernel/ADT were packaged with the locally verified
+stock DTB into `/tmp/ios-extra-run-0185/package/fp6-sqe-executable-0185.img`
+(SHA256 `28d4ddd2289a5221bf212f3fe2bda52d35a3a1c0526fb6cb06aa0a4a4b9acea2`).
+One temporary boot completed, USB ECM came up, and 92 packets / 24,016 bytes
+were captured in `/tmp/ios-extra-run-0185/logs/phone-0185-sqe-executable.udp`;
+decoded log: `/tmp/ios-extra-run-0185/logs/phone-0185-sqe-executable.txt`.
+The phone answered ping. No partition was flashed.
+
+**Phone measured:** HFI START, default GPU and bus votes, and GPU OOB still
+ACK. CP init still faults before `CP_MEM_WRITE` is submitted. CB0 FSR remains
+`0x80000408`; FAR is now `0x1ff8000016780`, FSYNR0=`0x00040003`, FSYNR1=`0`.
+The SQE mapping starts at `0x1ff800000b000`; the fault offset is `0xbc80`,
+inside the 84,560-byte (`0x14a50`) SQE payload. FSYNR0.IND changed from 1 in
+0184 to 0, so the new syndrome describes a data access rather than the prior
+instruction access. This is a changed fault location/access type after the
+executable PTE change, but the permission fault remains; 0185 did not get CP
+initialization or GPU execution working. No GPU write/readback, draw, or Metal
+output has succeeded. Next, inspect the live CB0 configuration, CBFRSYNRA0,
+and exact SQE page descriptors, then compare with Linux's Gen8 SQE memory and
+SMMU setup before another phone build.
+
 ## FP6 SQE/CP execution attempt 0181 and pagewise fix 0182 (2026-10-23)
 
 Patch 0180 validates pinned `gen80300_sqe.fw` (84,564 bytes, version

@@ -1,3 +1,24 @@
+## FP6 SQE executable-map test 0185 (2026-10-23)
+
+Patch 0185 (`898c5145b9f1123c54d128df57f3cb0b5fa9e692`) passed CI
+`39916509697`. The CI kernel/ADT and verified stock DTB were packaged as
+`/tmp/ios-extra-run-0185/package/fp6-sqe-executable-0185.img`, SHA256
+`28d4ddd2289a5221bf212f3fe2bda52d35a3a1c0526fb6cb06aa0a4a4b9acea2`.
+One temporary boot completed and USB ECM captured 92 packets / 24,016 bytes;
+decoded and raw logs are in `/tmp/ios-extra-run-0185/logs/` as
+`phone-0185-sqe-executable.txt` and `.udp`. The phone answered ping.
+
+**Phone measured:** HFI START, default GPU and bus votes, and OOB ACK remain
+successful. After CP init, CB0 FSR=`0x80000408`, FAR=`0x1ff8000016780`,
+FSYNR0=`0x00040003`, FSYNR1=`0`. SQE begins at GPU VA `0x1ff800000b000`, so
+FAR is offset `0xbc80`, within the 84,560-byte (`0x14a50`) firmware payload.
+FSYNR0.IND is now 0 (data access), changed from 1 (instruction access) in
+0184. The SQE executable PTE changed the observed access type/location, but
+the permission fault persists and CP init still does not complete. The probe
+refused `CP_MEM_WRITE`; no GPU write/readback, draw, or Metal output exists.
+Next inspect CBFRSYNRA0, live CB0 translation state and the exact SQE page
+descriptors, then compare those with Linux Gen8 setup before another build.
+
 ## FP6 SQE/CP probe and busy transition 0181/0182; diagnostic 0183 (2026-10-23)
 
 Patch 0181 commit `ce2dfe3b0fd0b9a0ad309427d64cdac0d4e18e7b` passed CI run
