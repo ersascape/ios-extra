@@ -1,15 +1,51 @@
 # ios-extra — current state
 
+## FP6 HFI message-queue diagnostics candidate 0176 (2026-10-23)
+
+- Patch `0176-fp6-gmu-hfi-message-queue-dump.patch` adds a bounded, read-only
+  snapshot of HFI queue 1 on OOB timeout: validates the ring, prints at most
+  eight messages and sixteen dwords per message, and does not advance the
+  consumer index. Linux services asynchronous GMU events through HFI queues;
+  0175 only inspected the separate debug queue. It does not change OOB,
+  power sequencing or GPU access. The patch applies to the 0175 CI source;
+  local arm64 object compilation (0/1 failed) and `tests/test_gpu_probe.py`
+  pass. CI build and phone measurement remain pending.
+
+## FP6 GMU OOB transient diagnostics phone result 0175 (2026-10-23)
+
+- Commit `5c2a0e76c418284baddf843aab4b860a79a93e50` passed CI run
+  `39896663901`; the CI kernel SHA256 is
+  `88dd0aaad89633dcc64f5b00328e435909c4e7a8acb9a50f64552f0b61811cf7`.
+  Hosted boot-image packaging skipped because `FP6_STOCK_DTB_URL` is unset.
+  Packaged the exact kernel/ADT with the verified stock DTB and bounded
+  ramdisk. Image:
+  `/tmp/ios-extra-run-39896663901/package/fp6-gmu-oob-diag-0175/fp6-gmu-oob-diag-0175.img`
+  (SHA256 `ac38ef2134de3c92c3897ee13973945e2aabefaff1243993500914227b8d8a65`).
+- One temporary boot of the correctly flagged image succeeded with user-mode
+  USB capture; no flash or EDL was used. Log and raw UDP are
+  `/tmp/ios-extra-run-39896663901/logs/phone-0175-gmu-oob-diag.txt` and `.udp`,
+  SHA256 `855b983546dccc2589f700d4fc77b3f05d7e39481bd41a18f3939fbdbbc648e7`
+  (91 packets). Fastboot transcript SHA256 is
+  `b17dd038b86609a8d8b3292dafd33a104def1c4e8ae6d32aad1cccf9856f32da`.
+- **Phone measured:** HFI perf/BW tables, feature controls, core-FW start, and
+  context-queue query ACKed (`context queues=1`). OOB timed out before HFI
+  `START`. During the full 100 ms poll, `raw_seen=0x40000000` proves HOST2GMU
+  bit 30 was observed set at least once; it was zero before and after the poll.
+  No GMU2HOST ACK was seen (`intr_seen=0`). GX remained off
+  (`GFX_PWR_CLK_STATUS=3`), `FW_INIT_RESULT=0x100`, `FW_BUSY=0`; CM3 reset was
+  verified, with SMMU/context/clock votes retained. The HFI debug queue was
+  empty (`ri=0, wi=0`). CB0 `FSR=0x400` is `FORMAT[1]` in the ARM SMMU register
+  definition; the Linux fault mask excludes that format field, so this value
+  alone is not evidence of a translation fault. No GPU command, DMA,
+  write/readback, draw, or Metal output occurred. The phone is currently in
+  fastboot.
+
 ## FP6 GMU OOB transient diagnostics candidate 0175 (2026-10-23)
 
 - Patch `0175-fp6-gmu-oob-transient-diagnostics.patch` samples the HOST2GMU
-  raw latch and GMU2HOST interrupt state throughout the existing bounded
-  100 ms OOB poll, then dumps the HFI debug queue on timeout. This distinguishes
-  a request that transiently latched or was consumed from one that never
-  appeared in the sampled register path, and may expose firmware error/debug
-  messages. It does not change the OOB request, power sequence, or GPU access.
-- The patch applies cleanly to the exact post-0174 CI source from run
-  `39894842246`; no CI build or phone test has run for 0175 yet.
+  raw latch and GMU2HOST interrupt state throughout the bounded 100 ms OOB
+  poll, then dumps the HFI debug queue on timeout. It established that the
+  request bit was seen set while no response/ACK appeared; see result above.
 
 ## FP6 Gen8 GPU OOB/HFI ordering phone result 0174 (2026-10-23)
 

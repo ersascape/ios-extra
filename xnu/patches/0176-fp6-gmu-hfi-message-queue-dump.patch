@@ -1,0 +1,61 @@
+--- a/bsd/dev/sweet_gpu.c
++++ b/bsd/dev/sweet_gpu.c
+@@ -3569,6 +3569,50 @@
+ 	return 1;
+ }
+ 
++/* Snapshot the GMU-to-host response ring without advancing its consumer index.
++ * A firmware error event may be queued even when no interrupt was delivered. */
++static int
++fp6_gmu_hfi_msgq_dump(uint8_t *mem)
++{
++	volatile uint32_t *t = (volatile uint32_t *)(void *)mem;
++	volatile uint32_t *hdr = t + 18; /* queue 1: GMU response/message queue */
++	volatile uint32_t *q = (volatile uint32_t *)(void *)(mem + FP6_GMU_HFI_QUEUE0 + 0x1000u);
++	flush_dcache64((addr64_t)(uintptr_t)mem, FP6_GMU_HFI_SIZE, FALSE);
++	__asm__ volatile("dsb sy" ::: "memory");
++	if (hdr[3] != 1024u || hdr[10] >= 1024u || hdr[11] >= 1024u ||
++	    (hdr[10] & 3u) || (hdr[11] & 3u) ||
++	    hdr[1] != fp6_gmu_hfi_va + FP6_GMU_HFI_QUEUE0 + 0x1000u) {
++		printf("QCOM GMU: HFI MSGQ corrupt status=%u size=%u ri=%u wi=%u addr=0x%x\n",
++		    hdr[0], hdr[3], hdr[10], hdr[11], hdr[1]);
++		return 0;
++	}
++	unsigned i = hdr[10], end = hdr[11], count = 0;
++	printf("QCOM GMU: HFI MSGQ status=%u ri=%u wi=%u type=0x%08x\n",
++	    hdr[0], i, end, hdr[2]);
++	while (i != end && count < 8u) {
++		uint32_t message = q[i];
++		unsigned size = (message >> 8) & 0xffu;
++		unsigned padded = (size + 3u) & ~3u;
++		unsigned available = (end - i) & 1023u;
++		if (!size || size > 240u || padded > available) {
++			printf("QCOM GMU: HFI MSGQ[%u] malformed hdr=0x%08x available=%u\n",
++			    count, message, available);
++			return 0;
++		}
++		unsigned dump = size < 16u ? size : 16u;
++		printf("QCOM GMU: HFI MSGQ[%u] id=%u type=%u size=%u hdr=0x%08x\n",
++		    count, message & 0xffu, (message >> 16) & 0xfu, size, message);
++		for (unsigned j = 1u; j < dump; j++)
++			printf("QCOM GMU: HFI MSGQ[%u]+%u=0x%08x\n", count, j,
++			    q[(i + j) % 1024u]);
++		i = (i + padded) % 1024u;
++		count++;
++	}
++	if (i != end)
++		printf("QCOM GMU: HFI MSGQ dump capped; next=%u wi=%u\n", i, end);
++	return 1;
++}
++
+ static int
+ fp6_gmu_hfi_enqueue(vm_offset_t g, uint8_t *mem, uint32_t *msg,
+ 	    unsigned dwords, unsigned *sequence)
+@@ -4357,6 +4401,7 @@
+ 					    fp6_smmu_read32(smmu, cb_off + FP6_SMMU_CB_FSR),
+ 					    fp6_smmu_read32(smmu, 0x048u));
+ 					(void)fp6_gmu_hfi_debug_dump(hfi_mem);
++					(void)fp6_gmu_hfi_msgq_dump(hfi_mem);
+ 				} else {
+ 					uint32_t gpu_start[1] = { fp6_hfi_hdr(10u, 1u) }; /* HFI START follows GPU OOB */
+ 					if (!fp6_gmu_hfi_send_req(smmu, cb_off, g, hfi_mem, gpu_start, 1u,

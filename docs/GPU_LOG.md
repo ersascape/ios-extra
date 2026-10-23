@@ -58,6 +58,20 @@ only booted init; the actual measurement used a repackaged image from the same
 kernel with the known flags. Full log and packet capture are under
 `/tmp/ios-extra-run-39894842246/logs/`.
 
+## Transient OOB latch and HFI debug queue 0175 (2026-10-23)
+
+Patch 0175 sampled HOST2GMU raw info and GMU2HOST interrupt info throughout the
+bounded 100 ms OOB poll. HOST2GMU bit 30 was observed set (`raw_seen=0x40000000`)
+even though the before/after samples were zero; no GMU2HOST bit 31 ACK appeared
+(`intr_seen=0`). This shows the request reached the GMU register path and was
+cleared during the wait, but does not show why firmware failed to complete the
+GX power-up. The HFI debug queue was empty (`ri=0`, `wi=0`). The separate HFI
+response/message queue was not yet dumped and is the next diagnostic target.
+`CB0_FSR=0x400` is the SMMU `FORMAT[1]` field; Linux's defined fault mask does
+not include that field, so it is not evidence of a context translation fault.
+The full phone log is
+`/tmp/ios-extra-run-39896663901/logs/phone-0175-gmu-oob-diag.txt`.
+
 ## Gen8 GPU power-on OOB probe 0172 (2026-10-23)
 
 Commit `dc61567a02f8877fb9cbbdc80e9c05cb6cafe1a5` passed CI run
@@ -2066,3 +2080,14 @@ sequence is not the selected path.
   configures CB0 while SID0 remains fault-routed, verifies context/TLBI state,
   and installs SID0 last. This is the first planned CB0 write and still needs
   CI and phone validation; the HFI/software models are not DMA evidence.
+
+## FP6 OOB timeout HFI response-queue diagnostic 0176 (2026-10-23)
+
+After 0175 measured HOST2GMU request bit 30 latching/clearing with no GMU2HOST
+interrupt, added a bounded read-only snapshot of HFI queue 1 at the OOB-timeout
+path. This is distinct from the empty HFI debug queue inspected by 0175. The
+snapshot validates queue address, size and aligned ring indexes, then prints no
+more than eight messages and sixteen dwords per message. It never changes the
+queue consumer index. The exact patch applies to the 0175 CI buildtree; local
+arm64 object compilation passed (0/1 failed) and `tests/test_gpu_probe.py` passed.
+No CI build or phone result exists yet.
