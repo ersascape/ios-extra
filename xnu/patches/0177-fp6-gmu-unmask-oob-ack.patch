@@ -1,0 +1,13 @@
+--- a/bsd/dev/sweet_gpu.c
++++ b/bsd/dev/sweet_gpu.c
+@@ -4333,8 +4333,8 @@
+ 		printf("QCOM GMU: first boot refused: SID5 stream match not retained\n");
+ 		return;
+ 	}
+-	/* Polled bring-up: every GMU-to-host and AO interrupt masked and cleared. */
+-	fp6_smmu_write32(g, 0x4764cu, 0xffffffffu);
++	/* Keep AO IRQs masked; expose only GMU2HOST OOB ACK bit 31 to the poll. */
++	fp6_smmu_write32(g, 0x4764cu, 0x7fffffffu);
+ 	fp6_smmu_write32(g, 0x57c18u, 0xffffffffu);
+ 	fp6_smmu_write32(g, 0x47644u, 0xffffffffu);
+ 	fp6_smmu_write32(g, 0x57c10u, 0xffffffffu);

@@ -1,15 +1,43 @@
 # ios-extra — current state
 
-## FP6 HFI message-queue diagnostics candidate 0176 (2026-10-23)
+## FP6 targeted OOB ACK unmask candidate 0177 (2026-10-23)
 
-- Patch `0176-fp6-gmu-hfi-message-queue-dump.patch` adds a bounded, read-only
-  snapshot of HFI queue 1 on OOB timeout: validates the ring, prints at most
-  eight messages and sixteen dwords per message, and does not advance the
-  consumer index. Linux services asynchronous GMU events through HFI queues;
-  0175 only inspected the separate debug queue. It does not change OOB,
-  power sequencing or GPU access. The patch applies to the 0175 CI source;
-  local arm64 object compilation (0/1 failed) and `tests/test_gpu_probe.py`
-  pass. CI build and phone measurement remain pending.
+- Source comparison found XNU masks every GMU2HOST interrupt (`0xffffffff`)
+  before releasing CM3. Qualcomm Gen8 Linux clears pending IRQs and sets the
+  mask to `~HFI_IRQ_MASK`, leaving OOB ACK bits unmasked. Patch 0177 changes
+  only the GMU2HOST mask to `0x7fffffff`, exposing ACK bit 31 to the existing
+  bounded poll while keeping the other 31 bits and all AO interrupts masked.
+  It restores all masks during cleanup. This tests whether the masked status
+  path explains the OOB timeout; it is not yet a confirmed fix. Local compile,
+  CI and phone result are pending.
+
+## FP6 HFI response-queue phone result 0176 (2026-10-23)
+
+- Commit `88e255c96f36065c1d059744a6a5b11e53c6b2aa` passed CI run
+  `39898354731`; XNU build passed and FP6 image packaging was skipped because
+  `FP6_STOCK_DTB_URL` is unset. Kernel SHA256
+  `3ba9204c9f2d02697711062740b8f12baa9ec165a3094900d0a48c9c077867ac` and ADT
+  SHA256 `e55863175af72b99d82cde7caa6e46ce4ffb92c3712f7fc020aeb235cc89cb05`
+  were verified. Buildtree `sweet_gpu.c` SHA256 is
+  `7e16380f325cdee99741e6601372cecec2c439cfd26c15cdc82a9b9055bdabe0`.
+- Packaged the exact CI kernel and ADT with verified stock DTB (SHA256
+  `8198534128258bfe7b05bbb5b227affc181aa49b376884c08eae8564fce124e3`) and
+  the previously verified static init ramdisk. Header-v2 round-trip passed.
+  Image `/tmp/ios-extra-run-39898354731/package/fp6-gmu-oob-msgq-0176.img`,
+  SHA256 `18e79c470afeafb4cbc6bbfd6974dfec6f2ac49fa02095e97a4d908d416ed2e7`.
+- One temporary `fastboot boot` completed OKAY; user-mode USB capture got ping
+  and 108 packets. No flash or EDL command was used. Decoded log and raw UDP
+  `/tmp/ios-extra-run-39898354731/logs/phone-0176-gmu-oob-msgq.txt` and `.udp`
+  both SHA256 `cfb5d573b24fd3bea02c25607da69879e333ecc16e4a247b977ba1f1f745a703`.
+  Fastboot transcript SHA256 `da89cc18b9003ceb308e31802ca429405957d3a8e8cb79cdab3023246bf83c03`.
+- **Phone measured:** HFI startup requests ACKed, but OOB timed out again.
+  This time raw HOST2GMU bit 30 was not sampled at all
+  (`raw_seen=0`, before/after zero); GMU2HOST ACK stayed zero and GX remained
+  off (`GFX_PWR_CLK_STATUS=3`). Both debug queue and response queue were empty;
+  response queue indices were `ri=24, wi=24`. Firmware stayed alive at
+  `FW_INIT_RESULT=0x100`, `FW_BUSY=0`; CM3 reset was verified with SMMU/context/
+  clock votes retained. No GPU command, DMA, write/readback, draw or Metal
+  output occurred. Phone returned from this boot and is not in fastboot.
 
 ## FP6 GMU OOB transient diagnostics phone result 0175 (2026-10-23)
 

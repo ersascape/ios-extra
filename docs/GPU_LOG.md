@@ -2091,3 +2091,23 @@ more than eight messages and sixteen dwords per message. It never changes the
 queue consumer index. The exact patch applies to the 0175 CI buildtree; local
 arm64 object compilation passed (0/1 failed) and `tests/test_gpu_probe.py` passed.
 No CI build or phone result exists yet.
+
+## OOB response queue phone result and mask hypothesis 0176/0177 (2026-10-23)
+
+Patch 0176 commit `88e255c96f36065c1d059744a6a5b11e53c6b2aa` passed CI
+`39898354731`; XNU build passed, hosted image packaging skipped for the unset
+stock-DTB URL. The exact kernel (`3ba9204c...`) and ADT (`e5586317...`) were
+packaged with the verified stock DTB and bounded init. Temporary boot succeeded
+and pinged; user-mode USB capture delivered 108 packets. Logs:
+`/tmp/ios-extra-run-39898354731/logs/phone-0176-gmu-oob-msgq.txt` and `.udp`,
+both SHA256 `cfb5d573b24fd3bea02c25607da69879e333ecc16e4a247b977ba1f1f745a703`.
+
+The HFI debug and response queues were empty (`ri=0,wi=0` and `ri=24,wi=24`).
+The OOB request again timed out; unlike 0175, raw HOST2GMU bit 30 was never
+observed during the poll (`raw_seen=0`). GMU2HOST ACK remained zero and GX was
+off. Source comparison found XNU masks all GMU2HOST interrupts before CM3
+release, whereas Qualcomm Gen8 Linux writes `~HFI_IRQ_MASK`, leaving OOB ACK
+bits unmasked. Candidate 0177 unmasks only bit 31, the expected GPU OOB ACK,
+while keeping all other GMU2HOST bits and AO interrupts masked. This is a
+focused status-visibility experiment, not a proven fix. 0177 is not yet built
+or phone-tested.
