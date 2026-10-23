@@ -134,6 +134,9 @@ int main(int argc, char **argv)
 	/* texdouble: the texlinear scene drawn twice into the same render pass (cold-start test). */
 	int is_texdouble = !strcmp(scene, "texdouble");
 	if (is_texdouble) is_texlinear = 1;
+	/* texbig: the checker as a 16x16 texture (4x4 blocks); texlin: the 4x4 texture with linear filtering. */
+	int is_texbig = !strcmp(scene, "texbig"), is_texlin = !strcmp(scene, "texlin");
+	if (is_texbig || is_texlin) is_texlinear = 1;
 	const char *shader = is_vbufdraw ? "vertexbuf" : is_idxonly ? "flat" : is_texlinear ? "texture" : scene;
 	if (!(is_flat || is_varying || is_ubo || is_blend || is_depth || is_texture || is_vbuf || is_vbufdraw ||
 	      is_idxonly || is_texlinear)) {
@@ -221,25 +224,29 @@ int main(int argc, char **argv)
 		ibuf = make_buffer(sizeof idx, VK_BUFFER_USAGE_INDEX_BUFFER_BIT);
 		memcpy(ibuf.map, idx, sizeof idx);
 	}
+	const unsigned tdim = is_texbig ? 16 : 4;
 	if (is_texlinear) {
-		uint32_t texels[16];
-		for (int y = 0; y < 4; y++)
-			for (int x = 0; x < 4; x++)
-				texels[y * 4 + x] = ((x + y) & 1) ? 0xff00ff00u : 0xff0000ffu;
-		tex = make_image_t(VK_FORMAT_R8G8B8A8_UNORM, 4, 4, VK_IMAGE_USAGE_SAMPLED_BIT,
+		uint32_t texels[16 * 16];
+		for (unsigned y = 0; y < tdim; y++)
+			for (unsigned x = 0; x < tdim; x++) {
+				unsigned cx = x * 4 / tdim, cy = y * 4 / tdim;
+				texels[y * tdim + x] = ((cx + cy) & 1) ? 0xff00ff00u : 0xff0000ffu;
+			}
+		tex = make_image_t(VK_FORMAT_R8G8B8A8_UNORM, tdim, tdim, VK_IMAGE_USAGE_SAMPLED_BIT,
 		    VK_IMAGE_ASPECT_COLOR_BIT, VK_IMAGE_TILING_LINEAR);
 		VkImageSubresource sr = { VK_IMAGE_ASPECT_COLOR_BIT, 0, 0 };
 		VkSubresourceLayout sl;
 		vkGetImageSubresourceLayout(dev, tex.i, &sr, &sl);
 		void *map;
 		CHECK(vkMapMemory(dev, tex.m, 0, VK_WHOLE_SIZE, 0, &map));
-		for (int y = 0; y < 4; y++) memcpy((char *)map + sl.offset + y * sl.rowPitch, &texels[y * 4], 16);
+		for (unsigned y = 0; y < tdim; y++)
+			memcpy((char *)map + sl.offset + y * sl.rowPitch, &texels[y * tdim], tdim * 4);
 		vkUnmapMemory(dev, tex.m);
 	}
 	if (is_texture || is_texlinear) {
 		/* sampler shared by both texture scenes */
 		VkSamplerCreateInfo sc = { VK_STRUCTURE_TYPE_SAMPLER_CREATE_INFO };
-		sc.magFilter = VK_FILTER_NEAREST; sc.minFilter = VK_FILTER_NEAREST;
+		sc.magFilter = sc.minFilter = is_texlin ? VK_FILTER_LINEAR : VK_FILTER_NEAREST;
 		sc.mipmapMode = VK_SAMPLER_MIPMAP_MODE_NEAREST;
 		sc.addressModeU = sc.addressModeV = sc.addressModeW = VK_SAMPLER_ADDRESS_MODE_CLAMP_TO_EDGE;
 		sc.maxLod = 0.0f;
