@@ -34,8 +34,12 @@ class GPUProbeTests(unittest.TestCase):
             source = (work / 'bsd/dev/sweet_gpu.c').read_text()
             self.assertLess(
                 source.index('HFI START ACK; core firmware initialized'),
+                source.index('if (!fp6_gmu_hfi_default_votes('),
+                'Linux default DCVS votes must follow the HFI START ACK')
+            self.assertLess(
+                source.index('if (!fp6_gmu_hfi_default_votes('),
                 source.index('!fp6_gmu_gpu_oob('),
-                'Gen8 HFI START must be acknowledged before the GPU OOB request')
+                'Linux default DCVS votes must precede the GPU OOB request')
             self.assertIn('fp6_smmu_write32(g, 0x4764cu, 0x7fffffffu);', source,
                           'the OOB ACK interrupt must remain unmasked during polling')
             source = source.replace('__asm__ volatile("dsb sy" ::: "memory");', '')
@@ -847,6 +851,29 @@ int main(void)
     assert(hfi_sequence == 2u);
     hfi_fake_enabled = 0;
     puts("PASS: HFI GET_VALUE and one-dword START share the bounded queue dispatcher");
+
+    /* Linux's post-START FP6 defaults are separate GPU and bus votes. */
+    static uint8_t hfi_vote_mem[FP6_GMU_HFI_SIZE];
+    memset(hfi_vote_mem, 0, sizeof(hfi_vote_mem));
+    uint32_t *vote_table = (uint32_t *)(void *)hfi_vote_mem;
+    uint32_t *vote_cmd_hdr = vote_table + 6, *vote_msg_hdr = vote_table + 18;
+    vote_cmd_hdr[0] = vote_msg_hdr[0] = 1u;
+    vote_cmd_hdr[1] = fp6_gmu_hfi_va + FP6_GMU_HFI_QUEUE0;
+    vote_msg_hdr[1] = fp6_gmu_hfi_va + FP6_GMU_HFI_QUEUE0 + 0x1000u;
+    vote_cmd_hdr[3] = vote_msg_hdr[3] = 1024u;
+    hfi_fake_mem = hfi_vote_mem; hfi_fake_result = 0; hfi_fake_enabled = 1;
+    unsigned vote_sequence = 0;
+    assert(fp6_gmu_hfi_default_votes((vm_offset_t)fp6_smmu, 0x20000u,
+        (vm_offset_t)fp6_gmu_regs, hfi_vote_mem, &vote_sequence));
+    uint32_t *vote_cmdq = vote_table + FP6_GMU_HFI_QUEUE0 / 4;
+    assert(vote_sequence == 2u && vote_cmd_hdr[10] == vote_cmd_hdr[11]);
+    assert((vote_cmdq[0] & 0xffu) == 30u && ((vote_cmdq[0] >> 8) & 0xffu) == 4u &&
+        vote_cmdq[1] == 1u && vote_cmdq[2] == 2u && vote_cmdq[3] == 0xffff00ffu);
+    assert((vote_cmdq[4] & 0xffu) == 30u && ((vote_cmdq[4] >> 8) & 0xffu) == 4u &&
+        vote_cmdq[5] == 1u && vote_cmdq[6] == 0xffu && vote_cmdq[7] == 0xffff0002u);
+    assert(vote_msg_hdr[10] == vote_msg_hdr[11]);
+    hfi_fake_enabled = 0;
+    puts("PASS: FP6 HFI default GPU pwrlevel-8 and bus-level-2 votes are ACKed before OOB");
 
     /* Match the measured SMMU IDs and its TBI/ASIDPNE readback quirks while
      * enabling the isolated GPU TTBR1 context. The refused preflight must not write. */

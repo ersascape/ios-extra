@@ -1,5 +1,22 @@
 # ios-extra — current state
 
+## FP6 Linux-default HFI power votes candidate 0179 (2026-10-23)
+
+Source audit found that Linux `gen8_hwsched_hfi_start()` sends HFI `START`,
+then `gen8_hwsched_setup_default_votes()` before returning to the GPU OOB path.
+That helper sends two blocking `GX_BW_PERF_VOTE` messages: the default GPU
+performance level and the default bus vote. XNU previously went from the
+acknowledged `START` directly to GPU OOB, omitting both. FP6 stock DT selects
+GPU pwrlevel 8 (`362 MHz`) and bus level 2. Candidate patch 0179 adds the
+separate ACK-checked HFI votes matching those defaults; it has host and local
+arm64 compile validation, but no CI or phone result yet.
+
+Independent source reading also found a GMU clock timing difference to resolve:
+stock DT lists GMU 350/650 MHz; Linux starts first boot at `freqs[1]` (650 MHz)
+and changes to `freqs[0]` (350 MHz) after HFI start. XNU currently selects
+350 MHz before firmware release. This is not changed by 0179 and is not yet
+established as the OOB cause. Keep it as the next source/measurement question.
+
 ## FP6 GMU OOB latest measured result 0178 (2026-10-23)
 
 - Patch 0178 commit `7b13c1483a57d39abb63db3df9eb5b678635589d` passed CI

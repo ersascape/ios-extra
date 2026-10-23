@@ -26,6 +26,28 @@ is the appropriate sequence reference, with Linux services replaced explicitly
 by XNU equivalents. Firmware staging alone implements none of those runtime
 services.
 
+## OOB prerequisite audit, 2026-10-23
+
+The FP6 DT's selected `qcom,gpu-pwrlevels-0` profile sets
+`qcom,initial-pwrlevel = <8>`; row 8 is 362 MHz and has DDR7/DDR8 bus frequency
+index 2. Linux `gen8_hwsched_hfi_start()` sends HFI `START`, then
+`gen8_hwsched_setup_default_votes()` sends a `GX_BW_PERF_VOTE` for the mapped
+GPU performance index and a second vote for the default bus level before the
+caller reaches `gen8_hwsched_gpu_boot()` and GPU OOB. Because the GMU-AB
+capability query happens after `gen8_hwsched_hfi_start()` returns, the initial
+votes use the invalid-AB encoding. XNU's 0178 log showed `START` ACK then OOB
+with no intervening power-vote requests. Patch 0179 adds those two requests and
+requires ACKs; host validation and local arm64 compilation pass. This is a
+source-backed candidate, not proof that missing votes caused the OOB timeout.
+
+The same source audit found that DT exposes GMU clock levels 350 and 650 MHz.
+Linux's first-boot path selects `freqs[GMU_MAX_PWRLEVELS - 1]` (650 MHz), then
+switches to `freqs[0]` (350 MHz) after HFI initialization. Current XNU selects
+350 MHz before releasing CM3 and does not perform the 650-to-350 transition.
+The HFI firmware has initialized successfully at 350 MHz in prior phone runs,
+so this timing difference remains a separate untested prerequisite question;
+no RCG/PLL change is included in 0179.
+
 ## Turnip is relevant to the actual FP6 GPU
 
 Pinned upstream Mesa revision inspected:

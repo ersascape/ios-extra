@@ -40,6 +40,16 @@ device proof.
 
 ## Current FP6 GPU state (2026-10-23)
 
+Patch 0179 candidate `0179-fp6-gmu-default-dcvs-votes.patch` adds Linux's two
+default HFI GPU/bandwidth votes between the acknowledged HFI `START` and GPU
+OOB request. Source basis: stock DT initial GPU pwrlevel 8 (362 MHz), bus level
+2; Linux sends each vote from `gen8_hwsched_setup_default_votes()`. Host GPU
+harness, full suite (13 passed, 5 skipped), ASan/UBSan and local arm64 compile
+pass. CI/phone validation are pending. The clock audit also shows Linux starts
+GMU at 650 MHz then switches to 350 MHz after HFI, while XNU uses 350 MHz from
+before firmware release; 0179 does not change that. Inspect NOTES.md and
+GPU_LOG.md for source details and the measured result when available.
+
 Patch 0178 commit `7b13c1483a57d39abb63db3df9eb5b678635589d` passed CI
 `39901607539`. CI kernel SHA256 is
 `31a576142f70b0c10257a80b411fc8bfc8b2ab97dbc8c2753fd7f9cb55d1aabf`; ADT

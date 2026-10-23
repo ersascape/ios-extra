@@ -1,3 +1,17 @@
+## FP6 default HFI power-vote candidate 0179 (2026-10-23)
+
+Source comparison with Fairphone Gen8 HWSched found that Linux sends the
+default GPU DCVS vote and default bandwidth vote after HFI `START` and before
+GPU OOB. The selected stock DT profile is pwrlevel 8 / 362 MHz / bus level 2.
+XNU omitted these two HFI requests. Patch 0179 adds them as separate
+ACK-checked `GX_BW_PERF_VOTE` requests. Host GPU tests, the full host suite, the
+ASan/UBSan GPU harness and local arm64 compile pass. CI and phone validation
+are pending; no device behavior is claimed yet.
+
+The same audit found Linux starts the GMU clock at 650 MHz and changes it to
+350 MHz after HFI, while XNU currently runs 350 MHz from before CM3 release.
+This is recorded as an unresolved source difference, not changed in patch 0179.
+
 ## FP6 HFI START-before-OOB result 0178 (2026-10-23)
 
 The Qualcomm Gen8 Linux source order is `gen8_hwsched_hfi_start()` sending HFI

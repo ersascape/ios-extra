@@ -1,0 +1,40 @@
+diff --git a/bsd/dev/sweet_gpu.c b/bsd/dev/sweet_gpu.c
+index 145fff9..b038f87 100644
+--- a/bsd/dev/sweet_gpu.c
++++ b/bsd/dev/sweet_gpu.c
+@@ -4065,6 +4065,27 @@ fp6_gmu_hfi_configure_preemption(vm_offset_t smmu, uint32_t cb_off, vm_offset_t
+ 	return 1;
+ }
+ 
++/* Linux gen8_hwsched_setup_default_votes() runs after HFI START and before
++ * gen8_hwsched_gpu_boot() requests GPU OOB. FP6 stock DT defaults to GPU
++ * pwrlevel 8 (HFI perf index 2, bus level 2). Linux sends the GPU and bus
++ * components as separate DCVS_ACK_BLOCK commands; its first-boot path has
++ * not enabled GMU AB voting yet, so both carry INVALID_AB_VALUE. */
++static int
++fp6_gmu_hfi_default_votes(vm_offset_t smmu, uint32_t cb_off, vm_offset_t g,
++		uint8_t *mem, unsigned *sequence)
++{
++	uint32_t gpu_vote[4] = { fp6_hfi_hdr(30u, 4u), 1u, 2u, 0xffff00ffu };
++	if (!fp6_gmu_hfi_send_req(smmu, cb_off, g, mem, gpu_vote, 4u, sequence, NULL))
++		return 0;
++	printf("QCOM GMU: HFI default GPU vote ACK pwrlevel=8 perf-index=2\n");
++
++	uint32_t bus_vote[4] = { fp6_hfi_hdr(30u, 4u), 1u, 0xffu, 0xffff0002u };
++	if (!fp6_gmu_hfi_send_req(smmu, cb_off, g, mem, bus_vote, 4u, sequence, NULL))
++		return 0;
++	printf("QCOM GMU: HFI default bandwidth vote ACK bus-level=2 AB=invalid\n");
++	return 1;
++}
++
+ static uint32_t
+ fp6_hfi_bw_word(uint32_t level_kbps, unsigned bcm_width, unsigned buswidth,
+ 	    uint32_t unit, int commit)
+@@ -4192,6 +4213,7 @@ fp6_gmu_hfi_start_sequence(vm_offset_t smmu, uint32_t cb_off, vm_offset_t g,
+ 	uint32_t gpu_start[1] = { fp6_hfi_hdr(10u, 1u) };
+ 	if (!fp6_gmu_hfi_send_req(smmu, cb_off, g, mem, gpu_start, 1u, &seq, NULL)) return 0;
+ 	printf("QCOM GMU: HFI START ACK; core firmware initialized\n");
++	if (!fp6_gmu_hfi_default_votes(smmu, cb_off, g, mem, &seq)) return 0;
+ 	return 1;
+ }
+ 
