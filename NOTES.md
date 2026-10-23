@@ -1,5 +1,38 @@
 # ios-extra — current state
 
+## FP6 display snapshot level 2 measured 0209 (2026-10-23)
+
+**Phone measured:** CI `39979637952` (head `bdc38ee407ec47e78f26bb026885560d7824e154`)
+passed; source matched. Image
+`/tmp/ios-extra-run-39979637952/package2/fp6-dpusnap2-0209.img` (SHA256
+`d4fd91b52898d3ad16ecce0924f28d94034e319ca7ef13e5ad1cb7ab05aa41c1`; `fp6dpusnap=2`)
+booted once via `fastboot boot`; no flash, EDL or `getvar`. 100 packets; log
+`/tmp/ios-extra-run-39979637952/logs/phone-0209-dpusnap2.txt`. Read-only; no hang.
+
+Register state the bootloader left (all values raw reads):
+- GDSC `0xf822f800` (PWR_ON), `MDSS HW_VERSION=0xa0020000`.
+- CTL0: `LAYER0=0x01000005`, `TOP=0xf0020000`, `FLUSH=0`, `START=0`, `INTF_ACT=0x2`,
+  `DSC_ACT=0x1`, `FETCH_ACT=0x00010000`, `INTF_MASTER=0x2`, EXT0/2/3/4 = 0.
+- LM0: `OUT_SIZE=0x09b4045c` (2484 x 1116), `BLEND0_OP=0x400`, `BLEND0_FG_SRC=0x00ff0000`.
+- SSPP VIG0: `SRC_SIZE=OUT_SIZE=0x09b4045c`, `SRC0_ADDR=0xe3940000`,
+  `YSTRIDE0=0x1170` (4464), `FORMAT=0x000237ff`, `UNPACK=0x03020001`,
+  `OP_MODE=0x80000000`, `UBWC_STATIC=0xc0000101`. DMA0..2: all zero (`OP_MODE`,
+  `UBWC_STATIC`, `FETCH_CFG` at their reset values).
+- INTF_1 (DSI): `TIMING_EN=0` and every timing register 0 (command mode),
+  `CONFIG=0x00800000`, `CONFIG2=0x00001111`, `PANEL_FORMAT=0x00002100`,
+  `FRAME_COUNT=0x7b61`, `LINE_COUNT=0x5b3`, `MUX=0x000f0000`, `STATUS=0`.
+So the scanout address, stride and size match the ADT's `0xe3940000` / 4464 /
+1116x2484 exactly, only VIG0 feeds LM0, DSC is active, and the panel runs in DSI
+command mode, where the panel retains its image and the DPU pushes a frame only when a
+transfer is triggered (this is my reading of the zero timing registers and the
+mainline code, not a measurement of triggers). Not established: whether frames are
+still being pushed during XNU boot (one `FRAME_COUNT` sample only), which register
+the bootloader uses to trigger them, and the panel's own timing/init data. The panel
+description is not in the stock DTB, `research/fp6-dtb`, or upstream Linux 7.1.2
+(no FP6 display nodes there); downstream panel overlays normally ship in the DTBO
+partition, which we do not have locally. Level 3 (planned): repeat `FRAME_COUNT` /
+`LINE_COUNT` reads over about two seconds and read the pingpong (TE) block.
+
 ## FP6 display snapshot level 1 measured 0208 (2026-10-23)
 
 **Phone measured:** CI `39977919581` (head `d7ca0e9f96efe188af24f6f8c50853e7ade92b22`)
