@@ -76,6 +76,15 @@ class GPUProbeTests(unittest.TestCase):
                           'host ring write must target a firmware kind-1 ring only')
             self.assertIn('PE_parse_boot_argn("fp6gpucompute"', source,
                           'compute dispatch must remain explicitly opt-in')
+            self.assertIn('PE_parse_boot_argn("fp6gpureplay"', source,
+                          'TTBR0 capture replay must remain explicitly opt-in')
+            self.assertIn('#define FP6_AS_TCR_TTBR0 0xa0102010u', source,
+                          'TTBR0 enable must keep the TTBR1 half of the live TCR unchanged')
+            self.assertIn('FP6_AS_PTE_PAGE (3ull | (1ull << 10) | (2ull << 8) | (1ull << 11) | (1ull << 6) | (3ull << 53))',
+                          source, 'replay pages must be unprivileged read/write and execute-never')
+            self.assertLess(source.index('(void)fp6_gpu_compute_probe(g, gpu);'),
+                            source.index('(void)fp6_gpu_replay_probe(g, gpu);'),
+                            'replay follows the proven compute probe')
             self.assertIn('wanted < 1 || wanted > 16', source,
                           'repeat count must be bounded')
             self.assertIn('test->data[i] + 5u * iteration', source,
@@ -229,6 +238,9 @@ class GPUProbeTests(unittest.TestCase):
             (work / 'fp6_gpu_compute_tests.h').write_text(added_header(
                 ROOT / 'xnu/patches/0197-fp6-compute-multi-kernel-batch.patch',
                 'bsd/dev/fp6_gpu_compute_tests.h'))
+            (work / 'fp6_gpu_replay_data.h').write_text(added_header(
+                ROOT / 'xnu/patches/0198-fp6-ttbr0-capture-replay.patch',
+                'bsd/dev/fp6_gpu_replay_data.h'))
             (work / 'test.c').write_text(HARNESS)
             build = subprocess.run([shutil.which('cc') or 'cc', '-std=c11', '-Wall',
                                     '-Wextra', '-Werror', *os.environ.get('IOS_EXTRA_CFLAGS', '').split(), '-I', str(work),
