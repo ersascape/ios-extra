@@ -1,5 +1,22 @@
 # ios-extra — current state
 
+## FP6 GPU M4 queue verified on the phone: the replay's submissions run through adrenogpu_sched (2026-10-24)
+
+**Phone measured:** CI `40096396286` (head `08da7087aa663bfdffa9b7267239660ed03ebba7`, patch 0223) passed. Image
+`/tmp/ios-extra-run-40096396286/package/fp6-queue-0223.img` (SHA256
+`b1e6499aae6496d835c80adb58db2e99e9c8c5e1e58e7731815ed1213b11adec`; the standard replay command line) booted once via
+`fastboot boot`; no flash, EDL or `getvar`. Log `/tmp/ios-extra-run-40096396286/logs/phone-0223-queue.txt`.
+All 12 replays reached their fence.
+
+The replay now writes its ring words through `adrenogpu_sched_submit`, numbers the fence with the queue's
+sequence, retires the job from the fence word with `adrenogpu_sched_poll`, and abandons a hung job through
+`adrenogpu_sched_reset`. The boot ends with `QCOM GPU SCHED: submitted=11 retired=11 failed=0 pending=0
+last_seq=11 ring_wptr=1231`. Results equal the previous boot: `texsyncdraw`, `texposty`, `texpostall`, `texprepost`
+0 of 256 differ; `texpostw` 3, `texpostx` 2, `texpostwb` 4 (within tolerance); `texbase` 19 and `texflushonly` 18 (the
+known failures); `buf_init` 8/8 and `draw` 1024 pixels pass; the ring positions match the earlier run (for example
+`texpostall` ends at rptr 1159/1159). Not exercised on hardware: ring wrap (the scenes end at dword 1231 of 8192),
+the hang timeout and the reset path, several jobs in flight.
+
 ## FP6 GPU M5: AdrenoGPU IOService and user client, compile-checked only (2026-10-24)
 
 **Source and host tests, no phone.** Patch 0224 adds the pure-C device core `adrenogpu_dev` (client table, handle
