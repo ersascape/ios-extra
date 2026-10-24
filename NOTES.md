@@ -1,5 +1,21 @@
 # ios-extra — current state
 
+## FP6 GPU M3 verified on the phone: the replay runs on the AdrenoGPU cores (2026-10-24)
+
+**Phone measured:** CI `40093614436` (head `b75f2686d42212a31c635070cd865dddb3f2c76e`, patches 0221 and 0222)
+passed. Image `/tmp/ios-extra-run-40093614436/package/fp6-cores-0222.img` (SHA256
+`1a4d9e81a26f5dcff4fb9ac97245e1e83faebfb838b82d343fe5b89fb2c637fb`; the standard replay command line) booted once
+via `fastboot boot`; no flash, EDL or `getvar`. Log `/tmp/ios-extra-run-40093614436/logs/phone-0222-cores.txt`.
+All 12 replays reached their fence with `CB0_FSR=0x400` and no dropped packets.
+
+The replay now builds its address space with `adrenogpu_ctx`/`adrenogpu_vm` (one buffer object per run of
+consecutive GPU pages, the scanout region as one object), refuses an IB that is not inside one mapping of the
+context, and writes its submit framing with `adrenogpu_ring_build_submit`. Results are the same as before the
+move: `texsyncdraw`, `texposty`, `texpostall` and `texprepost` 0 of 256 samples differ; `texpostw` 3, `texpostx`
+2, `texpostwb` 3 (all within tolerance); `texbase` 20 and `texflushonly` 18 (the known failures, as before);
+`buf_init` 8/8 and `draw` 1024 pixels still pass. Each replay shows `tables=4`, so the table count per context
+matches. The scheduler (`adrenogpu_sched`) is in the kernel build but not yet used by the replay.
+
 ## FP6 GPU texture root cause: wait for idle after the draw, then clean the CCU (2026-10-24)
 
 **Phone measured:** CI `40010657203` (head `2129d387b776590e72396110e0d22c354d88cb7d`, patch 0220)
