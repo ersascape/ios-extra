@@ -1,0 +1,753 @@
+diff --git a/bsd/dev/adrenogpu_iokit.h b/bsd/dev/adrenogpu_iokit.h
+new file mode 100644
+--- /dev/null
++++ b/bsd/dev/adrenogpu_iokit.h
+@@ -0,0 +1,27 @@
++/* SPDX-License-Identifier: MIT */
++/* The one entry point from the GPU bring-up code into the AdrenoGPU IOKit shell (iokit/Kernel/arm/AdrenoGPU.cpp).
++ *
++ * Nothing calls it today: the shell adds no boot-time behaviour. When the hardware backend (bsd/dev/sweet_gpu.c)
++ * has a GPU that runs, it fills struct adrenogpu_hw_ops and struct adrenogpu_hw_info (adrenogpu_dev.h) and calls
++ * adrenogpu_iokit_start(). The call is a no-op unless the boot argument adrenogpu=1 is present. */
++#ifndef ADRENOGPU_IOKIT_H
++#define ADRENOGPU_IOKIT_H
++
++#ifdef __cplusplus
++extern "C" {
++#endif
++#include "adrenogpu_dev.h"
++
++#define ADRENOGPU_IOKIT_STARTED 0
++#define ADRENOGPU_IOKIT_DISABLED 1 /* boot argument adrenogpu=1 absent: nothing was done */
++#define ADRENOGPU_IOKIT_EEXIST -1  /* already started */
++#define ADRENOGPU_IOKIT_EFAIL -2   /* bad tables or IOKit refused; nothing is left registered */
++
++/* Copies both tables (the ring and the fence word stay borrowed and must live as long as the GPU does). Must be
++ * called from a context that may allocate and take mutexes, after IOKit has started (IOResources exists). */
++int adrenogpu_iokit_start(const struct adrenogpu_hw_ops *hw, const struct adrenogpu_hw_info *info);
++
++#ifdef __cplusplus
++}
++#endif
++#endif
+diff --git a/iokit/Kernel/arm/AdrenoGPU.cpp b/iokit/Kernel/arm/AdrenoGPU.cpp
+new file mode 100644
+--- /dev/null
++++ b/iokit/Kernel/arm/AdrenoGPU.cpp
+@@ -0,0 +1,705 @@
++/*
++ * AdrenoGPU: the IOKit shell around the adrenogpu_dev core (bsd/dev/adrenogpu_dev.c).
++ *
++ * AdrenoGPU (IOService) owns one GPU instance: one adrenogpu_dev behind one mutex, a memory table implemented here
++ * with kernel allocators and IOBufferMemoryDescriptor, and a hardware table supplied by the bring-up code through
++ * adrenogpu_iokit_start(). AdrenoGPUUserClient (IOUserClient) is one per task connection. It narrows and checks the
++ * IOKit scalars, hands them to the core (which validates everything and enforces ownership), and tears the client
++ * down on clientClose / clientDied / didTerminate after waiting out or failing its in-flight work.
++ *
++ * Nothing runs at boot: the class is registered with the metaclass system like every IOKit class, but no
++ * personality matches it and nothing calls adrenogpu_iokit_start() yet. Even then it does nothing without the boot
++ * argument adrenogpu=1.
++ *
++ * External methods (selector: scalars in -> scalars out):
++ *   0 createContext   flags                          -> context, va_lo, va_hi
++ *   1 destroyContext  context
++ *   2 allocBO         size, flags                    -> bo, size (rounded to 4 KiB)
++ *   3 freeBO          bo
++ *   4 mapBO           context, bo, gpu_va, prot      (prot: 1 write, 2 execute; always readable)
++ *   5 unmapBO         context, gpu_va
++ *   6 submit          context, ib_va, ib_dwords, flags (0) -> fence
++ *   7 waitFence       context, fence, timeout_us     -> status (0 signalled, 1 lost to a GPU reset)
++ * CPU access to a buffer: IOConnectMapMemory64 with the BO handle as the memory type.
++ */
++#include <pexpert/arm64/board_config.h>
++
++#if defined(ARM64_BOARD_CONFIG_FP6)
++#include <IOKit/IOService.h>
++#include <IOKit/IOUserClient.h>
++#include <IOKit/IOKitKeys.h>
++#include <IOKit/IOLib.h>
++#include <IOKit/IOLocks.h>
++#include <IOKit/IOBufferMemoryDescriptor.h>
++#include <pexpert/pexpert.h>
++#include <kern/clock.h>
++#include <mach/mach_time.h>
++extern "C" {
++#include <arm/caches_internal.h>
++}
++
++#include "../../../bsd/dev/adrenogpu_iokit.h"
++
++extern "C" ppnum_t pmap_find_phys(pmap_t pmap, addr64_t va);
++
++#define ADRENOGPU_CLOSE_TIMEOUT_NS (2ull * NSEC_PER_SEC)
++#define ADRENOGPU_WAIT_MAX_US (60ull * 1000000ull)
++
++/* ---- memory table: kernel allocators ---- */
++
++static void *
++adrenogpu_mem_alloc(void *, size_t bytes)
++{
++	return IOMallocZero(bytes);
++}
++
++static void
++adrenogpu_mem_free(void *, void *p, size_t bytes)
++{
++	IOFree(p, bytes);
++}
++
++/* One kernel page per 4 KiB table: the GPU table granule is smaller than the kernel page, and a page from
++ * IOMallocAligned is physically contiguous and zeroed here. */
++static struct adrenogpu_vm_table
++adrenogpu_mem_alloc_table(void *)
++{
++	struct adrenogpu_vm_table t = { NULL, 0 };
++	void *va = IOMallocAligned(PAGE_SIZE, PAGE_SIZE);
++	if (va == NULL) {
++		return t;
++	}
++	bzero(va, PAGE_SIZE);
++	uint64_t pa = ptoa_64(pmap_find_phys(kernel_pmap, (addr64_t)(uintptr_t)va));
++	if (pa == 0 || (pa >> ADRENOGPU_VM_VA_BITS) != 0) {
++		IOFreeAligned(va, PAGE_SIZE);
++		return t;
++	}
++	t.cpu = va;
++	t.pa = pa;
++	return t;
++}
++
++static void
++adrenogpu_mem_free_table(void *, struct adrenogpu_vm_table t)
++{
++	IOFreeAligned(t.cpu, PAGE_SIZE);
++}
++
++static void
++adrenogpu_mem_publish(void *, void *cpu, size_t bytes)
++{
++	clean_dcache64((addr64_t)(uintptr_t)cpu, (unsigned)bytes, 0);
++	__asm__ volatile ("dsb sy" ::: "memory");
++}
++
++/*
++ * Buffer objects: wired, write-combined kernel memory from IOBufferMemoryDescriptor, zeroed, so no stale kernel
++ * data reaches a client. The physical segments become the 4 KiB page list of the core. Write-combined memory needs
++ * no cache clean before the GPU reads it (bo_publish stays NULL); this is unverified on the phone.
++ */
++static int
++adrenogpu_mem_bo_alloc(void *, unsigned long npages, uint64_t *pages, void **cookie)
++{
++	uint64_t bytes = (uint64_t)npages * ADRENOGPU_PAGE_SIZE;
++	IOBufferMemoryDescriptor *md = IOBufferMemoryDescriptor::inTaskWithOptions(kernel_task,
++	    kIODirectionInOut | kIOMemoryMapperNone | kIOMapWriteCombineCache, (vm_size_t)bytes, PAGE_SIZE);
++	if (md == NULL) {
++		return -1;
++	}
++	void *va = md->getBytesNoCopy();
++	if (va == NULL || md->getLength() < bytes) {
++		md->release();
++		return -1;
++	}
++	bzero(va, (size_t)bytes);
++	uint64_t off = 0;
++	unsigned long n = 0;
++	while (off < bytes) {
++		IOByteCount seg = 0;
++		addr64_t pa = md->getPhysicalSegment(off, &seg, kIOMemoryMapperNone);
++		if (pa == 0 || seg < ADRENOGPU_PAGE_SIZE || (pa & (ADRENOGPU_PAGE_SIZE - 1)) != 0) {
++			md->release();
++			return -1;
++		}
++		uint64_t run = seg < bytes - off ? seg : bytes - off;
++		flush_dcache64(pa, (unsigned)run, TRUE); /* nothing stale may sit above the zeros */
++		for (uint64_t p = 0; p + ADRENOGPU_PAGE_SIZE <= run && n < npages; p += ADRENOGPU_PAGE_SIZE) {
++			pages[n++] = pa + p;
++		}
++		off += run & ~(uint64_t)(ADRENOGPU_PAGE_SIZE - 1);
++	}
++	if (n != npages) {
++		md->release();
++		return -1;
++	}
++	*cookie = md;
++	return 0;
++}
++
++static void
++adrenogpu_mem_bo_free(void *, void *cookie)
++{
++	((IOBufferMemoryDescriptor *)cookie)->release();
++}
++
++static const struct adrenogpu_mem_ops adrenogpu_mem_ops = {
++	NULL,
++	adrenogpu_mem_alloc, adrenogpu_mem_free,
++	adrenogpu_mem_alloc_table, adrenogpu_mem_free_table, adrenogpu_mem_publish,
++	adrenogpu_mem_bo_alloc, adrenogpu_mem_bo_free, NULL,
++};
++
++static IOReturn
++adrenogpu_ioreturn(int rc)
++{
++	switch (rc) {
++	case ADRENOGPU_DEV_OK: return kIOReturnSuccess;
++	case ADRENOGPU_DEV_EINVAL: return kIOReturnBadArgument;
++	case ADRENOGPU_DEV_ENOENT: return kIOReturnNotFound;
++	case ADRENOGPU_DEV_EPERM: return kIOReturnNotPermitted;
++	case ADRENOGPU_DEV_ENOSPC: return kIOReturnNoResources;
++	case ADRENOGPU_DEV_ENOMEM: return kIOReturnNoMemory;
++	case ADRENOGPU_DEV_EBUSY: return kIOReturnBusy;
++	case ADRENOGPU_DEV_ECLOSED: return kIOReturnNotAttached;
++	case ADRENOGPU_DEV_EHW: return kIOReturnIOError;
++	case ADRENOGPU_DEV_ERANGE: return kIOReturnVMError;
++	case ADRENOGPU_DEV_EEXIST: return kIOReturnExclusiveAccess;
++	default: return kIOReturnError;
++	}
++}
++
++static uint64_t
++adrenogpu_now(void)
++{
++	return mach_absolute_time();
++}
++
++/* ---- AdrenoGPU ---- */
++
++class AdrenoGPU : public IOService {
++	OSDeclareDefaultStructors(AdrenoGPU);
++
++	IOLock *fLock;
++	struct adrenogpu_dev *fDev;
++
++public:
++	bool setup(const struct adrenogpu_hw_ops *hw, const struct adrenogpu_hw_info *info);
++	bool start(IOService *provider) APPLE_KEXT_OVERRIDE;
++	void free(void) APPLE_KEXT_OVERRIDE;
++
++	IOReturn clientOpen(uint32_t *client);
++	IOReturn clientClose(uint32_t client);
++	IOReturn createContext(uint32_t client, uint64_t flags, uint64_t *ctx, uint64_t *lo, uint64_t *hi);
++	IOReturn destroyContext(uint32_t client, uint64_t ctx);
++	IOReturn allocBO(uint32_t client, uint64_t size, uint64_t flags, uint64_t *bo, uint64_t *actual);
++	IOReturn freeBO(uint32_t client, uint64_t bo);
++	IOReturn mapBO(uint32_t client, uint64_t ctx, uint64_t bo, uint64_t va, uint64_t prot);
++	IOReturn unmapBO(uint32_t client, uint64_t ctx, uint64_t va);
++	IOReturn submit(uint32_t client, uint64_t ctx, uint64_t ib_va, uint64_t dwords, uint64_t flags, uint64_t *fence);
++	IOReturn waitFence(uint32_t client, uint64_t ctx, uint64_t fence, uint64_t timeout_us, uint64_t *status);
++	IOReturn copyBufferMemory(uint32_t client, uint64_t bo, IOMemoryDescriptor **md);
++};
++
++OSDefineMetaClassAndStructors(AdrenoGPU, IOService);
++
++bool
++AdrenoGPU::setup(const struct adrenogpu_hw_ops *hw, const struct adrenogpu_hw_info *info)
++{
++	if (!init()) {
++		return false;
++	}
++	fLock = IOLockAlloc();
++	fDev = (struct adrenogpu_dev *)IOMallocZero(sizeof(*fDev));
++	if (fLock == NULL || fDev == NULL) {
++		return false; /* free() releases what exists */
++	}
++	uint64_t timeout_abs = 0;
++	nanoseconds_to_absolutetime(ADRENOGPU_CLOSE_TIMEOUT_NS, &timeout_abs);
++	struct adrenogpu_dev_config cfg;
++	adrenogpu_dev_default_config(&cfg, timeout_abs);
++	if (adrenogpu_dev_init(fDev, &adrenogpu_mem_ops, hw, info, &cfg) != ADRENOGPU_DEV_OK) {
++		IOFree(fDev, sizeof(*fDev));
++		fDev = NULL;
++		return false;
++	}
++	return true;
++}
++
++bool
++AdrenoGPU::start(IOService *provider)
++{
++	if (!IOService::start(provider)) {
++		return false;
++	}
++	setProperty(kIOUserClientClassKey, "AdrenoGPUUserClient");
++	registerService();
++	IOLog("AdrenoGPU: registered\n");
++	return true;
++}
++
++void
++AdrenoGPU::free(void)
++{
++	if (fDev != NULL) {
++		/* Every client holds a reference to us, so none is left; this only runs for a failed setup or at shutdown. */
++		adrenogpu_dev_destroy(fDev);
++		IOFree(fDev, sizeof(*fDev));
++		fDev = NULL;
++	}
++	if (fLock != NULL) {
++		IOLockFree(fLock);
++		fLock = NULL;
++	}
++	IOService::free();
++}
++
++IOReturn
++AdrenoGPU::clientOpen(uint32_t *client)
++{
++	IOLockLock(fLock);
++	int rc = adrenogpu_dev_client_open(fDev, client);
++	IOLockUnlock(fLock);
++	return adrenogpu_ioreturn(rc);
++}
++
++/* Waits out the client's in-flight work; the core fails it with a GPU reset once its close timeout has passed. */
++IOReturn
++AdrenoGPU::clientClose(uint32_t client)
++{
++	for (;;) {
++		IOLockLock(fLock);
++		int rc = adrenogpu_dev_client_close(fDev, client, adrenogpu_now());
++		IOLockUnlock(fLock);
++		if (rc == ADRENOGPU_DEV_EBUSY) {
++			IOSleep(1);
++			continue;
++		}
++		if (rc == ADRENOGPU_DEV_EHW) {
++			IOLog("AdrenoGPU: GPU reset failed while closing a client; its memory stays allocated\n");
++		}
++		return rc == ADRENOGPU_DEV_ENOENT ? kIOReturnSuccess : adrenogpu_ioreturn(rc);
++	}
++}
++
++IOReturn
++AdrenoGPU::createContext(uint32_t client, uint64_t flags, uint64_t *ctx, uint64_t *lo, uint64_t *hi)
++{
++	uint32_t f, h;
++	int rc = adrenogpu_arg32(flags, &f);
++	if (rc) {
++		return adrenogpu_ioreturn(rc);
++	}
++	IOLockLock(fLock);
++	rc = adrenogpu_dev_ctx_create(fDev, client, f, &h, lo, hi);
++	IOLockUnlock(fLock);
++	*ctx = h;
++	return adrenogpu_ioreturn(rc);
++}
++
++IOReturn
++AdrenoGPU::destroyContext(uint32_t client, uint64_t ctx)
++{
++	uint32_t c;
++	int rc = adrenogpu_arg32(ctx, &c);
++	if (rc) {
++		return adrenogpu_ioreturn(rc);
++	}
++	IOLockLock(fLock);
++	rc = adrenogpu_dev_ctx_destroy(fDev, client, c, adrenogpu_now());
++	IOLockUnlock(fLock);
++	return adrenogpu_ioreturn(rc);
++}
++
++IOReturn
++AdrenoGPU::allocBO(uint32_t client, uint64_t size, uint64_t flags, uint64_t *bo, uint64_t *actual)
++{
++	uint32_t f, h = 0;
++	int rc = adrenogpu_arg32(flags, &f);
++	if (rc) {
++		return adrenogpu_ioreturn(rc);
++	}
++	IOLockLock(fLock);
++	rc = adrenogpu_dev_bo_alloc(fDev, client, size, f, &h, actual);
++	IOLockUnlock(fLock);
++	*bo = h;
++	return adrenogpu_ioreturn(rc);
++}
++
++IOReturn
++AdrenoGPU::freeBO(uint32_t client, uint64_t bo)
++{
++	uint32_t b;
++	int rc = adrenogpu_arg32(bo, &b);
++	if (rc) {
++		return adrenogpu_ioreturn(rc);
++	}
++	IOLockLock(fLock);
++	rc = adrenogpu_dev_bo_free(fDev, client, b);
++	IOLockUnlock(fLock);
++	return adrenogpu_ioreturn(rc);
++}
++
++IOReturn
++AdrenoGPU::mapBO(uint32_t client, uint64_t ctx, uint64_t bo, uint64_t va, uint64_t prot)
++{
++	uint32_t c, b, p;
++	int rc = adrenogpu_arg32(ctx, &c);
++	if (!rc) {
++		rc = adrenogpu_arg32(bo, &b);
++	}
++	if (!rc) {
++		rc = adrenogpu_arg32(prot, &p);
++	}
++	if (rc) {
++		return adrenogpu_ioreturn(rc);
++	}
++	IOLockLock(fLock);
++	rc = adrenogpu_dev_bo_map(fDev, client, c, b, va, p, adrenogpu_now());
++	IOLockUnlock(fLock);
++	return adrenogpu_ioreturn(rc);
++}
++
++IOReturn
++AdrenoGPU::unmapBO(uint32_t client, uint64_t ctx, uint64_t va)
++{
++	uint32_t c;
++	int rc = adrenogpu_arg32(ctx, &c);
++	if (rc) {
++		return adrenogpu_ioreturn(rc);
++	}
++	IOLockLock(fLock);
++	rc = adrenogpu_dev_bo_unmap(fDev, client, c, va, adrenogpu_now());
++	IOLockUnlock(fLock);
++	return adrenogpu_ioreturn(rc);
++}
++
++IOReturn
++AdrenoGPU::submit(uint32_t client, uint64_t ctx, uint64_t ib_va, uint64_t dwords, uint64_t flags, uint64_t *fence)
++{
++	uint32_t c, d, f, fe = 0;
++	int rc = adrenogpu_arg32(ctx, &c);
++	if (!rc) {
++		rc = adrenogpu_arg32(dwords, &d);
++	}
++	if (!rc) {
++		rc = adrenogpu_arg32(flags, &f);
++	}
++	if (rc) {
++		return adrenogpu_ioreturn(rc);
++	}
++	IOLockLock(fLock);
++	rc = adrenogpu_dev_submit(fDev, client, c, ib_va, d, f, adrenogpu_now(), &fe);
++	IOLockUnlock(fLock);
++	*fence = fe;
++	return adrenogpu_ioreturn(rc);
++}
++
++/* No interrupts yet: the wait polls the fence word every millisecond; each poll also runs hang detection. */
++IOReturn
++AdrenoGPU::waitFence(uint32_t client, uint64_t ctx, uint64_t fence, uint64_t timeout_us, uint64_t *status)
++{
++	uint32_t c, fe;
++	int rc = adrenogpu_arg32(ctx, &c);
++	if (!rc) {
++		rc = adrenogpu_arg32(fence, &fe);
++	}
++	if (!rc && timeout_us > ADRENOGPU_WAIT_MAX_US) {
++		rc = ADRENOGPU_DEV_EINVAL;
++	}
++	if (rc) {
++		return adrenogpu_ioreturn(rc);
++	}
++	uint64_t span = 0;
++	nanoseconds_to_absolutetime(timeout_us * 1000ull, &span);
++	uint64_t deadline = adrenogpu_now() + span;
++	for (;;) {
++		enum adrenogpu_fence_status st = ADRENOGPU_FENCE_PENDING;
++		uint64_t now = adrenogpu_now();
++		IOLockLock(fLock);
++		rc = adrenogpu_dev_fence_status(fDev, client, c, fe, now, &st);
++		IOLockUnlock(fLock);
++		if (rc) {
++			return adrenogpu_ioreturn(rc);
++		}
++		if (st != ADRENOGPU_FENCE_PENDING) {
++			*status = st == ADRENOGPU_FENCE_LOST ? 1 : 0;
++			return kIOReturnSuccess;
++		}
++		if (now >= deadline) {
++			return kIOReturnTimeout;
++		}
++		IOSleep(1);
++	}
++}
++
++IOReturn
++AdrenoGPU::copyBufferMemory(uint32_t client, uint64_t bo, IOMemoryDescriptor **md)
++{
++	uint32_t b;
++	int rc = adrenogpu_arg32(bo, &b);
++	if (rc) {
++		return adrenogpu_ioreturn(rc);
++	}
++	IOLockLock(fLock);
++	IOMemoryDescriptor *found = (IOMemoryDescriptor *)adrenogpu_dev_bo_cookie(fDev, client, b, NULL);
++	if (found != NULL) {
++		found->retain(); /* the caller's reference outlives the core's if the buffer is freed meanwhile */
++	}
++	IOLockUnlock(fLock);
++	if (found == NULL) {
++		return kIOReturnNotFound;
++	}
++	*md = found;
++	return kIOReturnSuccess;
++}
++
++/* ---- AdrenoGPUUserClient ---- */
++
++class AdrenoGPUUserClient : public IOUserClient {
++	OSDeclareDefaultStructors(AdrenoGPUUserClient);
++
++	AdrenoGPU *fGPU;
++	uint32_t fClient; /* 0 once torn down */
++
++	IOReturn teardown(void);
++
++public:
++	bool initWithTask(task_t owningTask, void *securityID, UInt32 type) APPLE_KEXT_OVERRIDE;
++	bool start(IOService *provider) APPLE_KEXT_OVERRIDE;
++	void free(void) APPLE_KEXT_OVERRIDE;
++	IOReturn clientClose(void) APPLE_KEXT_OVERRIDE;
++	IOReturn clientDied(void) APPLE_KEXT_OVERRIDE;
++	bool didTerminate(IOService *provider, IOOptionBits options, bool *defer) APPLE_KEXT_OVERRIDE;
++	IOReturn clientMemoryForType(UInt32 type, IOOptionBits *options, IOMemoryDescriptor **memory) APPLE_KEXT_OVERRIDE;
++	IOReturn externalMethod(uint32_t selector, IOExternalMethodArguments *args,
++	    IOExternalMethodDispatch *dispatch, OSObject *target, void *reference) APPLE_KEXT_OVERRIDE;
++
++	static IOReturn sCreateContext(OSObject *target, void *ref, IOExternalMethodArguments *args);
++	static IOReturn sDestroyContext(OSObject *target, void *ref, IOExternalMethodArguments *args);
++	static IOReturn sAllocBO(OSObject *target, void *ref, IOExternalMethodArguments *args);
++	static IOReturn sFreeBO(OSObject *target, void *ref, IOExternalMethodArguments *args);
++	static IOReturn sMapBO(OSObject *target, void *ref, IOExternalMethodArguments *args);
++	static IOReturn sUnmapBO(OSObject *target, void *ref, IOExternalMethodArguments *args);
++	static IOReturn sSubmit(OSObject *target, void *ref, IOExternalMethodArguments *args);
++	static IOReturn sWaitFence(OSObject *target, void *ref, IOExternalMethodArguments *args);
++};
++
++OSDefineMetaClassAndStructors(AdrenoGPUUserClient, IOUserClient);
++
++/* Counts are exact: a call with more or fewer scalars, or any structure, is refused by IOKit before we run. */
++static IOExternalMethodDispatch adrenogpu_methods[] = {
++	{ AdrenoGPUUserClient::sCreateContext, 1, 0, 3, 0 },
++	{ AdrenoGPUUserClient::sDestroyContext, 1, 0, 0, 0 },
++	{ AdrenoGPUUserClient::sAllocBO, 2, 0, 2, 0 },
++	{ AdrenoGPUUserClient::sFreeBO, 1, 0, 0, 0 },
++	{ AdrenoGPUUserClient::sMapBO, 4, 0, 0, 0 },
++	{ AdrenoGPUUserClient::sUnmapBO, 2, 0, 0, 0 },
++	{ AdrenoGPUUserClient::sSubmit, 4, 0, 1, 0 },
++	{ AdrenoGPUUserClient::sWaitFence, 3, 0, 1, 0 },
++};
++#define ADRENOGPU_METHOD_COUNT (sizeof(adrenogpu_methods) / sizeof(adrenogpu_methods[0]))
++
++bool
++AdrenoGPUUserClient::initWithTask(task_t owningTask, void *securityID, UInt32 type)
++{
++	if (type != 0 || !IOUserClient::initWithTask(owningTask, securityID, type)) {
++		return false;
++	}
++	fGPU = NULL;
++	fClient = 0;
++	return true;
++}
++
++bool
++AdrenoGPUUserClient::start(IOService *provider)
++{
++	AdrenoGPU *gpu = OSDynamicCast(AdrenoGPU, provider);
++	if (gpu == NULL || !IOUserClient::start(provider)) {
++		return false;
++	}
++	uint32_t id = 0;
++	if (gpu->clientOpen(&id) != kIOReturnSuccess) {
++		return false;
++	}
++	gpu->retain();
++	fGPU = gpu;
++	__atomic_store_n(&fClient, id, __ATOMIC_RELEASE);
++	return true;
++}
++
++/* Idempotent and safe to race: whoever swaps the id out does the teardown, the others find nothing to do. */
++IOReturn
++AdrenoGPUUserClient::teardown(void)
++{
++	uint32_t id = __atomic_exchange_n(&fClient, 0u, __ATOMIC_ACQ_REL);
++	if (id == 0 || fGPU == NULL) {
++		return kIOReturnSuccess;
++	}
++	return fGPU->clientClose(id);
++}
++
++void
++AdrenoGPUUserClient::free(void)
++{
++	(void)teardown();
++	if (fGPU != NULL) {
++		fGPU->release();
++		fGPU = NULL;
++	}
++	IOUserClient::free();
++}
++
++IOReturn
++AdrenoGPUUserClient::clientClose(void)
++{
++	IOReturn ret = teardown();
++	terminate();
++	return ret;
++}
++
++IOReturn
++AdrenoGPUUserClient::clientDied(void)
++{
++	return clientClose();
++}
++
++bool
++AdrenoGPUUserClient::didTerminate(IOService *provider, IOOptionBits options, bool *defer)
++{
++	(void)teardown();
++	return IOUserClient::didTerminate(provider, options, defer);
++}
++
++IOReturn
++AdrenoGPUUserClient::clientMemoryForType(UInt32 type, IOOptionBits *options, IOMemoryDescriptor **memory)
++{
++	uint32_t id = __atomic_load_n(&fClient, __ATOMIC_ACQUIRE);
++	if (id == 0 || fGPU == NULL) {
++		return kIOReturnNotAttached;
++	}
++	*options = 0;
++	return fGPU->copyBufferMemory(id, type, memory);
++}
++
++IOReturn
++AdrenoGPUUserClient::externalMethod(uint32_t selector, IOExternalMethodArguments *args,
++    IOExternalMethodDispatch *, OSObject *, void *)
++{
++	if (selector >= ADRENOGPU_METHOD_COUNT || args == NULL || args->asyncWakePort != MACH_PORT_NULL) {
++		return kIOReturnUnsupported;
++	}
++	if (args->structureInputDescriptor != NULL || args->structureOutputDescriptor != NULL) {
++		return kIOReturnBadArgument;
++	}
++	return IOUserClient::externalMethod(selector, args, &adrenogpu_methods[selector], this, NULL);
++}
++
++#define ADRENOGPU_CLIENT(target, uc, id) \
++	AdrenoGPUUserClient *uc = OSDynamicCast(AdrenoGPUUserClient, target); \
++	if (uc == NULL || uc->fGPU == NULL) { return kIOReturnBadArgument; } \
++	uint32_t id = __atomic_load_n(&uc->fClient, __ATOMIC_ACQUIRE); \
++	if (id == 0) { return kIOReturnNotAttached; }
++
++IOReturn
++AdrenoGPUUserClient::sCreateContext(OSObject *target, void *, IOExternalMethodArguments *a)
++{
++	ADRENOGPU_CLIENT(target, uc, id)
++	return uc->fGPU->createContext(id, a->scalarInput[0], &a->scalarOutput[0], &a->scalarOutput[1], &a->scalarOutput[2]);
++}
++
++IOReturn
++AdrenoGPUUserClient::sDestroyContext(OSObject *target, void *, IOExternalMethodArguments *a)
++{
++	ADRENOGPU_CLIENT(target, uc, id)
++	return uc->fGPU->destroyContext(id, a->scalarInput[0]);
++}
++
++IOReturn
++AdrenoGPUUserClient::sAllocBO(OSObject *target, void *, IOExternalMethodArguments *a)
++{
++	ADRENOGPU_CLIENT(target, uc, id)
++	return uc->fGPU->allocBO(id, a->scalarInput[0], a->scalarInput[1], &a->scalarOutput[0], &a->scalarOutput[1]);
++}
++
++IOReturn
++AdrenoGPUUserClient::sFreeBO(OSObject *target, void *, IOExternalMethodArguments *a)
++{
++	ADRENOGPU_CLIENT(target, uc, id)
++	return uc->fGPU->freeBO(id, a->scalarInput[0]);
++}
++
++IOReturn
++AdrenoGPUUserClient::sMapBO(OSObject *target, void *, IOExternalMethodArguments *a)
++{
++	ADRENOGPU_CLIENT(target, uc, id)
++	return uc->fGPU->mapBO(id, a->scalarInput[0], a->scalarInput[1], a->scalarInput[2], a->scalarInput[3]);
++}
++
++IOReturn
++AdrenoGPUUserClient::sUnmapBO(OSObject *target, void *, IOExternalMethodArguments *a)
++{
++	ADRENOGPU_CLIENT(target, uc, id)
++	return uc->fGPU->unmapBO(id, a->scalarInput[0], a->scalarInput[1]);
++}
++
++IOReturn
++AdrenoGPUUserClient::sSubmit(OSObject *target, void *, IOExternalMethodArguments *a)
++{
++	ADRENOGPU_CLIENT(target, uc, id)
++	return uc->fGPU->submit(id, a->scalarInput[0], a->scalarInput[1], a->scalarInput[2], a->scalarInput[3], &a->scalarOutput[0]);
++}
++
++IOReturn
++AdrenoGPUUserClient::sWaitFence(OSObject *target, void *, IOExternalMethodArguments *a)
++{
++	ADRENOGPU_CLIENT(target, uc, id)
++	return uc->fGPU->waitFence(id, a->scalarInput[0], a->scalarInput[1], a->scalarInput[2], &a->scalarOutput[0]);
++}
++
++/* ---- entry point for the bring-up code; nothing calls it yet ---- */
++
++static AdrenoGPU *adrenogpu_instance;
++
++extern "C" int
++adrenogpu_iokit_start(const struct adrenogpu_hw_ops *hw, const struct adrenogpu_hw_info *info)
++{
++	uint32_t enabled = 0;
++	if (!PE_parse_boot_argn("adrenogpu", &enabled, sizeof(enabled)) || enabled != 1) {
++		return ADRENOGPU_IOKIT_DISABLED;
++	}
++	if (hw == NULL || info == NULL) {
++		return ADRENOGPU_IOKIT_EFAIL;
++	}
++	IOService *resources = IOService::getResourceService();
++	if (resources == NULL) {
++		return ADRENOGPU_IOKIT_EFAIL;
++	}
++	AdrenoGPU *gpu = OSTypeAlloc(AdrenoGPU);
++	if (gpu == NULL) {
++		return ADRENOGPU_IOKIT_EFAIL;
++	}
++	if (!gpu->setup(hw, info)) {
++		gpu->release();
++		return ADRENOGPU_IOKIT_EFAIL;
++	}
++	AdrenoGPU *expected = NULL;
++	if (!__atomic_compare_exchange_n(&adrenogpu_instance, &expected, gpu, false, __ATOMIC_ACQ_REL, __ATOMIC_ACQUIRE)) {
++		gpu->release();
++		return ADRENOGPU_IOKIT_EEXIST;
++	}
++	if (!gpu->attach(resources)) {
++		__atomic_store_n(&adrenogpu_instance, (AdrenoGPU *)NULL, __ATOMIC_RELEASE);
++		gpu->release();
++		return ADRENOGPU_IOKIT_EFAIL;
++	}
++	if (!gpu->start(resources)) {
++		gpu->detach(resources);
++		__atomic_store_n(&adrenogpu_instance, (AdrenoGPU *)NULL, __ATOMIC_RELEASE);
++		gpu->release();
++		return ADRENOGPU_IOKIT_EFAIL;
++	}
++	return ADRENOGPU_IOKIT_STARTED; /* adrenogpu_instance keeps the reference */
++}
++
++#endif /* ARM64_BOARD_CONFIG_FP6 */
+diff --git a/iokit/conf/files.arm64 b/iokit/conf/files.arm64
+--- a/iokit/conf/files.arm64
++++ b/iokit/conf/files.arm64
+@@ -15,6 +15,7 @@
+ iokit/Kernel/arm/SweetWatchdog.cpp                               optional iokitcpp
+ iokit/Kernel/arm/SweetSurface.cpp                                optional iokitcpp
+ iokit/Kernel/arm/SweetFramebuffer.cpp                            optional iokitcpp
++iokit/Kernel/arm/AdrenoGPU.cpp                                   optional iokitcpp
+ iokit/Kernel/arm/SweetBattery.cpp                                optional iokitcpp
+ iokit/Kernel/arm/hid/SweetHID.cpp                                optional iokitcpp
+ iokit/Kernel/arm/hid/IOHIDEvent.cpp                              optional iokitcpp

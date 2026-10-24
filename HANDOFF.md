@@ -30,7 +30,9 @@ draw done; **next in M6** the load-action clear (2D engine blit, `emit_2d_clear`
 `SharedPassState.m`), then shader program state (VS/FS registers from compiled shaders, `emit_program` in its
 `ProgramState.m`), vertex fetch, UBOs and textures, each checked against `tools/fp6-pm4-state.py` on a Turnip
 capture of the same scene. **Next in the driver:** M3 buffer and context objects on the kernel allocator,
-M4 submit with fences, timeout and reset, M5 the `AdrenoGPU` IOService and user client.
+M4 submit with fences, timeout and reset. M5 (the `AdrenoGPU` IOService and user client) exists as source and host
+tests (patches 0224 and 0225, not enabled, never booted); what remains is the hardware backend in `sweet_gpu.c`
+and a boot self-test, see "Kernel IOKit shell" in the design doc.
 **Next on the phone:** put our own builder's flat triangle through the replay path (turn the builder's stream
 and a shader blob into a replay entry), compare with the lavapipe grid, then retest the 576 KiB-fitting GMEM
 layout (`tools/mesa-a810-sysmem-vpc.patch`) with the drain rule in place.

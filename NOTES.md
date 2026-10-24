@@ -1,5 +1,19 @@
 # ios-extra — current state
 
+## FP6 GPU M5: AdrenoGPU IOService and user client, compile-checked only (2026-10-24)
+
+**Source and host tests, no phone.** Patch 0224 adds the pure-C device core `adrenogpu_dev` (client table, handle
+tables with generations, ownership, validation, quotas, submit, fence status, teardown with a reset after a close
+timeout); `tests/test_adrenogpu.py::test_device_core` runs it under ASan/UBSan against a fake memory and hardware
+table (validation failures, a client using another client's handles, teardown with jobs in flight, handle, quota
+and client-slot exhaustion, allocator failure unwinding, failed reset). Patch 0225 adds the IOKit shell
+`iokit/Kernel/arm/AdrenoGPU.cpp` (`AdrenoGPU` IOService, `AdrenoGPUUserClient` with eight external methods) and
+`bsd/dev/adrenogpu_iokit.h`. Both compile with `tools/xnu-cc.py` against the CI build tree of run `40093614436`
+(object emitted, no undefined symbol outside the kernel). Nothing is enabled: no personality, nothing calls
+`adrenogpu_iokit_start`, and it needs boot argument `adrenogpu=1` anyway. The hardware backend in `sweet_gpu.c`
+(function table described in `docs/ADRENOGPU_DESIGN.md`, "Kernel IOKit shell") is not written; the shell has never
+run, not even in a kernel boot. Not yet built by CI, not linked, not booted.
+
 ## FP6 GPU M3 verified on the phone: the replay runs on the AdrenoGPU cores (2026-10-24)
 
 **Phone measured:** CI `40093614436` (head `b75f2686d42212a31c635070cd865dddb3f2c76e`, patches 0221 and 0222)
