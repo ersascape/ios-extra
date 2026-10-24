@@ -43,20 +43,38 @@ python3 tools/fp6-pm4-state.py CAPTURE.rd --regs drivers/adrenogpu/pm4/Fp6A8xxRe
 python3 tools/gen-a8xx-regs.py --mesa <mesa> --out drivers/adrenogpu/pm4/Fp6A8xxRegs.h # must reproduce byte for byte
 ```
 
-Scene captures use Mesa at `6a7d3020a781` (`tu: Match SW depth clear value packing with HW`), configured with
-`meson setup build-vk -Dvulkan-drivers=freedreno -Dgallium-drivers= -Dtools=freedreno,drm-shim -Dfreedreno-kmds=msm
--Dllvm=disabled -Dopengl=false` (a second tree, `build`, with `-Dvulkan-drivers=` empty gives `cffdump` and the noop
-`libfreedreno_noop_drm_shim.so`). Then, per scene:
+Scene captures use Mesa at `6a7d3020a781` (`tu: Match SW depth clear value packing with HW`), kept outside `/tmp`
+(a reboot clears it) in `~/Dev/mesa-a810` with its venv in `~/Dev/mesa-a810-venv`. Rebuild from nothing:
 
 ```sh
-glslangValidator -V tools/fp6-vk-scenes/NAME.vert -o spv/NAME.vert.spv     # tools/fp6-vk-scenes/build.sh does all
-gcc -I<mesa>/include -o fp6-vk-scenes tools/fp6-vk-scenes.c -lvulkan -lm
-VK_DRIVER_FILES=/usr/share/vulkan/icd.d/lvp_icd.json ./fp6-vk-scenes NAME spv       # reference grid (lavapipe)
-LD_PRELOAD=<shim> FD_GPU_ID=810 FD_RD_DUMP=enable,full FD_RD_DUMP_PATH=cap/NAME TU_GMEM=622592 \
-  TU_DEBUG=sysmem,noubwc,syncdraw VK_DRIVER_FILES=<build-vk>/src/freedreno/vulkan/freedreno_devenv_icd.x86_64.json \
-  ./fp6-vk-scenes NAME spv                                                           # Turnip A810 capture
+mkdir -p ~/Dev/mesa-a810 && cd ~/Dev/mesa-a810 && git init -q . && git remote add origin https://gitlab.freedesktop.org/mesa/mesa.git
+git fetch --depth 1 origin 6a7d3020a781a191e21c35ed9410d9da73e0de4a && git checkout -q FETCH_HEAD
+python3 -m venv ~/Dev/mesa-a810-venv && ~/Dev/mesa-a810-venv/bin/pip install meson mako pyyaml packaging ply
+export PATH=~/Dev/mesa-a810-venv/bin:$PATH
+meson setup build-vk -Dbuildtype=debugoptimized -Dvulkan-drivers=freedreno -Dgallium-drivers= -Dtools=freedreno,drm-shim \
+  -Dfreedreno-kmds=msm -Dllvm=disabled -Dopengl=false -Dgles1=disabled -Dgles2=disabled -Dglx=disabled -Degl=disabled \
+  -Dplatforms= -Dvulkan-layers= -Dvideo-codecs= && ninja -C build-vk
+```
+
+One tree gives everything: `build-vk/src/freedreno/vulkan/freedreno_devenv_icd.x86_64.json` (Turnip), `.../decode/cffdump`,
+`.../drm-shim/libfreedreno_noop_drm_shim.so`, `.../computerator/computerator`. Host tools needed: ninja, glslangValidator,
+a C compiler, the Vulkan loader. Then, per scene (scenes workspace `~/Dev/mesa-a810/scenes`):
+
+```sh
+W=~/Dev/mesa-a810/scenes M=~/Dev/mesa-a810
+(cd tools/fp6-vk-scenes && sh build.sh $W/spv)                              # shaders to SPIR-V
+gcc -I$M/include -o $W/fp6-vk-scenes tools/fp6-vk-scenes.c -lvulkan -lm
+VK_DRIVER_FILES=/usr/share/vulkan/icd.d/lvp_icd.json $W/fp6-vk-scenes NAME $W/spv       # reference grid (lavapipe)
+LD_PRELOAD=$M/build-vk/src/freedreno/drm-shim/libfreedreno_noop_drm_shim.so FD_GPU_ID=810 FD_RD_DUMP=enable,full \
+  FD_RD_DUMP_PATH=$W/cap/NAME TU_GMEM=622592 TU_DEBUG=sysmem,noubwc,syncdraw \
+  VK_DRIVER_FILES=$M/build-vk/src/freedreno/vulkan/freedreno_devenv_icd.x86_64.json $W/fp6-vk-scenes NAME $W/spv  # Turnip A810 capture
 python3 tools/fp6-gen-replay.py OUT.h NAME:cap/NAME/*.rd:grid=REF.txt[:inject=KEYS][:post=KEYS] ...
 ```
+
+Use `TU_DEBUG=...,syncdraw` for captures that must render correctly (the drain rule). `ir3` debug flags such as
+`IR3_SHADER_DEBUG=nodescprefetch` are available for A/B variants. The kernel-side checks use a CI build tree:
+`gh run download RUN -R ersascape/ios-extra -n xnu-buildtree`, extract, and
+`gh run view RUN -R ersascape/ios-extra --log > ci.log`, then `python3 tools/xnu-cc.py ci.log BUILDTREE bsd/dev/FILE.c --per-file`.
 
 The generated header becomes a patch against `bsd/dev/fp6_gpu_replay_data.h` (see patches 0216 to 0220 for the
 pattern: stage the previous header in a scratch git repo, copy the new one in, `git diff` without the `index`
