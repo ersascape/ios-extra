@@ -43,6 +43,15 @@ class AdrenoGpuCoreTests(unittest.TestCase):
             'PASS: a reset abandons pending jobs, wakes their waiters and marks the fences lost',
             'PASS: the sequence wraps and skips zero'])
 
+    def test_device_core(self):
+        self.run_core('adrenogpu_vm.c adrenogpu_ctx.c adrenogpu_ring.c adrenogpu_sched.c adrenogpu_dev.c', 'test_dev.c', [
+            'PASS: every user value is validated and refused submits leave the ring and hardware untouched',
+            "PASS: a client cannot use, free, map, unmap, submit to or wait on another client's handles",
+            'PASS: a closing client waits for its in-flight jobs and is then torn down without a reset',
+            'PASS: a client whose job never retires is torn down after a reset fails the job',
+            'PASS: a failed GPU reset leaves in-flight memory allocated',
+            'PASS: pools, quotas, client slots and allocator failures are handled and handles do not alias'])
+
     def test_ring_framing(self):
         self.run_core('adrenogpu_ring.c', 'test_ring.c', [
             'PASS: type-7 headers match captured Turnip headers',
