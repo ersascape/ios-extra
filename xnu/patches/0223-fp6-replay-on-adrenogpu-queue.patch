@@ -1,0 +1,166 @@
+diff --git a/bsd/dev/sweet_gpu.c b/bsd/dev/sweet_gpu.c
+--- a/bsd/dev/sweet_gpu.c
++++ b/bsd/dev/sweet_gpu.c
+@@ -2815,6 +2815,7 @@ fail:
+ #include "adrenogpu_vm.h"
+ #include "adrenogpu_ctx.h"
+ #include "adrenogpu_ring.h"
++#include "adrenogpu_sched.h"
+ 
+ static int fp6_gmu_clocks_prepare(struct fp6_smmu_clocks *);
+ 
+@@ -4959,6 +4960,13 @@ fp6_gpu_cp_ib_dump(vm_offset_t gpu)
+ 
+ static uint32_t fp6_replay_last_rbbm, fp6_replay_last_bv_rptr;
+ 
++/* The replay's submissions go through the AdrenoGPU queue (drivers/adrenogpu/adrenogpu_sched.c): it writes the framing
++ * into the firmware ring with wrap-around, numbers the fence, retires jobs from the fence word and times out. One job
++ * is in flight at a time here. The unit of the timeout is one poll of the loop below (about 100 us). */
++#define FP6_SCHED_TIMEOUT_POLLS 10000u
++static struct adrenogpu_sched fp6_sched;
++static int fp6_sched_ready;
++
+ /* Submit one CP_INDIRECT_BUFFER of the first ib_dwords of the capture's stream
+  * followed by a fence write; returns 1 once the fence and RPTR catch up. */
+ static int
+@@ -4979,76 +4987,90 @@ fp6_replay_submit(vm_offset_t g, vm_offset_t gpu, const struct fp6_replay *r,
+ 			break;
+ 		}
+ 	}
+-	uint64_t size = (uint64_t)2 << (cntl & 0xffu);
+-	/* Linux gen8_rb_context_switch() + gen8_ringbuffer_submitcmd() preamble: Mesa's
+-	 * CP_BV_BR_COUNT_OPS PIPE_SET_BR_OFFSET assumes the kernel cleared the BV/BR
+-	 * counters with CP_RESET_CONTEXT_STATE before the user IB. */
++	uint64_t size = (uint64_t)2 << (cntl & 0xffu); /* ring size in dwords */
+ 	/* The PM4 framing around the IB is the AdrenoGPU ring builder's (drivers/adrenogpu/adrenogpu_ring.c);
+-	 * fp6gpureplaynoinv=1 and fp6gpureplaynoflush=1 reproduce the runs before patches 0213 and 0214. The IB must
+-	 * lie inside one mapping of the replay context. */
++	 * fp6gpureplaynoinv=1 and fp6gpureplaynoflush=1 reproduce the runs before patches 0213 and 0214. */
+ 	int noinv = 0, noflush = 0;
+ 	(void)PE_parse_boot_argn("fp6gpureplaynoinv", &noinv, sizeof(noinv));
+ 	(void)PE_parse_boot_argn("fp6gpureplaynoflush", &noflush, sizeof(noflush));
+-	if (!adrenogpu_ctx_find(&fp6_ctx, r->ib_va, 4ull * ib_dwords, 0) ||
+-	    (r->ib2_va && !adrenogpu_ctx_find(&fp6_ctx, r->ib2_va, 4ull * r->ib2_dwords, 0))) {
+-		printf("QCOM GPU REPLAY: %s IB is not inside one mapping of the replay context; refusing\n", r->name);
+-		return 0;
+-	}
+-	struct adrenogpu_submit submit = {
+-		.ib_va = r->ib_va,
+-		.ib_dwords = ib_dwords,
+-		.ib2_va = r->ib2_va,
+-		.ib2_dwords = r->ib2_va ? r->ib2_dwords : 0,
+-		.fence_va = fp6_exec_result_va + 4u * FP6_REPLAY_FENCE_OFFSET,
+-		.fence_value = FP6_REPLAY_FENCE_VALUE,
+-		.flags = (noinv == 1 ? ADRENOGPU_SUBMIT_NO_INVALIDATE : 0u) | (noflush == 1 ? ADRENOGPU_SUBMIT_NO_CLEAN : 0u),
+-	};
+-	uint32_t cmd[ADRENOGPU_SUBMIT_MAX_DWORDS];
+-	unsigned n = (unsigned)adrenogpu_ring_build_submit(&submit, cmd, ADRENOGPU_SUBMIT_MAX_DWORDS);
+-	if (!n) {
+-		printf("QCOM GPU REPLAY: %s submit framing refused (ib 0x%llx, %u dwords)\n", r->name,
+-		    (unsigned long long)r->ib_va, ib_dwords);
+-		return 0;
+-	}
+ 	*dropped_out = 0;
+ 	*seen_out = 0;
+ 	*rptr_out = rptr;
+-	*target_out = wptr + n;
++	*target_out = wptr;
+ 	/* The BR read pointer can lag after BV/BR sync work; an idle GPU is quiescent. */
+-	if (!ring || (rptr != wptr && fp6_smmu_read32(gpu, 0x48u) != 1u) ||
+-	    (uint64_t)wptr + n >= size || size * 4u > ring->desc[7]) {
++	if (!ring || (rptr != wptr && fp6_smmu_read32(gpu, 0x48u) != 1u) || size * 4u > ring->desc[7]) {
+ 		printf("QCOM GPU REPLAY: %s ring unavailable (ring=%u size=%llu rptr=%u wptr=%u rbbm=0x%08x)\n",
+ 		    r->name, ring != NULL, (unsigned long long)size, rptr, wptr, fp6_smmu_read32(gpu, 0x48u));
+ 		return 0;
+ 	}
++	volatile uint32_t *ring_words = (volatile uint32_t *)(void *)ring->backing.va;
++	if (!fp6_sched_ready || fp6_sched.rb.base != ring_words || fp6_sched.rb.size != (uint32_t)size) {
++		if (adrenogpu_sched_init(&fp6_sched, ring_words, (uint32_t)size, wptr,
++		    fp6_exec_result_va + 4u * FP6_REPLAY_FENCE_OFFSET, FP6_SCHED_TIMEOUT_POLLS)) {
++			printf("QCOM GPU REPLAY: %s submission queue refused the ring (size %llu dwords)\n", r->name,
++			    (unsigned long long)size);
++			return 0;
++		}
++		fp6_sched_ready = 1;
++	}
++	fp6_sched.rb.wptr = wptr; /* other probes write the ring too: the register is authoritative */
++	struct adrenogpu_submit submit = {
++		.ib_va = r->ib_va,
++		.ib_dwords = ib_dwords,
++		.ib2_va = r->ib2_va,
++		.ib2_dwords = r->ib2_va ? r->ib2_dwords : 0,
++		.flags = (noinv == 1 ? ADRENOGPU_SUBMIT_NO_INVALIDATE : 0u) | (noflush == 1 ? ADRENOGPU_SUBMIT_NO_CLEAN : 0u),
++	}; /* the queue supplies the fence address and sequence */
+ 	volatile uint32_t *fence = (volatile uint32_t *)(void *)(fp6_exec_result.va + 4u * FP6_REPLAY_FENCE_OFFSET);
+-	*fence = 0xdeadbeefu;
++	*fence = 0; /* 0 is never a sequence number */
+ 	(void)fp6_gpu_kernel_publish(NULL, fp6_exec_result.va, 4096u);
+-	volatile uint32_t *slot = (volatile uint32_t *)(void *)(ring->backing.va + 4u * wptr);
+-	for (unsigned i = 0; i < n; i++) slot[i] = cmd[i];
+-	(void)fp6_gpu_kernel_publish(NULL, ring->backing.va + 4u * wptr, 4u * n);
++	uint32_t new_wptr = 0, ctx_fence = 0;
++	int rc = adrenogpu_sched_submit(&fp6_sched, &fp6_ctx, &submit, rptr, 0, &new_wptr, &ctx_fence);
++	if (rc) {
++		printf("QCOM GPU REPLAY: %s submission refused by the queue (%d: %s)\n", r->name, rc,
++		    rc == ADRENOGPU_SCHED_EUNMAPPED ? "the IB is not inside one mapping of the replay context" :
++		    rc == ADRENOGPU_SCHED_EBUSY ? "no ring space or job slot" : "invalid request");
++		return 0;
++	}
++	*target_out = new_wptr;
++	(void)fp6_gpu_kernel_publish(NULL, ring->backing.va, (uint32_t)(size * 4u)); /* the framing may wrap */
+ 	__asm__ volatile("dsb sy" ::: "memory");
+ 	unsigned dropped = 0;
+ 	for (unsigned attempt = 0; attempt < 2u; attempt++) {
+-		fp6_smmu_write32(gpu, FP6_GPU_CP_RB_WPTR_GC, wptr + n);
++		fp6_smmu_write32(gpu, FP6_GPU_CP_RB_WPTR_GC, new_wptr);
+ 		dropped = fp6_smmu_read32(g, FP6_GMU_AHB_FENCE_STATUS) & 1u;
+ 		if (!dropped) break;
+ 	}
+ 	uint32_t seen = 0, now_rptr = 0, rbbm = 0;
+-	for (unsigned i = 0; i < 10000u; i++) {
++	int done = 0;
++	for (unsigned i = 0; i < FP6_SCHED_TIMEOUT_POLLS; i++) {
+ 		fp6_gpu_invalidate_cpu_cache(fp6_exec_result.va, 4096u);
+ 		seen = *fence;
++		(void)adrenogpu_sched_poll(&fp6_sched, i, seen);
+ 		now_rptr = fp6_smmu_read32(gpu, FP6_GPU_CP_RB_RPTR_BR);
+ 		rbbm = fp6_smmu_read32(gpu, 0x48u); /* RBBM_STATUS: 1 = idle */
+-		if (seen == FP6_REPLAY_FENCE_VALUE && (now_rptr == wptr + n || rbbm == 1u)) break;
++		if (!fp6_sched.count && (now_rptr == new_wptr || rbbm == 1u)) {
++			done = 1;
++			break;
++		}
+ 		delay(100);
+ 	}
++	if (!done && adrenogpu_sched_poll(&fp6_sched, FP6_SCHED_TIMEOUT_POLLS, seen) == ADRENOGPU_SCHED_HUNG) {
++		printf("QCOM GPU REPLAY: %s job hung (sequence %u, fence word 0x%08x); abandoning it in the queue\n",
++		    r->name, fp6_sched.jobs[fp6_sched.head].seq, seen);
++		(void)adrenogpu_sched_reset(&fp6_sched, fp6_smmu_read32(gpu, FP6_GPU_CP_RB_WPTR_GC));
++	}
++	if (done && !adrenogpu_ctx_fence_done(&fp6_ctx, ctx_fence)) {
++		printf("QCOM GPU REPLAY: %s queue retired the job but the context fence %u is not done\n", r->name, ctx_fence);
++		done = 0;
++	}
+ 	*dropped_out = dropped;
+-	*seen_out = seen;
++	/* Report the historical fence value once the job retired, so logs and the pass check stay comparable. */
++	*seen_out = done ? FP6_REPLAY_FENCE_VALUE : seen;
+ 	*rptr_out = now_rptr;
+ 	fp6_replay_last_rbbm = rbbm;
+ 	fp6_replay_last_bv_rptr = fp6_smmu_read32(gpu, 0x2028u); /* CP_RB_RPTR_BV 0x80a */
+-	return seen == FP6_REPLAY_FENCE_VALUE && (now_rptr == wptr + n || rbbm == 1u);
++	return done;
+ }
+ 
+ static int
+@@ -5342,6 +5364,10 @@ fp6_gpu_replay_probe(vm_offset_t g, vm_offset_t gpu)
+ 	}
+ 	if (fp6_scene_run)
+ 		printf("QCOM GPU SCENES: %u of %u scene renders match the reference\n", fp6_scene_run - fp6_scene_bad, fp6_scene_run);
++	if (fp6_sched_ready)
++		printf("QCOM GPU SCHED: submitted=%lu retired=%lu failed=%lu pending=%u last_seq=%u ring_wptr=%u\n",
++		    fp6_sched.submitted, fp6_sched.retired, fp6_sched.failed, fp6_sched.count, fp6_sched.next_seq,
++		    fp6_sched.rb.wptr);
+ 	printf("QCOM GPU REPLAY: all %u captures passed\n", (unsigned)FP6_REPLAY_COUNT);
+ 	return 1;
+ }

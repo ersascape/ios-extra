@@ -78,8 +78,12 @@ class GPUProbeTests(unittest.TestCase):
                           'host ring write must target a firmware kind-1 ring only')
             self.assertIn('PE_parse_boot_argn("fp6gpucompute"', source,
                           'compute dispatch must remain explicitly opt-in')
-            self.assertIn('adrenogpu_ring_build_submit(&submit', source,
-                          'replay framing must come from the AdrenoGPU ring builder')
+            self.assertIn('adrenogpu_sched_submit(&fp6_sched, &fp6_ctx, &submit', source,
+                          'replay submissions must go through the AdrenoGPU queue')
+            self.assertIn('adrenogpu_ring_build_submit(&framed', (ROOT / 'drivers/adrenogpu/adrenogpu_sched.c').read_text(),
+                          'the queue frames every job with the ring builder')
+            self.assertIn('adrenogpu_sched_reset(&fp6_sched', source,
+                          'a hung replay job must be abandoned through the queue')
             ring = (ROOT / 'drivers/adrenogpu/adrenogpu_ring.c').read_text()
             self.assertIn('pkt1(&w, OP_RESET_CONTEXT_STATE, RESET_CONTEXT_ALL);', ring,
                           'replay must clear BV/BR counters like the Linux gen8 submit path')
