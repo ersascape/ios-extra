@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Replay the register writes of a PM4 stream and report the state a draw sees.
 
-  fp6-pm4-state.py CAPTURE.rd [--regs Fp6A8xxRegs.h] [--json OUT]
+  fp6-pm4-state.py CAPTURE.rd [--regs Fp6A8xxRegs.h] [--json OUT] [--packets] [--sysmem]
   fp6-pm4-state.py --words STREAM.bin ...          (a raw dword stream, no memory behind it)
 
 Used as the oracle for the portable A810 PM4 builder: a Mesa Turnip capture and the builder's
@@ -26,6 +26,7 @@ OP_DRAW_INDX_OFFSET = 0x38
 OP_EVENT_WRITE7 = 0x46
 
 RD_GPUADDR, RD_BUFFER_CONTENTS, RD_CMDSTREAM_ADDR = 3, 12, 6
+DS_MODE_MASK, DS_SYSMEM = 0x70, 1 << 6  # enable-mask bits BINNING (20), GMEM (21), SYSMEM (22) shifted down by 16
 DS_DISABLE = 1 << 1  # CP_SET_DRAW_STATE flags: bit 0 ENABLE_ALL_GROUPS, bit 1 DISABLE, bit 2 DISABLE_ALL_GROUPS
 
 
@@ -80,6 +81,11 @@ class Walker:
         self.groups = {}
         self.draws = []
         self.packets = 0
+        self.trace = None  # set to a list to record every packet in stream order (packet-level oracle)
+        # None applies every enabled draw-state group, which is what the walker always did. 'sysmem' applies only the
+        # groups whose enable mask includes direct rendering (CP_SET_DRAW_STATE bit 22), so a binning-only group (the
+        # binning VS) no longer overrides the render-pass state; groups without any mode bit apply always.
+        self.render_mode = None
 
     def run(self, va, dwords):
         self.stream(self.mem.read(va, dwords) if self.mem else va)
@@ -95,6 +101,8 @@ class Walker:
                     raise ValueError('bad type-4 parity 0x%08x' % h)
                 for k in range(count):
                     self.state[reg + k] = words[i + 1 + k]
+                if self.trace is not None:
+                    self.trace.append(('pkt4', reg, tuple(words[i + 1:i + 1 + count])))
                 i += 1 + count
             elif kind == 7:
                 op, count = (h >> 16) & 0x7f, h & 0x3fff
@@ -109,6 +117,8 @@ class Walker:
             self.packets += 1
 
     def packet7(self, op, p):
+        if self.trace is not None:
+            self.trace.append(('pkt7', op, tuple(p)))
         if op == OP_INDIRECT_BUFFER:
             self.run(p[0] | (p[1] << 32), p[2])
         elif op == OP_SET_DRAW_STATE:
@@ -118,7 +128,7 @@ class Walker:
                 if flags & 4:  # DISABLE_ALL_GROUPS
                     self.groups.clear()
                 elif count and not flags & DS_DISABLE:
-                    self.groups[gid] = (lo | (hi << 32), count)
+                    self.groups[gid] = (lo | (hi << 32), count, flags)
                 else:
                     self.groups.pop(gid, None)
         elif op == OP_CONTEXT_REG_BUNCH:
@@ -130,9 +140,13 @@ class Walker:
         elif op == OP_DRAW_INDX_OFFSET:
             at_draw = dict(self.state)
             for gid in sorted(self.groups):
+                va, count, flags = self.groups[gid]
+                if self.render_mode == 'sysmem' and flags & DS_MODE_MASK and not flags & DS_SYSMEM:
+                    continue
                 sub = Walker(self.mem)
                 sub.state = at_draw
-                sub.run(*self.groups[gid])
+                sub.trace = self.trace
+                sub.run(va, count)
             self.draws.append((list(p), at_draw))
 
 
@@ -140,17 +154,34 @@ def main():
     args = sys.argv[1:]
     header = json_out = None
     path = None
+    packets = sysmem = False
     while args:
         a = args.pop(0)
         if a == '--regs':
             header = args.pop(0)
         elif a == '--json':
             json_out = args.pop(0)
+        elif a == '--packets':
+            packets = True
+        elif a == '--sysmem':
+            sysmem = True
         else:
             path = a
     bos, cmd = parse_rd(path)
     walker = Walker(Memory(bos))
+    if sysmem:
+        walker.render_mode = 'sysmem'
+    if packets:
+        walker.trace = []
     walker.run(*cmd[0])
+    if packets:
+        names = reg_names(header)
+        for kind, op, p in walker.trace:
+            if kind == 'pkt4':
+                print('pkt4 0x%05x %s %s' % (op, names.get(op, '?'), [hex(x) for x in p]))
+            else:
+                print('pkt7 op=0x%02x %s' % (op, [hex(x) for x in p]))
+        return
     if not walker.draws:
         raise SystemExit('no draw packet found')
     names = reg_names(header)

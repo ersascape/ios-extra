@@ -137,9 +137,15 @@ int main(int argc, char **argv)
 	/* texbig: the checker as a 16x16 texture (4x4 blocks); texlin: the 4x4 texture with linear filtering. */
 	int is_texbig = !strcmp(scene, "texbig"), is_texlin = !strcmp(scene, "texlin");
 	if (is_texbig || is_texlin) is_texlinear = 1;
-	const char *shader = is_vbufdraw ? "vertexbuf" : is_idxonly ? "flat" : is_texlinear ? "texture" : scene;
+	/* fill2d: no render pass or draw; vkCmdFillBuffer, which Turnip does as a 2D-engine solid-colour clear
+	 * (r2d_ops, R32_UINT linear destination), the stream the PM4 builder's 2D clear is checked against.
+	 * Reuses the flat shaders. */
+	int is_fill2d = !strcmp(scene, "fill2d");
+	/* flatclr: the flat scene cleared to (0.25, 0.5, 0.75, 1), a clear colour with every byte distinct. */
+	int is_flatclr = !strcmp(scene, "flatclr");
+	const char *shader = is_fill2d || is_flatclr ? "flat" : is_vbufdraw ? "vertexbuf" : is_idxonly ? "flat" : is_texlinear ? "texture" : scene;
 	if (!(is_flat || is_varying || is_ubo || is_blend || is_depth || is_texture || is_vbuf || is_vbufdraw ||
-	      is_idxonly || is_texlinear)) {
+	      is_idxonly || is_texlinear || is_fill2d || is_flatclr)) {
 		fprintf(stderr, "unknown scene %s\n", scene);
 		return 2;
 	}
@@ -356,10 +362,15 @@ int main(int argc, char **argv)
 		barrier(cmd, tex.i, VK_IMAGE_ASPECT_COLOR_BIT, VK_IMAGE_LAYOUT_PREINITIALIZED,
 		    VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL, VK_ACCESS_HOST_WRITE_BIT, VK_ACCESS_SHADER_READ_BIT,
 		    VK_PIPELINE_STAGE_HOST_BIT, VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT);
-	VkClearValue clears[2] = { { .color = { { is_blend ? 0.0f : 0.0f, 0.0f, is_blend ? 1.0f : 0.0f, 1.0f } } },
+	VkClearValue clears[2] = { { .color = { { is_flatclr ? 0.25f : 0.0f, is_flatclr ? 0.5f : 0.0f,
+	    is_blend ? 1.0f : is_flatclr ? 0.75f : 0.0f, 1.0f } } },
 	    { .depthStencil = { 1.0f, 0 } } };
 	VkRenderPassBeginInfo rpbi = { VK_STRUCTURE_TYPE_RENDER_PASS_BEGIN_INFO, 0, rp, fb, { { 0, 0 }, { W, H } },
 	    is_depth ? 2u : 1u, clears };
+	if (is_fill2d) {
+		vkCmdFillBuffer(cmd, readback.b, 0, W * H * 4, 0x40bf80ffu);
+		goto end_cmd;
+	}
 	vkCmdBeginRenderPass(cmd, &rpbi, VK_SUBPASS_CONTENTS_INLINE);
 	vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, pipe);
 	if (dset) vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, layout, 0, 1, &dset, 0, 0);
@@ -384,6 +395,7 @@ int main(int argc, char **argv)
 	vkCmdEndRenderPass(cmd);
 	VkBufferImageCopy copy = { 0, 0, 0, { VK_IMAGE_ASPECT_COLOR_BIT, 0, 0, 1 }, { 0, 0, 0 }, { W, H, 1 } };
 	vkCmdCopyImageToBuffer(cmd, color.i, VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL, readback.b, 1, &copy);
+end_cmd:
 	CHECK(vkEndCommandBuffer(cmd));
 	VkSubmitInfo si = { VK_STRUCTURE_TYPE_SUBMIT_INFO, 0, 0, 0, 0, 1, &cmd };
 	CHECK(vkQueueSubmit(queue, 1, &si, 0));
