@@ -25,14 +25,17 @@ The GPU executes real draws on the phone. Read `NOTES.md` (top entries), `docs/A
   A810 GMEM layout, sysmem pass begin, auto draw, drained pass end). The builder's state matches Turnip's
   A810 state for 134 of 174 registers at the draw; the rest is later pipeline state.
 
-Milestones (details in the design doc): M1 VM core, M2 ring framing: done. M6 PM4 builder: restore, pass and
-draw done; **next in M6** the load-action clear (2D engine blit, `emit_2d_clear` in Snapintosh's
-`SharedPassState.m`), then shader program state (VS/FS registers from compiled shaders, `emit_program` in its
-`ProgramState.m`), vertex fetch, UBOs and textures, each checked against `tools/fp6-pm4-state.py` on a Turnip
-capture of the same scene. **Next in the driver:** M3 buffer and context objects on the kernel allocator,
-M4 submit with fences, timeout and reset. M5 (the `AdrenoGPU` IOService and user client) exists as source and host
-tests (patches 0224 and 0225, not enabled, never booted); what remains is the hardware backend in `sweet_gpu.c`
-and a boot self-test, see "Kernel IOKit shell" in the design doc.
+Milestones (details in the design doc): M1 VM core, M2 ring framing, M3 contexts and buffer objects in the kernel,
+M4 submission queue (fences, timeout, reset path): done and verified on the phone through the replay path (the wrap,
+hang and reset paths are not exercised on hardware). M5 (the `AdrenoGPU` IOService and user client) exists as source
+and host tests (patches 0224 and 0225, compiled into the kernel by CI, not enabled, never booted); what remains is the
+hardware backend in `sweet_gpu.c` and a boot self-test, see "Kernel IOKit shell" in the design doc. M6 PM4 builder:
+restore, pass, draw, the load-action clear and the VS+FS program state are done and checked against Turnip (see
+`drivers/adrenogpu/pm4/README.md`; on the A810 Turnip clears with the resolve engine's blit event, not the 2D engine,
+so `ADRENOGPU_CLEAR_GENERIC` is the default and the 2D clear is the Snapintosh-style alternative); **next in M6** the
+fixed-function state (rasteriser, viewport, scissor, depth, blend, MRT control: the explicit list in
+`tests/test_adrenogpu_pm4_program.py`), vertex fetch, UBOs and textures, each checked against
+`tools/fp6-pm4-state.py` on a Turnip capture of the same scene.
 **Next on the phone:** put our own builder's flat triangle through the replay path (turn the builder's stream
 and a shader blob into a replay entry), compare with the lavapipe grid, then retest the 576 KiB-fitting GMEM
 layout (`tools/mesa-a810-sysmem-vpc.patch`) with the drain rule in place.
@@ -73,7 +76,8 @@ LD_PRELOAD=$M/build-vk/src/freedreno/drm-shim/libfreedreno_noop_drm_shim.so FD_G
 python3 tools/fp6-gen-replay.py OUT.h NAME:cap/NAME/*.rd:grid=REF.txt[:inject=KEYS][:post=KEYS] ...
 ```
 
-Use `TU_DEBUG=...,syncdraw` for captures that must render correctly (the drain rule). `ir3` debug flags such as
+`FD_RD_DUMP_PATH` must be an existing directory (`mkdir -p $W/cap/NAME` first); with a missing one Turnip spins forever in
+`fd_rd_output_write`. Use `TU_DEBUG=...,syncdraw` for captures that must render correctly (the drain rule). `ir3` debug flags such as
 `IR3_SHADER_DEBUG=nodescprefetch` are available for A/B variants. The kernel-side checks use a CI build tree:
 `gh run download RUN -R ersascape/ios-extra -n xnu-buildtree`, extract, and
 `gh run view RUN -R ersascape/ios-extra --log > ci.log`, then `python3 tools/xnu-cc.py ci.log BUILDTREE bsd/dev/FILE.c --per-file`.

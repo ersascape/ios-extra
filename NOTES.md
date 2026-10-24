@@ -31,6 +31,32 @@ and client-slot exhaustion, allocator failure unwinding, failed reset). Patch 02
 (function table described in `docs/ADRENOGPU_DESIGN.md`, "Kernel IOKit shell") is not written; the shell has never
 run, not even in a kernel boot. Not yet built by CI, not linked, not booted.
 
+## FP6 PM4 builder: load-action clear and shader program state, host only (2026-10-24)
+
+**Source inspection and host tests only; no phone, no CI run.** Three commits on top of `e8f86af` (oracle and fixtures,
+load-action clear, shader program state; hashes in the commit log). Host tests:
+`python3 -m unittest discover -s tests -q`; the builder is built with `-Wall -Wextra -Werror -fsanitize=address,undefined`.
+
+- **The A810 does not clear with the 2D engine.** `a7xx_gen3` sets `has_generic_clear`, so Turnip clears the sysmem colour
+  target with the resolve engine's blit event (`BLIT_EVENT_CLEAR` inside `CP_COND_REG_EXEC`, then `CCU_RESOLVE`,
+  `CCU_END_RESOLVE_GROUP`); this is also what ran on the phone when Turnip captures were replayed. The 2D solid fill exists
+  in Turnip's A810 output only for `vkCmdFillBuffer`. The builder has both: `ADRENOGPU_CLEAR_GENERIC` (compared packet for
+  packet with the flat, blend and flatclr captures) and `ADRENOGPU_CLEAR_2D` (registers compared with Turnip's
+  `vkCmdFillBuffer` stream and the texture capture's image destination block; the flush brackets are Snapintosh's and
+  untested). Neither has been run on the phone as emitted by the builder.
+- **Program state** (`adrenogpu_pm4_emit_program`, `struct adrenogpu_program`): for flat and varying the builder's program
+  section equals the register writes of Turnip's non-binning program groups, in order; whole draw state matches for every
+  register the builder writes (exceptions: LRZ feedback mode, stream-out override, `SP_UPDATE_CNTL`, all set outside the
+  program). About 117 registers Turnip has at the draw are not built yet; they are listed as fixed-function state in
+  `tests/test_adrenogpu_pm4_program.py`.
+- Oracle: `tools/fp6-pm4-state.py` gained `--packets` and `--sysmem` (a binning-only draw-state group no longer overrides
+  the render-pass VS state); default output unchanged. New scenes `flatclr` and `fill2d` in `tools/fp6-vk-scenes.c`;
+  new fixtures `turnip-a810-{varying,blend,flatclr,fill2d,texture}.rd`.
+- Unfinished: flat interpolation, vertex attributes, system values and non-zero private memory are ported but no capture
+  exercises them (capture `vertexbuf` and a flat-varying scene next); sRGB, float and integer clear targets are refused;
+  fixed-function state; vertex fetch, UBOs and textures; putting the builder's own flat triangle through the replay path on
+  the phone (then compare with the lavapipe grid).
+
 ## FP6 GPU M3 verified on the phone: the replay runs on the AdrenoGPU cores (2026-10-24)
 
 **Phone measured:** CI `40093614436` (head `b75f2686d42212a31c635070cd865dddb3f2c76e`, patches 0221 and 0222)
