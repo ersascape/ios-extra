@@ -1,0 +1,579 @@
+diff --git a/bsd/dev/adrenogpu_vm.h b/bsd/dev/adrenogpu_vm.h
+new file mode 100644
+--- /dev/null
++++ b/bsd/dev/adrenogpu_vm.h
+@@ -0,0 +1,78 @@
++/* SPDX-License-Identifier: MIT */
++/* AdrenoGPU per-context GPU address space: a 4-level, 4 KiB-granule, 48-bit page table for the
++ * Adreno 810's TTBR0 context bank.
++ *
++ * The format is the one replayed on the phone since patch 0198: T0SZ=16, 4 KiB granule, stage-1 AArch64
++ * descriptors, access flag set, outer shareable, memory attribute index 0. Pure C with no hardware access:
++ * the kernel supplies table pages and a TLB-invalidate hook, host tests supply malloc'd pages.
++ *
++ * Isolation model: a context's IBs run unprivileged against this table, so the GPU can reach exactly the
++ * pages mapped here; there is no relocation list. Nothing here validates what the IBs contain. */
++#ifndef ADRENOGPU_VM_H
++#define ADRENOGPU_VM_H
++#include <stddef.h>
++#include <stdint.h>
++
++#define ADRENOGPU_PAGE_SIZE 4096u
++#define ADRENOGPU_VM_VA_BITS 48u
++#define ADRENOGPU_VM_TCR_TTBR0 0xa0102010u /* the value the phone runs with: T0SZ=16, SH0=outer, TG0=4K */
++
++enum adrenogpu_vm_prot {
++	ADRENOGPU_VM_READ = 0,      /* every mapping is readable */
++	ADRENOGPU_VM_WRITE = 1u,    /* without this the descriptor is read-only (AP[2]) */
++	ADRENOGPU_VM_EXEC = 2u,     /* without this the descriptor is execute-never (UXN and PXN) */
++};
++
++enum adrenogpu_vm_status {
++	ADRENOGPU_VM_OK = 0,
++	ADRENOGPU_VM_EINVAL = -1,   /* unaligned, outside the 48-bit space, or bad protection bits */
++	ADRENOGPU_VM_ENOMEM = -2,   /* the table allocator failed */
++	ADRENOGPU_VM_EEXIST = -3,   /* the page is already mapped */
++	ADRENOGPU_VM_ENOENT = -4,   /* the page is not mapped */
++	ADRENOGPU_VM_ECORRUPT = -5, /* a table entry points at memory this VM does not own */
++};
++
++/* One 4 KiB table page: CPU address, GPU-visible (physical) address. */
++struct adrenogpu_vm_table {
++	void *cpu;
++	uint64_t pa;
++};
++
++struct adrenogpu_vm_ops {
++	void *context;
++	/* A zeroed 4 KiB table page, or a table with cpu == NULL on failure. */
++	struct adrenogpu_vm_table (*alloc_table)(void *context);
++	void (*free_table)(void *context, struct adrenogpu_vm_table);
++	/* Make table writes visible to the GPU (CPU cache clean). Called after every change. */
++	void (*publish)(void *context, void *cpu, size_t bytes);
++	/* Invalidate the GPU TLB for [va, va + bytes) after an unmap; may invalidate everything. */
++	void (*invalidate)(void *context, uint64_t va, uint64_t bytes);
++};
++
++#define ADRENOGPU_VM_MAX_TABLES 256u
++
++struct adrenogpu_vm {
++	struct adrenogpu_vm_ops ops;
++	struct adrenogpu_vm_table tables[ADRENOGPU_VM_MAX_TABLES]; /* tables[0] is the root */
++	unsigned ntables;
++	unsigned long mapped_pages;
++};
++
++/* The 64-bit stage-1 page descriptor for physical page `pa` with `prot`. */
++uint64_t adrenogpu_vm_pte(uint64_t pa, unsigned prot);
++
++/* Allocate the root table. */
++int adrenogpu_vm_init(struct adrenogpu_vm *, const struct adrenogpu_vm_ops *);
++/* Free every table. The caller has already made sure the GPU no longer uses this space. */
++void adrenogpu_vm_destroy(struct adrenogpu_vm *);
++
++/* Physical address of the root, for TTBR0. */
++uint64_t adrenogpu_vm_root(const struct adrenogpu_vm *);
++
++int adrenogpu_vm_map(struct adrenogpu_vm *, uint64_t va, uint64_t pa, unsigned prot);
++/* Map `pages` physically contiguous pages. On failure nothing from this call stays mapped. */
++int adrenogpu_vm_map_range(struct adrenogpu_vm *, uint64_t va, uint64_t pa, unsigned long pages, unsigned prot);
++int adrenogpu_vm_unmap(struct adrenogpu_vm *, uint64_t va);
++/* Physical address backing `va` (page offset kept), or ADRENOGPU_VM_ENOENT. */
++int adrenogpu_vm_translate(const struct adrenogpu_vm *, uint64_t va, uint64_t *pa, unsigned *prot);
++#endif
+diff --git a/bsd/dev/adrenogpu_vm.c b/bsd/dev/adrenogpu_vm.c
+new file mode 100644
+--- /dev/null
++++ b/bsd/dev/adrenogpu_vm.c
+@@ -0,0 +1,160 @@
++/* SPDX-License-Identifier: MIT */
++#include "adrenogpu_vm.h"
++
++#define PTE_VALID_PAGE   3ull          /* bits [1:0]: valid, table/page */
++#define PTE_AP_USER      (1ull << 6)   /* AP[1]: accessible without privilege */
++#define PTE_AP_RO        (1ull << 7)   /* AP[2]: read-only */
++#define PTE_SH_OUTER     (2ull << 8)   /* SH[1:0] = outer shareable */
++#define PTE_AF           (1ull << 10)  /* access flag */
++#define PTE_NG           (1ull << 11)  /* not global */
++#define PTE_PXN          (1ull << 53)
++#define PTE_UXN          (1ull << 54)
++#define PTE_PA_MASK      0x0000fffffffff000ull
++
++uint64_t
++adrenogpu_vm_pte(uint64_t pa, unsigned prot)
++{
++	uint64_t pte = (pa & PTE_PA_MASK) | PTE_VALID_PAGE | PTE_AF | PTE_SH_OUTER | PTE_NG | PTE_AP_USER;
++	if (!(prot & ADRENOGPU_VM_WRITE)) pte |= PTE_AP_RO;
++	if (!(prot & ADRENOGPU_VM_EXEC)) pte |= PTE_PXN | PTE_UXN;
++	return pte;
++}
++
++static volatile uint64_t *
++entries(const struct adrenogpu_vm_table *t)
++{
++	return (volatile uint64_t *)t->cpu;
++}
++
++static struct adrenogpu_vm_table *
++table_by_pa(const struct adrenogpu_vm *vm, uint64_t pa)
++{
++	for (unsigned i = 0; i < vm->ntables; i++)
++		if (vm->tables[i].pa == pa) return (struct adrenogpu_vm_table *)&vm->tables[i];
++	return NULL;
++}
++
++int
++adrenogpu_vm_init(struct adrenogpu_vm *vm, const struct adrenogpu_vm_ops *ops)
++{
++	if (!vm || !ops || !ops->alloc_table || !ops->free_table) return ADRENOGPU_VM_EINVAL;
++	vm->ops = *ops;
++	vm->ntables = 0;
++	vm->mapped_pages = 0;
++	struct adrenogpu_vm_table root = ops->alloc_table(ops->context);
++	if (!root.cpu) return ADRENOGPU_VM_ENOMEM;
++	vm->tables[vm->ntables++] = root;
++	if (ops->publish) ops->publish(ops->context, root.cpu, ADRENOGPU_PAGE_SIZE);
++	return ADRENOGPU_VM_OK;
++}
++
++void
++adrenogpu_vm_destroy(struct adrenogpu_vm *vm)
++{
++	if (!vm) return;
++	for (unsigned i = 0; i < vm->ntables; i++) vm->ops.free_table(vm->ops.context, vm->tables[i]);
++	vm->ntables = 0;
++	vm->mapped_pages = 0;
++}
++
++uint64_t
++adrenogpu_vm_root(const struct adrenogpu_vm *vm)
++{
++	return vm->ntables ? vm->tables[0].pa : 0;
++}
++
++static int
++check_va(uint64_t va)
++{
++	return (va & (ADRENOGPU_PAGE_SIZE - 1)) || (va >> ADRENOGPU_VM_VA_BITS) ? ADRENOGPU_VM_EINVAL : ADRENOGPU_VM_OK;
++}
++
++/* Walk to the level-3 table for `va`; create the missing levels when `create`. */
++static int
++walk(struct adrenogpu_vm *vm, uint64_t va, int create, struct adrenogpu_vm_table **leaf)
++{
++	struct adrenogpu_vm_table *t = &vm->tables[0];
++	for (unsigned level = 0; level < 3u; level++) {
++		unsigned idx = (unsigned)((va >> (39u - 9u * level)) & 511u);
++		volatile uint64_t *e = entries(t) + idx;
++		if (!*e) {
++			if (!create) return ADRENOGPU_VM_ENOENT;
++			if (vm->ntables == ADRENOGPU_VM_MAX_TABLES) return ADRENOGPU_VM_ENOMEM;
++			struct adrenogpu_vm_table n = vm->ops.alloc_table(vm->ops.context);
++			if (!n.cpu) return ADRENOGPU_VM_ENOMEM;
++			vm->tables[vm->ntables++] = n;
++			if (vm->ops.publish) vm->ops.publish(vm->ops.context, n.cpu, ADRENOGPU_PAGE_SIZE);
++			*e = n.pa | 3ull;
++			if (vm->ops.publish) vm->ops.publish(vm->ops.context, (void *)(uintptr_t)e, sizeof(*e));
++		}
++		t = table_by_pa(vm, *e & PTE_PA_MASK);
++		if (!t) return ADRENOGPU_VM_ECORRUPT;
++	}
++	*leaf = t;
++	return ADRENOGPU_VM_OK;
++}
++
++int
++adrenogpu_vm_map(struct adrenogpu_vm *vm, uint64_t va, uint64_t pa, unsigned prot)
++{
++	if (!vm || vm->ntables == 0 || check_va(va) || (pa & (ADRENOGPU_PAGE_SIZE - 1)) || (pa & ~PTE_PA_MASK) ||
++	    (prot & ~(unsigned)(ADRENOGPU_VM_WRITE | ADRENOGPU_VM_EXEC)))
++		return ADRENOGPU_VM_EINVAL;
++	struct adrenogpu_vm_table *leaf;
++	int rc = walk(vm, va, 1, &leaf);
++	if (rc) return rc;
++	volatile uint64_t *e = entries(leaf) + ((va >> 12) & 511u);
++	if (*e) return ADRENOGPU_VM_EEXIST;
++	*e = adrenogpu_vm_pte(pa, prot);
++	if (vm->ops.publish) vm->ops.publish(vm->ops.context, (void *)(uintptr_t)e, sizeof(*e));
++	vm->mapped_pages++;
++	return ADRENOGPU_VM_OK;
++}
++
++int
++adrenogpu_vm_unmap(struct adrenogpu_vm *vm, uint64_t va)
++{
++	if (!vm || vm->ntables == 0 || check_va(va)) return ADRENOGPU_VM_EINVAL;
++	struct adrenogpu_vm_table *leaf;
++	int rc = walk(vm, va, 0, &leaf);
++	if (rc) return rc;
++	volatile uint64_t *e = entries(leaf) + ((va >> 12) & 511u);
++	if (!*e) return ADRENOGPU_VM_ENOENT;
++	*e = 0;
++	if (vm->ops.publish) vm->ops.publish(vm->ops.context, (void *)(uintptr_t)e, sizeof(*e));
++	if (vm->ops.invalidate) vm->ops.invalidate(vm->ops.context, va, ADRENOGPU_PAGE_SIZE);
++	vm->mapped_pages--;
++	return ADRENOGPU_VM_OK;
++}
++
++int
++adrenogpu_vm_map_range(struct adrenogpu_vm *vm, uint64_t va, uint64_t pa, unsigned long pages, unsigned prot)
++{
++	if (!pages) return ADRENOGPU_VM_EINVAL;
++	for (unsigned long i = 0; i < pages; i++) {
++		int rc = adrenogpu_vm_map(vm, va + i * ADRENOGPU_PAGE_SIZE, pa + i * ADRENOGPU_PAGE_SIZE, prot);
++		if (rc) {
++			while (i--) (void)adrenogpu_vm_unmap(vm, va + i * ADRENOGPU_PAGE_SIZE);
++			return rc;
++		}
++	}
++	return ADRENOGPU_VM_OK;
++}
++
++int
++adrenogpu_vm_translate(const struct adrenogpu_vm *vm, uint64_t va, uint64_t *pa, unsigned *prot)
++{
++	if (!vm || vm->ntables == 0 || (va >> ADRENOGPU_VM_VA_BITS)) return ADRENOGPU_VM_EINVAL;
++	const struct adrenogpu_vm_table *t = &vm->tables[0];
++	for (unsigned level = 0; level < 3u; level++) {
++		uint64_t e = entries(t)[(va >> (39u - 9u * level)) & 511u];
++		if (!e) return ADRENOGPU_VM_ENOENT;
++		t = table_by_pa(vm, e & PTE_PA_MASK);
++		if (!t) return ADRENOGPU_VM_ECORRUPT;
++	}
++	uint64_t e = entries(t)[(va >> 12) & 511u];
++	if (!e) return ADRENOGPU_VM_ENOENT;
++	if (pa) *pa = (e & PTE_PA_MASK) | (va & (ADRENOGPU_PAGE_SIZE - 1));
++	if (prot) *prot = ((e & PTE_AP_RO) ? 0u : ADRENOGPU_VM_WRITE) | ((e & PTE_UXN) ? 0u : ADRENOGPU_VM_EXEC);
++	return ADRENOGPU_VM_OK;
++}
+diff --git a/bsd/dev/adrenogpu_ctx.h b/bsd/dev/adrenogpu_ctx.h
+new file mode 100644
+--- /dev/null
++++ b/bsd/dev/adrenogpu_ctx.h
+@@ -0,0 +1,56 @@
++/* SPDX-License-Identifier: MIT */
++/* AdrenoGPU context: one GPU address space, the buffer objects mapped into it, and a fence timeline.
++ *
++ * A buffer object is a list of 4 KiB physical pages (from any allocator). A context maps whole buffer objects at
++ * page-aligned GPU addresses inside its allowed range with explicit protection; the kernel checks an IB's address
++ * and its fence address against these mappings before it submits. Pure C, built on adrenogpu_vm. */
++#ifndef ADRENOGPU_CTX_H
++#define ADRENOGPU_CTX_H
++#include "adrenogpu_vm.h"
++
++#define ADRENOGPU_CTX_MAX_MAPS 2048u
++
++struct adrenogpu_bo {
++	const uint64_t *pages; /* physical address of every 4 KiB page, borrowed for the life of its mappings */
++	unsigned long npages;
++	uint32_t id;
++};
++
++struct adrenogpu_mapping {
++	uint64_t va;
++	const struct adrenogpu_bo *bo;
++	unsigned prot;
++};
++
++struct adrenogpu_ctx {
++	struct adrenogpu_vm vm;
++	struct adrenogpu_mapping maps[ADRENOGPU_CTX_MAX_MAPS];
++	unsigned nmaps;
++	uint64_t va_lo, va_hi; /* mappings must lie in [va_lo, va_hi) */
++	uint32_t issued, retired; /* fence timeline; 0 is never issued */
++};
++
++enum {
++	ADRENOGPU_CTX_OK = 0,
++	ADRENOGPU_CTX_EINVAL = -1,
++	ADRENOGPU_CTX_EOVERLAP = -2, /* the range touches an existing mapping */
++	ADRENOGPU_CTX_ENOENT = -3,
++	ADRENOGPU_CTX_EFULL = -4,    /* mapping table full */
++	ADRENOGPU_CTX_EVM = -5,      /* the page-table core failed (see vm status), nothing stays mapped */
++};
++
++int adrenogpu_ctx_init(struct adrenogpu_ctx *, const struct adrenogpu_vm_ops *, uint64_t va_lo, uint64_t va_hi);
++/* Unmaps everything and frees the page tables. The caller has already stopped the GPU using this context. */
++void adrenogpu_ctx_destroy(struct adrenogpu_ctx *);
++
++int adrenogpu_ctx_map(struct adrenogpu_ctx *, const struct adrenogpu_bo *, uint64_t va, unsigned prot);
++/* Unmap the buffer object mapped at exactly `va`. */
++int adrenogpu_ctx_unmap(struct adrenogpu_ctx *, uint64_t va);
++/* The mapping that contains all of [va, va + bytes) with at least `prot`, or NULL. */
++const struct adrenogpu_mapping *adrenogpu_ctx_find(const struct adrenogpu_ctx *, uint64_t va, uint64_t bytes, unsigned prot);
++
++/* Fences: 32-bit, wrap-safe, strictly increasing per context. */
++uint32_t adrenogpu_ctx_new_fence(struct adrenogpu_ctx *);
++void adrenogpu_ctx_retire(struct adrenogpu_ctx *, uint32_t fence); /* fences retire in order */
++int adrenogpu_ctx_fence_done(const struct adrenogpu_ctx *, uint32_t fence);
++#endif
+diff --git a/bsd/dev/adrenogpu_ctx.c b/bsd/dev/adrenogpu_ctx.c
+new file mode 100644
+--- /dev/null
++++ b/bsd/dev/adrenogpu_ctx.c
+@@ -0,0 +1,101 @@
++/* SPDX-License-Identifier: MIT */
++#include "adrenogpu_ctx.h"
++
++static uint64_t
++bo_bytes(const struct adrenogpu_bo *bo)
++{
++	return (uint64_t)bo->npages * ADRENOGPU_PAGE_SIZE;
++}
++
++int
++adrenogpu_ctx_init(struct adrenogpu_ctx *ctx, const struct adrenogpu_vm_ops *ops, uint64_t va_lo, uint64_t va_hi)
++{
++	if (!ctx || (va_lo & (ADRENOGPU_PAGE_SIZE - 1)) || (va_hi & (ADRENOGPU_PAGE_SIZE - 1)) || va_lo >= va_hi ||
++	    va_hi > (1ull << ADRENOGPU_VM_VA_BITS))
++		return ADRENOGPU_CTX_EINVAL;
++	int rc = adrenogpu_vm_init(&ctx->vm, ops);
++	if (rc) return ADRENOGPU_CTX_EVM;
++	ctx->nmaps = 0;
++	ctx->va_lo = va_lo;
++	ctx->va_hi = va_hi;
++	ctx->issued = ctx->retired = 0;
++	return ADRENOGPU_CTX_OK;
++}
++
++void
++adrenogpu_ctx_destroy(struct adrenogpu_ctx *ctx)
++{
++	if (!ctx) return;
++	adrenogpu_vm_destroy(&ctx->vm);
++	ctx->nmaps = 0;
++}
++
++int
++adrenogpu_ctx_map(struct adrenogpu_ctx *ctx, const struct adrenogpu_bo *bo, uint64_t va, unsigned prot)
++{
++	if (!ctx || !bo || !bo->pages || !bo->npages || (va & (ADRENOGPU_PAGE_SIZE - 1)) || va < ctx->va_lo ||
++	    va >= ctx->va_hi || bo_bytes(bo) > ctx->va_hi - va)
++		return ADRENOGPU_CTX_EINVAL;
++	if (ctx->nmaps == ADRENOGPU_CTX_MAX_MAPS) return ADRENOGPU_CTX_EFULL;
++	for (unsigned i = 0; i < ctx->nmaps; i++) {
++		const struct adrenogpu_mapping *m = &ctx->maps[i];
++		if (va < m->va + bo_bytes(m->bo) && m->va < va + bo_bytes(bo)) return ADRENOGPU_CTX_EOVERLAP;
++	}
++	for (unsigned long i = 0; i < bo->npages; i++) {
++		if (adrenogpu_vm_map(&ctx->vm, va + i * ADRENOGPU_PAGE_SIZE, bo->pages[i], prot)) {
++			while (i--) (void)adrenogpu_vm_unmap(&ctx->vm, va + i * ADRENOGPU_PAGE_SIZE);
++			return ADRENOGPU_CTX_EVM;
++		}
++	}
++	ctx->maps[ctx->nmaps].va = va;
++	ctx->maps[ctx->nmaps].bo = bo;
++	ctx->maps[ctx->nmaps].prot = prot;
++	ctx->nmaps++;
++	return ADRENOGPU_CTX_OK;
++}
++
++int
++adrenogpu_ctx_unmap(struct adrenogpu_ctx *ctx, uint64_t va)
++{
++	if (!ctx) return ADRENOGPU_CTX_EINVAL;
++	for (unsigned i = 0; i < ctx->nmaps; i++) {
++		if (ctx->maps[i].va != va) continue;
++		const struct adrenogpu_bo *bo = ctx->maps[i].bo;
++		for (unsigned long p = 0; p < bo->npages; p++) (void)adrenogpu_vm_unmap(&ctx->vm, va + p * ADRENOGPU_PAGE_SIZE);
++		ctx->maps[i] = ctx->maps[--ctx->nmaps];
++		return ADRENOGPU_CTX_OK;
++	}
++	return ADRENOGPU_CTX_ENOENT;
++}
++
++const struct adrenogpu_mapping *
++adrenogpu_ctx_find(const struct adrenogpu_ctx *ctx, uint64_t va, uint64_t bytes, unsigned prot)
++{
++	if (!ctx || !bytes || va + bytes < va) return NULL;
++	for (unsigned i = 0; i < ctx->nmaps; i++) {
++		const struct adrenogpu_mapping *m = &ctx->maps[i];
++		uint64_t size = bo_bytes(m->bo);
++		if (va >= m->va && va - m->va <= size && bytes <= size - (va - m->va) && (m->prot & prot) == prot)
++			return m;
++	}
++	return NULL;
++}
++
++uint32_t
++adrenogpu_ctx_new_fence(struct adrenogpu_ctx *ctx)
++{
++	if (++ctx->issued == 0) ctx->issued = 1; /* 0 means "no fence" */
++	return ctx->issued;
++}
++
++void
++adrenogpu_ctx_retire(struct adrenogpu_ctx *ctx, uint32_t fence)
++{
++	if ((int32_t)(fence - ctx->retired) > 0 && (int32_t)(ctx->issued - fence) >= 0) ctx->retired = fence;
++}
++
++int
++adrenogpu_ctx_fence_done(const struct adrenogpu_ctx *ctx, uint32_t fence)
++{
++	return fence != 0 && (int32_t)(ctx->retired - fence) >= 0;
++}
+diff --git a/bsd/dev/adrenogpu_ring.h b/bsd/dev/adrenogpu_ring.h
+new file mode 100644
+--- /dev/null
++++ b/bsd/dev/adrenogpu_ring.h
+@@ -0,0 +1,36 @@
++/* SPDX-License-Identifier: MIT */
++/* AdrenoGPU submission framing: the PM4 words the kernel writes onto the ring around a user IB.
++ *
++ * The sequence is the one replayed on the phone (fp6_replay_submit in bsd/dev/sweet_gpu.c, patches 0201 to
++ * 0214): reset the context state with both threads synchronised, run the user IB on the BR thread, restore both
++ * threads (which also clears any CONCURRENT_BIN_DISABLE the IB left set), invalidate and clean the caches, and
++ * write a fence. Pure C, no hardware access. */
++#ifndef ADRENOGPU_RING_H
++#define ADRENOGPU_RING_H
++#include <stddef.h>
++#include <stdint.h>
++
++#define ADRENOGPU_SUBMIT_MAX_DWORDS 48u
++
++enum adrenogpu_submit_flags {
++	ADRENOGPU_SUBMIT_NO_INVALIDATE = 1u, /* skip the UCHE/CCHE invalidate before the IB (A/B tests only) */
++	ADRENOGPU_SUBMIT_NO_CLEAN = 2u,      /* skip the CCU/UCHE clean before the fence (A/B tests only) */
++};
++
++struct adrenogpu_submit {
++	uint64_t ib_va;
++	uint32_t ib_dwords;     /* 1..0xfffff */
++	uint64_t ib2_va;        /* optional second stream, 0 = none */
++	uint32_t ib2_dwords;
++	uint64_t fence_va;      /* dword-aligned address of the fence word */
++	uint32_t fence_value;
++	unsigned flags;
++};
++
++/* PM4 type-7 header with odd-parity bits for opcode and count (A6xx and later). */
++uint32_t adrenogpu_pkt7(unsigned opcode, unsigned count);
++
++/* Write the framing into out. Returns the number of dwords, or 0 for an invalid request or too little room
++ * (nothing is written then). */
++size_t adrenogpu_ring_build_submit(const struct adrenogpu_submit *, uint32_t *out, size_t capacity);
++#endif
+diff --git a/bsd/dev/adrenogpu_ring.c b/bsd/dev/adrenogpu_ring.c
+new file mode 100644
+--- /dev/null
++++ b/bsd/dev/adrenogpu_ring.c
+@@ -0,0 +1,105 @@
++/* SPDX-License-Identifier: MIT */
++#include "adrenogpu_ring.h"
++
++#define OP_WAIT_FOR_IDLE 0x26u
++#define OP_CCHE_INVALIDATE 0x3au
++#define OP_MEM_WRITE 0x3du
++#define OP_INDIRECT_BUFFER 0x3fu
++#define OP_THREAD_CONTROL 0x17u
++#define OP_RESET_CONTEXT_STATE 0x1fu
++#define OP_SET_MARKER 0x65u
++#define OP_EVENT_WRITE7 0x46u
++
++#define THREAD_BR 1u
++#define THREAD_BOTH 3u
++#define THREAD_SYNC (1u << 31)
++#define EVENT_CCU_CLEAN_DEPTH 0x20u
++#define EVENT_CCU_CLEAN_COLOR 0x21u
++#define EVENT_CACHE_CLEAN 0x31u
++#define EVENT_CACHE_INVALIDATE7 0x33u
++#define MARKER_IFPC_DISABLE 0x101u
++#define RESET_CONTEXT_ALL 0xfu /* CLEAR_ON_CHIP_TS | CLEAR_RESOURCE_TABLE | CLEAR_BV_BR_COUNTER | RESET_GLOBAL_LOCAL_TS */
++
++static unsigned
++odd(unsigned x)
++{
++	unsigned parity = 1;
++	while (x) {
++		parity ^= 1;
++		x &= x - 1;
++	}
++	return parity;
++}
++
++uint32_t
++adrenogpu_pkt7(unsigned opcode, unsigned count)
++{
++	return 0x70000000u | count | (odd(count) << 15) | ((opcode & 0x7fu) << 16) | (odd(opcode & 0x7fu) << 23);
++}
++
++struct writer {
++	uint32_t *out;
++	size_t capacity, n;
++	int overflow;
++};
++
++static void
++put(struct writer *w, uint32_t word)
++{
++	if (w->n >= w->capacity) {
++		w->overflow = 1;
++		return;
++	}
++	w->out[w->n++] = word;
++}
++
++static void pkt1(struct writer *w, unsigned op, uint32_t a) { put(w, adrenogpu_pkt7(op, 1)); put(w, a); }
++static void pkt0(struct writer *w, unsigned op) { put(w, adrenogpu_pkt7(op, 0)); }
++
++static void
++indirect(struct writer *w, uint64_t va, uint32_t dwords)
++{
++	put(w, adrenogpu_pkt7(OP_INDIRECT_BUFFER, 3));
++	put(w, (uint32_t)va);
++	put(w, (uint32_t)(va >> 32));
++	put(w, dwords);
++}
++
++size_t
++adrenogpu_ring_build_submit(const struct adrenogpu_submit *s, uint32_t *out, size_t capacity)
++{
++	if (!s || !out || !s->ib_va || !s->ib_dwords || s->ib_dwords > 0xfffffu || (s->ib_va & 3u) ||
++	    !s->fence_va || (s->fence_va & 3u) || (s->ib2_va && (!s->ib2_dwords || s->ib2_dwords > 0xfffffu || (s->ib2_va & 3u))) ||
++	    (!s->ib2_va && s->ib2_dwords) || (s->flags & ~(unsigned)(ADRENOGPU_SUBMIT_NO_INVALIDATE | ADRENOGPU_SUBMIT_NO_CLEAN)))
++		return 0;
++	struct writer w = { out, capacity, 0, 0 };
++	pkt1(&w, OP_THREAD_CONTROL, THREAD_BOTH | THREAD_SYNC);
++	pkt1(&w, OP_RESET_CONTEXT_STATE, RESET_CONTEXT_ALL);
++	pkt1(&w, OP_THREAD_CONTROL, THREAD_BR | THREAD_SYNC);
++	pkt1(&w, OP_THREAD_CONTROL, THREAD_BOTH);
++	pkt1(&w, OP_SET_MARKER, MARKER_IFPC_DISABLE);
++	pkt1(&w, OP_THREAD_CONTROL, THREAD_BR);
++	if (!(s->flags & ADRENOGPU_SUBMIT_NO_INVALIDATE)) {
++		pkt1(&w, OP_EVENT_WRITE7, EVENT_CACHE_INVALIDATE7);
++		pkt0(&w, OP_CCHE_INVALIDATE);
++		pkt0(&w, OP_WAIT_FOR_IDLE);
++	}
++	indirect(&w, s->ib_va, s->ib_dwords);
++	if (s->ib2_va) indirect(&w, s->ib2_va, s->ib2_dwords);
++	/* Both threads, synchronised, before waiting for idle: waiting first stalls a stream that ends in BR-only
++	 * concurrent-bin-disable mode. */
++	pkt1(&w, OP_THREAD_CONTROL, THREAD_BOTH | THREAD_SYNC);
++	pkt0(&w, OP_WAIT_FOR_IDLE);
++	if (!(s->flags & ADRENOGPU_SUBMIT_NO_CLEAN)) {
++		pkt1(&w, OP_EVENT_WRITE7, EVENT_CCU_CLEAN_COLOR);
++		pkt1(&w, OP_EVENT_WRITE7, EVENT_CCU_CLEAN_DEPTH);
++		pkt1(&w, OP_EVENT_WRITE7, EVENT_CACHE_CLEAN);
++		pkt0(&w, OP_WAIT_FOR_IDLE);
++	}
++	put(&w, adrenogpu_pkt7(OP_MEM_WRITE, 3));
++	put(&w, (uint32_t)s->fence_va);
++	put(&w, (uint32_t)(s->fence_va >> 32));
++	put(&w, s->fence_value);
++	pkt1(&w, OP_THREAD_CONTROL, THREAD_BOTH);
++	return w.overflow ? 0 : w.n;
++}
+diff --git a/bsd/conf/files b/bsd/conf/files
+--- a/bsd/conf/files
++++ b/bsd/conf/files
+@@ -115,6 +115,9 @@
+ bsd/dev/qcom_geni.c			standard
+ bsd/dev/fp6_touch.c			standard
+ bsd/dev/fp6_keys.c			standard
++bsd/dev/adrenogpu_vm.c			standard
++bsd/dev/adrenogpu_ctx.c			standard
++bsd/dev/adrenogpu_ring.c			standard
+ bsd/dev/mem.c				standard
+ bsd/dev/munge.c 			optional config_requires_u32_munging
+ bsd/dev/unix_startup.c			standard

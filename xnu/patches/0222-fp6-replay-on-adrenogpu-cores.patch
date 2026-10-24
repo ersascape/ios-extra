@@ -1,0 +1,264 @@
+diff --git a/bsd/dev/sweet_gpu.c b/bsd/dev/sweet_gpu.c
+--- a/bsd/dev/sweet_gpu.c
++++ b/bsd/dev/sweet_gpu.c
+@@ -2812,6 +2812,9 @@ fail:
+ #include "fp6_sqe_fw.h"
+ #include "fp6_gpu_compute_tests.h"
+ #include "fp6_gpu_replay_data.h"
++#include "adrenogpu_vm.h"
++#include "adrenogpu_ctx.h"
++#include "adrenogpu_ring.h"
+ 
+ static int fp6_gmu_clocks_prepare(struct fp6_smmu_clocks *);
+ 
+@@ -4805,54 +4808,57 @@ fp6_gpu_compute_probe(vm_offset_t g, vm_offset_t gpu)
+  * mapping every captured page (read/write, unprivileged, execute-never) at the
+  * address Mesa used, so the stream runs unchanged via one CP_INDIRECT_BUFFER.
+  * Backing and tables are permanent: the GPU may keep translations. */
+-#define FP6_AS_MAX_TABLES 128u
+ #define FP6_AS_MAX_PAGES  1536u
++#define FP6_SCANOUT_MAX_PAGES 3072u
+ #define FP6_SCANOUT_PA 0xe3940000ull /* ADT sweet-fbcon / upstream FP6 simple-framebuffer */
+-#define FP6_AS_PTE_PAGE (3ull | (1ull << 10) | (2ull << 8) | (1ull << 11) | (1ull << 6) | (3ull << 53))
+-#define FP6_AS_TCR_TTBR0 0xa0102010u /* 0xa0100080: T0SZ=16, SH0=outer, TG0=4K, EPD0=0 */
+-static struct fp6_gpu_global_page fp6_as_tables[FP6_AS_MAX_TABLES];
++#define FP6_AS_TCR_TTBR0 ADRENOGPU_VM_TCR_TTBR0 /* 0xa0102010: T0SZ=16, SH0=outer, TG0=4K, EPD0=0 */
+ static struct fp6_gpu_global_page fp6_as_pages[FP6_AS_MAX_PAGES];
+-static unsigned fp6_as_table_count, fp6_as_page_count;
++static uint64_t fp6_as_pa[FP6_AS_MAX_PAGES];            /* physical address of fp6_as_pages[i], for the buffer objects */
++static struct adrenogpu_bo fp6_as_bos[FP6_AS_MAX_PAGES]; /* one per run of consecutive GPU pages, indexed by its first page */
++static uint64_t fp6_scan_pa[FP6_SCANOUT_MAX_PAGES];
++static struct adrenogpu_bo fp6_scan_bo;
++static struct adrenogpu_ctx fp6_ctx; /* the replay's context (page tables and mappings), rebuilt for every capture */
++static unsigned fp6_as_page_count;
+ static int fp6_replay_done[FP6_REPLAY_COUNT];
+ static unsigned fp6_scene_run, fp6_scene_bad;
+ 
+-static struct fp6_gpu_global_page *
+-fp6_as_new_table(void)
++/* Page-table pages for the AdrenoGPU address-space core: permanent kernel pages, as the GPU may keep
++ * translations after a replay. */
++static struct adrenogpu_vm_table
++fp6_vm_alloc_table(void *context)
+ {
+-	if (fp6_as_table_count == FP6_AS_MAX_TABLES ||
+-	    fp6_gpu_kernel_alloc(NULL, 4096u, &fp6_as_tables[fp6_as_table_count])) return NULL;
+-	return &fp6_as_tables[fp6_as_table_count++];
++	(void)context;
++	struct fp6_gpu_global_page page;
++	struct adrenogpu_vm_table table = { NULL, 0 };
++	if (fp6_gpu_kernel_alloc(NULL, 4096u, &page)) return table; /* zeroed */
++	table.cpu = page.va;
++	table.pa = page.pa;
++	return table;
+ }
+ 
+-static struct fp6_gpu_global_page *
+-fp6_as_table_by_pa(uint64_t pa)
++static void
++fp6_vm_free_table(void *context, struct adrenogpu_vm_table table)
+ {
+-	for (unsigned i = 0; i < fp6_as_table_count; i++)
+-		if (fp6_as_tables[i].pa == pa) return &fp6_as_tables[i];
+-	return NULL;
++	(void)context;
++	(void)table; /* permanent */
+ }
+ 
+-static int
+-fp6_as_map(struct fp6_gpu_global_page *l0, uint64_t va, uint64_t pa)
+-{
+-	struct fp6_gpu_global_page *t = l0;
+-	for (unsigned level = 0; level < 3u; level++) {
+-		unsigned idx = (unsigned)((va >> (39u - 9u * level)) & 511u);
+-		volatile uint64_t *e = (volatile uint64_t *)(void *)t->va + idx;
+-		if (!*e) {
+-			struct fp6_gpu_global_page *n = fp6_as_new_table();
+-			if (!n) return 0;
+-			*e = n->pa | 3ull;
+-		}
+-		t = fp6_as_table_by_pa(*e & 0x0000fffffffff000ull);
+-		if (!t) return 0;
+-	}
+-	volatile uint64_t *leaf = (volatile uint64_t *)(void *)t->va + ((va >> 12) & 511u);
+-	if (*leaf) return 0;
+-	*leaf = pa | FP6_AS_PTE_PAGE;
+-	return 1;
++static void
++fp6_vm_publish(void *context, void *cpu, size_t bytes)
++{
++	(void)context;
++	(void)bytes;
++	(void)fp6_gpu_kernel_publish(NULL, (const void *)((uintptr_t)cpu & ~(uintptr_t)0xfffu), 4096u);
+ }
+ 
++static const struct adrenogpu_vm_ops fp6_vm_ops = {
++	.context = NULL,
++	.alloc_table = fp6_vm_alloc_table,
++	.free_table = fp6_vm_free_table,
++	.publish = fp6_vm_publish,
++	.invalidate = NULL, /* replay never unmaps */
++};
++
+ static struct fp6_gpu_global_page *
+ fp6_as_find_page(const struct fp6_replay *r, unsigned first_page, uint64_t va)
+ {
+@@ -4864,8 +4870,8 @@ fp6_as_find_page(const struct fp6_replay *r, unsigned first_page, uint64_t va)
+ static int
+ fp6_replay_build(const struct fp6_replay *r, unsigned first_page, uint64_t *l0_pa)
+ {
+-	struct fp6_gpu_global_page *l0 = fp6_as_new_table();
+-	if (!l0 || fp6_as_page_count + r->npages > FP6_AS_MAX_PAGES) return 0;
++	if (fp6_as_page_count + r->npages > FP6_AS_MAX_PAGES) return 0;
++	if (adrenogpu_ctx_init(&fp6_ctx, &fp6_vm_ops, 0, 1ull << ADRENOGPU_VM_VA_BITS)) return 0;
+ 	for (unsigned i = 0; i < r->npages; i++) {
+ 		struct fp6_gpu_global_page *page = &fp6_as_pages[first_page + i];
+ 		if (fp6_gpu_kernel_alloc(NULL, 4096u, page)) return 0;
+@@ -4874,7 +4880,17 @@ fp6_replay_build(const struct fp6_replay *r, unsigned first_page, uint64_t *l0_p
+ 		for (unsigned k = 0; k < r->pages[i].npairs; k++)
+ 			words[r->pages[i].pairs[2 * k]] = r->pages[i].pairs[2 * k + 1];
+ 		(void)fp6_gpu_kernel_publish(NULL, page->va, 4096u);
+-		if (!fp6_as_map(l0, r->pages[i].va, page->pa)) return 0;
++		fp6_as_pa[first_page + i] = page->pa;
++	}
++	/* One buffer object per run of consecutive GPU pages, so an IB that crosses a page boundary still lies
++	 * inside one mapping. */
++	for (unsigned i = 0; i < r->npages;) {
++		unsigned j = i + 1;
++		while (j < r->npages && r->pages[j].va == r->pages[j - 1].va + 0x1000u) j++;
++		struct adrenogpu_bo *bo = &fp6_as_bos[first_page + i];
++		*bo = (struct adrenogpu_bo){ &fp6_as_pa[first_page + i], j - i, first_page + i + 1u };
++		if (adrenogpu_ctx_map(&fp6_ctx, bo, r->pages[i].va, ADRENOGPU_VM_WRITE)) return 0;
++		i = j;
+ 	}
+ 	if (r->scanout_bytes) {
+ 		/* Map the bootloader's scanout framebuffer at the capture's buffer address, so the
+@@ -4889,12 +4905,13 @@ fp6_replay_build(const struct fp6_replay *r, unsigned first_page, uint64_t *l0_p
+ 			    r->name, video.v_baseAddr, video.v_width, video.v_height, video.v_rowBytes);
+ 			return 0;
+ 		}
+-		for (uint64_t off = 0; off < r->scanout_bytes; off += 4096u)
+-			if (!fp6_as_map(l0, r->scanout_va + off, FP6_SCANOUT_PA + off)) return 0;
++		unsigned scan_pages = (unsigned)(r->scanout_bytes / 4096u);
++		if (scan_pages > FP6_SCANOUT_MAX_PAGES) return 0;
++		for (unsigned k = 0; k < scan_pages; k++) fp6_scan_pa[k] = FP6_SCANOUT_PA + 4096ull * k;
++		fp6_scan_bo = (struct adrenogpu_bo){ fp6_scan_pa, scan_pages, 0x5ca0u };
++		if (adrenogpu_ctx_map(&fp6_ctx, &fp6_scan_bo, r->scanout_va, ADRENOGPU_VM_WRITE)) return 0;
+ 	}
+-	for (unsigned i = 0; i < fp6_as_table_count; i++)
+-		(void)fp6_gpu_kernel_publish(NULL, fp6_as_tables[i].va, 4096u);
+-	*l0_pa = l0->pa;
++	*l0_pa = adrenogpu_vm_root(&fp6_ctx.vm);
+ 	return 1;
+ }
+ 
+@@ -4966,70 +4983,33 @@ fp6_replay_submit(vm_offset_t g, vm_offset_t gpu, const struct fp6_replay *r,
+ 	/* Linux gen8_rb_context_switch() + gen8_ringbuffer_submitcmd() preamble: Mesa's
+ 	 * CP_BV_BR_COUNT_OPS PIPE_SET_BR_OFFSET assumes the kernel cleared the BV/BR
+ 	 * counters with CP_RESET_CONTEXT_STATE before the user IB. */
+-	uint32_t cmd[48];
+-	unsigned n = 0;
+-	cmd[n++] = fp6_cp_type7_packet(0x17u, 1u); /* CP_THREAD_CONTROL: both, sync */
+-	cmd[n++] = 3u | (1u << 31);
+-	cmd[n++] = fp6_cp_type7_packet(0x1fu, 1u); /* CP_RESET_CONTEXT_STATE */
+-	cmd[n++] = 0xfu; /* CLEAR_ON_CHIP_TS | CLEAR_RESOURCE_TABLE | CLEAR_BV_BR_COUNTER | RESET_GLOBAL_LOCAL_TS */
+-	cmd[n++] = fp6_cp_type7_packet(0x17u, 1u); /* CP_THREAD_CONTROL: BR, sync */
+-	cmd[n++] = 1u | (1u << 31);
+-	cmd[n++] = fp6_cp_type7_packet(0x17u, 1u); /* CP_THREAD_CONTROL: both */
+-	cmd[n++] = 3u;
+-	cmd[n++] = fp6_cp_type7_packet(0x65u, 1u); /* CP_SET_MARKER: IFPC disable */
+-	cmd[n++] = 0x101u;
+-	cmd[n++] = fp6_cp_type7_packet(0x17u, 1u); /* CP_THREAD_CONTROL: BR */
+-	cmd[n++] = 1u;
+-	/* Every capture reuses the same IOVAs with different data, and the GPU's caches are tagged
+-	 * by virtual address. Mesa's A7xx+ sequences invalidate UCHE (CACHE_INVALIDATE7) and the
+-	 * write-through CCHE behind it (CP_CCHE_INVALIDATE; its incoherent copies are not covered
+-	 * by every UCHE invalidate) before reads of memory the CPU wrote. fp6gpureplaynoinv=1 skips
+-	 * this to reproduce the earlier runs. */
+-	int noinv = 0;
++	/* The PM4 framing around the IB is the AdrenoGPU ring builder's (drivers/adrenogpu/adrenogpu_ring.c);
++	 * fp6gpureplaynoinv=1 and fp6gpureplaynoflush=1 reproduce the runs before patches 0213 and 0214. The IB must
++	 * lie inside one mapping of the replay context. */
++	int noinv = 0, noflush = 0;
+ 	(void)PE_parse_boot_argn("fp6gpureplaynoinv", &noinv, sizeof(noinv));
+-	if (noinv != 1) {
+-		cmd[n++] = fp6_cp_type7_packet(0x46u, 1u); /* CP_EVENT_WRITE7: CACHE_INVALIDATE7 */
+-		cmd[n++] = 0x33u;
+-		cmd[n++] = fp6_cp_type7_packet(0x3au, 0u); /* CP_CCHE_INVALIDATE */
+-		cmd[n++] = fp6_cp_type7_packet(0x26u, 0u); /* CP_WAIT_FOR_IDLE */
+-	}
+-	cmd[n++] = fp6_cp_type7_packet(0x3fu, 3u); /* CP_INDIRECT_BUFFER */
+-	cmd[n++] = (uint32_t)r->ib_va;
+-	cmd[n++] = (uint32_t)(r->ib_va >> 32);
+-	cmd[n++] = ib_dwords;
+-	if (r->ib2_va) {
+-		cmd[n++] = fp6_cp_type7_packet(0x3fu, 3u); /* CP_INDIRECT_BUFFER: second stream */
+-		cmd[n++] = (uint32_t)r->ib2_va;
+-		cmd[n++] = (uint32_t)(r->ib2_va >> 32);
+-		cmd[n++] = r->ib2_dwords;
+-	}
+-	/* Restore both threads (clearing any CONCURRENT_BIN_DISABLE the stream left) and let
+-	 * BV drain before waiting for idle; waiting first stalls a prefix that ends in BR-only
+-	 * concurrent-bin-disable mode. */
+-	cmd[n++] = fp6_cp_type7_packet(0x17u, 1u); /* CP_THREAD_CONTROL: both, sync */
+-	cmd[n++] = 3u | (1u << 31);
+-	cmd[n++] = fp6_cp_type7_packet(0x26u, 0u); /* CP_WAIT_FOR_IDLE */
+-	/* The fence is a plain CP_MEM_WRITE, which flushes nothing: the render target and the final
+-	 * image copy can still sit in the CCU/UCHE write-back caches when the CPU reads memory. Linux
+-	 * ends a submission with CACHE_FLUSH_TS for this reason. Clean the caches first (events as in
+-	 * Mesa's A7xx+ CCU/UCHE clean); fp6gpureplaynoflush=1 reproduces the earlier runs. */
+-	int noflush = 0;
+ 	(void)PE_parse_boot_argn("fp6gpureplaynoflush", &noflush, sizeof(noflush));
+-	if (noflush != 1) {
+-		cmd[n++] = fp6_cp_type7_packet(0x46u, 1u); /* CP_EVENT_WRITE7: CCU_CLEAN_COLOR */
+-		cmd[n++] = 0x21u;
+-		cmd[n++] = fp6_cp_type7_packet(0x46u, 1u); /* CCU_CLEAN_DEPTH */
+-		cmd[n++] = 0x20u;
+-		cmd[n++] = fp6_cp_type7_packet(0x46u, 1u); /* CACHE_CLEAN */
+-		cmd[n++] = 0x31u;
+-		cmd[n++] = fp6_cp_type7_packet(0x26u, 0u); /* CP_WAIT_FOR_IDLE */
+-	}
+-	cmd[n++] = fp6_cp_type7_packet(0x3du, 3u); /* CP_MEM_WRITE fence */
+-	cmd[n++] = (uint32_t)(fp6_exec_result_va + 4u * FP6_REPLAY_FENCE_OFFSET);
+-	cmd[n++] = (uint32_t)((fp6_exec_result_va + 4u * FP6_REPLAY_FENCE_OFFSET) >> 32);
+-	cmd[n++] = FP6_REPLAY_FENCE_VALUE;
+-	cmd[n++] = fp6_cp_type7_packet(0x17u, 1u); /* CP_THREAD_CONTROL: both */
+-	cmd[n++] = 3u;
++	if (!adrenogpu_ctx_find(&fp6_ctx, r->ib_va, 4ull * ib_dwords, 0) ||
++	    (r->ib2_va && !adrenogpu_ctx_find(&fp6_ctx, r->ib2_va, 4ull * r->ib2_dwords, 0))) {
++		printf("QCOM GPU REPLAY: %s IB is not inside one mapping of the replay context; refusing\n", r->name);
++		return 0;
++	}
++	struct adrenogpu_submit submit = {
++		.ib_va = r->ib_va,
++		.ib_dwords = ib_dwords,
++		.ib2_va = r->ib2_va,
++		.ib2_dwords = r->ib2_va ? r->ib2_dwords : 0,
++		.fence_va = fp6_exec_result_va + 4u * FP6_REPLAY_FENCE_OFFSET,
++		.fence_value = FP6_REPLAY_FENCE_VALUE,
++		.flags = (noinv == 1 ? ADRENOGPU_SUBMIT_NO_INVALIDATE : 0u) | (noflush == 1 ? ADRENOGPU_SUBMIT_NO_CLEAN : 0u),
++	};
++	uint32_t cmd[ADRENOGPU_SUBMIT_MAX_DWORDS];
++	unsigned n = (unsigned)adrenogpu_ring_build_submit(&submit, cmd, ADRENOGPU_SUBMIT_MAX_DWORDS);
++	if (!n) {
++		printf("QCOM GPU REPLAY: %s submit framing refused (ib 0x%llx, %u dwords)\n", r->name,
++		    (unsigned long long)r->ib_va, ib_dwords);
++		return 0;
++	}
+ 	*dropped_out = 0;
+ 	*seen_out = 0;
+ 	*rptr_out = rptr;
+@@ -5079,11 +5059,11 @@ fp6_replay_run(vm_offset_t g, vm_offset_t gpu, unsigned index)
+ 	uint64_t l0_pa = 0;
+ 	if (!fp6_replay_build(r, first_page, &l0_pa)) {
+ 		printf("QCOM GPU REPLAY: %s address-space build failed (tables=%u pages=%u)\n", r->name,
+-		    fp6_as_table_count, fp6_as_page_count);
++		    fp6_ctx.vm.ntables, fp6_as_page_count);
+ 		return 0;
+ 	}
+ 	printf("QCOM GPU REPLAY: %s mapped %u pages, root=0x%llx tables=%u\n", r->name, r->npages,
+-	    (unsigned long long)l0_pa, fp6_as_table_count);
++	    (unsigned long long)l0_pa, fp6_ctx.vm.ntables);
+ 	/* Turnip patches CP_THREAD_CONTROL at submit time: plain BR when concurrent binning
+ 	 * is on. fp6gpureplaycb=1 clears CONCURRENT_BIN_DISABLE in the captured stream to test
+ 	 * whether that bit alone is what stalls the BR thread. */

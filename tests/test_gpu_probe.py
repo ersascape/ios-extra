@@ -78,7 +78,10 @@ class GPUProbeTests(unittest.TestCase):
                           'host ring write must target a firmware kind-1 ring only')
             self.assertIn('PE_parse_boot_argn("fp6gpucompute"', source,
                           'compute dispatch must remain explicitly opt-in')
-            self.assertIn('fp6_cp_type7_packet(0x1fu, 1u); /* CP_RESET_CONTEXT_STATE */', source,
+            self.assertIn('adrenogpu_ring_build_submit(&submit', source,
+                          'replay framing must come from the AdrenoGPU ring builder')
+            ring = (ROOT / 'drivers/adrenogpu/adrenogpu_ring.c').read_text()
+            self.assertIn('pkt1(&w, OP_RESET_CONTEXT_STATE, RESET_CONTEXT_ALL);', ring,
                           'replay must clear BV/BR counters like the Linux gen8 submit path')
             self.assertIn('video.v_baseAddr != FP6_SCANOUT_PA', source,
                           'scanout mapping must verify the exact ADT framebuffer geometry first')
@@ -104,10 +107,13 @@ class GPUProbeTests(unittest.TestCase):
                           'prefix bisection must be explicitly opt-in')
             self.assertIn('PE_parse_boot_argn("fp6gpureplay"', source,
                           'TTBR0 capture replay must remain explicitly opt-in')
-            self.assertIn('#define FP6_AS_TCR_TTBR0 0xa0102010u', source,
+            self.assertIn('#define FP6_AS_TCR_TTBR0 ADRENOGPU_VM_TCR_TTBR0', source,
                           'TTBR0 enable must keep the TTBR1 half of the live TCR unchanged')
-            self.assertIn('FP6_AS_PTE_PAGE (3ull | (1ull << 10) | (2ull << 8) | (1ull << 11) | (1ull << 6) | (3ull << 53))',
-                          source, 'replay pages must be unprivileged read/write and execute-never')
+            self.assertIn('#define ADRENOGPU_VM_TCR_TTBR0 0xa0102010u',
+                          (ROOT / 'drivers/adrenogpu/adrenogpu_vm.h').read_text(),
+                          'the TCR value is the one the phone runs with')
+            self.assertIn('adrenogpu_ctx_map(&fp6_ctx, bo, r->pages[i].va, ADRENOGPU_VM_WRITE)', source,
+                          'replay pages must be unprivileged read/write and execute-never')
             self.assertLess(source.index('(void)fp6_gpu_compute_probe(g, gpu);'),
                             source.index('(void)fp6_gpu_replay_probe(g, gpu);'),
                             'replay follows the proven compute probe')
@@ -307,10 +313,15 @@ class GPUProbeTests(unittest.TestCase):
                             str(ROOT / 'xnu/patches/0220-fp6-replay-post-draw-flush-variants.patch')],
                            cwd=work / 'replay', check=True)
             shutil.copyfile(replay_dir / 'fp6_gpu_replay_data.h', work / 'fp6_gpu_replay_data.h')
+            for core in ('adrenogpu_vm.h', 'adrenogpu_vm.c', 'adrenogpu_ctx.h', 'adrenogpu_ctx.c',
+                         'adrenogpu_ring.h', 'adrenogpu_ring.c'):
+                shutil.copyfile(ROOT / 'drivers/adrenogpu' / core, work / core)
             (work / 'test.c').write_text(HARNESS)
             build = subprocess.run([shutil.which('cc') or 'cc', '-std=c11', '-Wall',
                                     '-Wextra', '-Werror', *os.environ.get('IOS_EXTRA_CFLAGS', '').split(), '-I', str(work),
-                                    str(work / 'test.c'), '-o', str(work / 'test')],
+                                    str(work / 'test.c'), str(work / 'adrenogpu_vm.c'),
+                                    str(work / 'adrenogpu_ctx.c'), str(work / 'adrenogpu_ring.c'),
+                                    '-o', str(work / 'test')],
                                    capture_output=True, text=True)
             self.assertEqual(build.returncode, 0, build.stderr)
             result = subprocess.run([str(work / 'test')], capture_output=True, text=True)

@@ -8,7 +8,7 @@
 #define ADRENOGPU_CTX_H
 #include "adrenogpu_vm.h"
 
-#define ADRENOGPU_CTX_MAX_MAPS 256u
+#define ADRENOGPU_CTX_MAX_MAPS 2048u
 
 struct adrenogpu_bo {
 	const uint64_t *pages; /* physical address of every 4 KiB page, borrowed for the life of its mappings */
