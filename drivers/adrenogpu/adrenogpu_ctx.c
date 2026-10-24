@@ -19,6 +19,7 @@ adrenogpu_ctx_init(struct adrenogpu_ctx *ctx, const struct adrenogpu_vm_ops *ops
 	ctx->va_lo = va_lo;
 	ctx->va_hi = va_hi;
 	ctx->issued = ctx->retired = 0;
+	ctx->lost_from = ctx->lost_to = 0;
 	return ADRENOGPU_CTX_OK;
 }
 
@@ -98,4 +99,20 @@ int
 adrenogpu_ctx_fence_done(const struct adrenogpu_ctx *ctx, uint32_t fence)
 {
 	return fence != 0 && (int32_t)(ctx->retired - fence) >= 0;
+}
+
+void
+adrenogpu_ctx_lose(struct adrenogpu_ctx *ctx, uint32_t fence)
+{
+	if (fence == 0 || (int32_t)(ctx->issued - fence) < 0) return;
+	/* consecutive fences of one reset extend the range; anything else starts a new one */
+	if (!ctx->lost_to || fence != ctx->lost_to + 1u) ctx->lost_from = fence;
+	ctx->lost_to = fence;
+	adrenogpu_ctx_retire(ctx, fence);
+}
+
+int
+adrenogpu_ctx_fence_lost(const struct adrenogpu_ctx *ctx, uint32_t fence)
+{
+	return ctx->lost_to && (int32_t)(fence - ctx->lost_from) >= 0 && (int32_t)(ctx->lost_to - fence) >= 0;
 }

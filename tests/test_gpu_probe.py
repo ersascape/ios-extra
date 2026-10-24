@@ -314,13 +314,14 @@ class GPUProbeTests(unittest.TestCase):
                            cwd=work / 'replay', check=True)
             shutil.copyfile(replay_dir / 'fp6_gpu_replay_data.h', work / 'fp6_gpu_replay_data.h')
             for core in ('adrenogpu_vm.h', 'adrenogpu_vm.c', 'adrenogpu_ctx.h', 'adrenogpu_ctx.c',
-                         'adrenogpu_ring.h', 'adrenogpu_ring.c'):
+                         'adrenogpu_ring.h', 'adrenogpu_ring.c', 'adrenogpu_sched.h', 'adrenogpu_sched.c'):
                 shutil.copyfile(ROOT / 'drivers/adrenogpu' / core, work / core)
             (work / 'test.c').write_text(HARNESS)
             build = subprocess.run([shutil.which('cc') or 'cc', '-std=c11', '-Wall',
                                     '-Wextra', '-Werror', *os.environ.get('IOS_EXTRA_CFLAGS', '').split(), '-I', str(work),
                                     str(work / 'test.c'), str(work / 'adrenogpu_vm.c'),
                                     str(work / 'adrenogpu_ctx.c'), str(work / 'adrenogpu_ring.c'),
+                                    str(work / 'adrenogpu_sched.c'),
                                     '-o', str(work / 'test')],
                                    capture_output=True, text=True)
             self.assertEqual(build.returncode, 0, build.stderr)

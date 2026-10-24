@@ -13,19 +13,20 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[1]
 DRIVER = ROOT / 'drivers' / 'adrenogpu'
 CORES = ['adrenogpu_vm.h', 'adrenogpu_vm.c', 'adrenogpu_ctx.h', 'adrenogpu_ctx.c',
-         'adrenogpu_ring.h', 'adrenogpu_ring.c']
+         'adrenogpu_ring.h', 'adrenogpu_ring.c', 'adrenogpu_sched.h', 'adrenogpu_sched.c']
 DEFAULT_OUT = ROOT / 'xnu' / 'patches' / '0221-adrenogpu-cores.patch'
 
 FILES_HUNK = """diff --git a/bsd/conf/files b/bsd/conf/files
 --- a/bsd/conf/files
 +++ b/bsd/conf/files
-@@ -115,6 +115,9 @@
+@@ -115,6 +115,10 @@
  bsd/dev/qcom_geni.c\t\t\tstandard
  bsd/dev/fp6_touch.c\t\t\tstandard
  bsd/dev/fp6_keys.c\t\t\tstandard
 +bsd/dev/adrenogpu_vm.c\t\t\tstandard
 +bsd/dev/adrenogpu_ctx.c\t\t\tstandard
 +bsd/dev/adrenogpu_ring.c\t\t\tstandard
++bsd/dev/adrenogpu_sched.c\t\t\tstandard
  bsd/dev/mem.c\t\t\t\tstandard
  bsd/dev/munge.c \t\t\toptional config_requires_u32_munging
  bsd/dev/unix_startup.c\t\t\tstandard

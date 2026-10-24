@@ -37,6 +37,12 @@ class AdrenoGpuCoreTests(unittest.TestCase):
             'PASS: a failed mapping leaves nothing behind and can be retried',
             'PASS: fences are ordered and survive 32-bit wrap'])
 
+    def test_submission_queue(self):
+        self.run_core('adrenogpu_vm.c adrenogpu_ctx.c adrenogpu_ring.c adrenogpu_sched.c', 'test_sched.c', [
+            'PASS: a job that straddles the end of the ring is written and read back intact',
+            'PASS: a reset abandons pending jobs, wakes their waiters and marks the fences lost',
+            'PASS: the sequence wraps and skips zero'])
+
     def test_ring_framing(self):
         self.run_core('adrenogpu_ring.c', 'test_ring.c', [
             'PASS: type-7 headers match captured Turnip headers',

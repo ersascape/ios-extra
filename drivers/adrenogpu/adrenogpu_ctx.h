@@ -28,6 +28,7 @@ struct adrenogpu_ctx {
 	unsigned nmaps;
 	uint64_t va_lo, va_hi; /* mappings must lie in [va_lo, va_hi) */
 	uint32_t issued, retired; /* fence timeline; 0 is never issued */
+	uint32_t lost_from, lost_to; /* fences [lost_from, lost_to] were abandoned by the latest GPU reset (0,0: none) */
 };
 
 enum {
@@ -53,4 +54,8 @@ const struct adrenogpu_mapping *adrenogpu_ctx_find(const struct adrenogpu_ctx *,
 uint32_t adrenogpu_ctx_new_fence(struct adrenogpu_ctx *);
 void adrenogpu_ctx_retire(struct adrenogpu_ctx *, uint32_t fence); /* fences retire in order */
 int adrenogpu_ctx_fence_done(const struct adrenogpu_ctx *, uint32_t fence);
+/* Abandon `fence` after a GPU reset: it retires (waiters wake) and is reported lost. Only the latest reset's
+ * range is kept, so callers read the status when their wait completes. */
+void adrenogpu_ctx_lose(struct adrenogpu_ctx *, uint32_t fence);
+int adrenogpu_ctx_fence_lost(const struct adrenogpu_ctx *, uint32_t fence);
 #endif

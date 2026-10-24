@@ -250,7 +250,7 @@ diff --git a/bsd/dev/adrenogpu_ctx.h b/bsd/dev/adrenogpu_ctx.h
 new file mode 100644
 --- /dev/null
 +++ b/bsd/dev/adrenogpu_ctx.h
-@@ -0,0 +1,56 @@
+@@ -0,0 +1,61 @@
 +/* SPDX-License-Identifier: MIT */
 +/* AdrenoGPU context: one GPU address space, the buffer objects mapped into it, and a fence timeline.
 + *
@@ -281,6 +281,7 @@ new file mode 100644
 +	unsigned nmaps;
 +	uint64_t va_lo, va_hi; /* mappings must lie in [va_lo, va_hi) */
 +	uint32_t issued, retired; /* fence timeline; 0 is never issued */
++	uint32_t lost_from, lost_to; /* fences [lost_from, lost_to] were abandoned by the latest GPU reset (0,0: none) */
 +};
 +
 +enum {
@@ -306,12 +307,16 @@ new file mode 100644
 +uint32_t adrenogpu_ctx_new_fence(struct adrenogpu_ctx *);
 +void adrenogpu_ctx_retire(struct adrenogpu_ctx *, uint32_t fence); /* fences retire in order */
 +int adrenogpu_ctx_fence_done(const struct adrenogpu_ctx *, uint32_t fence);
++/* Abandon `fence` after a GPU reset: it retires (waiters wake) and is reported lost. Only the latest reset's
++ * range is kept, so callers read the status when their wait completes. */
++void adrenogpu_ctx_lose(struct adrenogpu_ctx *, uint32_t fence);
++int adrenogpu_ctx_fence_lost(const struct adrenogpu_ctx *, uint32_t fence);
 +#endif
 diff --git a/bsd/dev/adrenogpu_ctx.c b/bsd/dev/adrenogpu_ctx.c
 new file mode 100644
 --- /dev/null
 +++ b/bsd/dev/adrenogpu_ctx.c
-@@ -0,0 +1,101 @@
+@@ -0,0 +1,118 @@
 +/* SPDX-License-Identifier: MIT */
 +#include "adrenogpu_ctx.h"
 +
@@ -333,6 +338,7 @@ new file mode 100644
 +	ctx->va_lo = va_lo;
 +	ctx->va_hi = va_hi;
 +	ctx->issued = ctx->retired = 0;
++	ctx->lost_from = ctx->lost_to = 0;
 +	return ADRENOGPU_CTX_OK;
 +}
 +
@@ -412,6 +418,22 @@ new file mode 100644
 +adrenogpu_ctx_fence_done(const struct adrenogpu_ctx *ctx, uint32_t fence)
 +{
 +	return fence != 0 && (int32_t)(ctx->retired - fence) >= 0;
++}
++
++void
++adrenogpu_ctx_lose(struct adrenogpu_ctx *ctx, uint32_t fence)
++{
++	if (fence == 0 || (int32_t)(ctx->issued - fence) < 0) return;
++	/* consecutive fences of one reset extend the range; anything else starts a new one */
++	if (!ctx->lost_to || fence != ctx->lost_to + 1u) ctx->lost_from = fence;
++	ctx->lost_to = fence;
++	adrenogpu_ctx_retire(ctx, fence);
++}
++
++int
++adrenogpu_ctx_fence_lost(const struct adrenogpu_ctx *ctx, uint32_t fence)
++{
++	return ctx->lost_to && (int32_t)(fence - ctx->lost_from) >= 0 && (int32_t)(ctx->lost_to - fence) >= 0;
 +}
 diff --git a/bsd/dev/adrenogpu_ring.h b/bsd/dev/adrenogpu_ring.h
 new file mode 100644
@@ -564,16 +586,192 @@ new file mode 100644
 +	pkt1(&w, OP_THREAD_CONTROL, THREAD_BOTH);
 +	return w.overflow ? 0 : w.n;
 +}
+diff --git a/bsd/dev/adrenogpu_sched.h b/bsd/dev/adrenogpu_sched.h
+new file mode 100644
+--- /dev/null
++++ b/bsd/dev/adrenogpu_sched.h
+@@ -0,0 +1,64 @@
++/* SPDX-License-Identifier: MIT */
++/* AdrenoGPU submission queue: a command ring with wrap-around and free-space accounting, and a table of in-flight
++ * jobs. It validates a job's IB against its context's mappings, writes the submit framing (adrenogpu_ring) into the
++ * ring, hands back the new write pointer for the caller to program, retires jobs in order from the fence word the
++ * GPU writes, and reports a hang when the oldest job outlives its deadline. No hardware access, no clock: the caller
++ * passes `now` (any monotonic unit) and the ring read pointer and fence value it read. */
++#ifndef ADRENOGPU_SCHED_H
++#define ADRENOGPU_SCHED_H
++#include "adrenogpu_ctx.h"
++#include "adrenogpu_ring.h"
++
++#define ADRENOGPU_SCHED_MAX_JOBS 16u
++
++struct adrenogpu_rb {
++	volatile uint32_t *base; /* CPU view of the ring */
++	uint32_t size;           /* dwords, a power of two */
++	uint32_t wptr;           /* next dword to write */
++};
++
++enum adrenogpu_job_state { ADRENOGPU_JOB_FREE = 0, ADRENOGPU_JOB_PENDING };
++
++struct adrenogpu_job {
++	struct adrenogpu_ctx *ctx;
++	uint32_t ctx_fence;  /* the fence the context's client waits for */
++	uint32_t seq;        /* the value written to the shared fence word */
++	uint32_t end_wptr;   /* ring position after this job */
++	uint64_t deadline;
++	enum adrenogpu_job_state state;
++};
++
++struct adrenogpu_sched {
++	struct adrenogpu_rb rb;
++	uint64_t fence_va;   /* GPU address of the shared fence word, in the kernel's own mapping */
++	uint64_t timeout;    /* job runtime allowed before it counts as hung */
++	struct adrenogpu_job jobs[ADRENOGPU_SCHED_MAX_JOBS];
++	unsigned head, count; /* oldest job and number in use (ring of jobs) */
++	uint32_t next_seq, retired_seq;
++	unsigned long submitted, retired, failed;
++};
++
++enum {
++	ADRENOGPU_SCHED_OK = 0,
++	ADRENOGPU_SCHED_EINVAL = -1,
++	ADRENOGPU_SCHED_EUNMAPPED = -2, /* the IB (or the second stream) is not inside one mapping of the context */
++	ADRENOGPU_SCHED_EBUSY = -3,     /* no free job slot or not enough ring space */
++	ADRENOGPU_SCHED_HUNG = 1,       /* poll(): the oldest job passed its deadline */
++};
++
++int adrenogpu_sched_init(struct adrenogpu_sched *, volatile uint32_t *ring, uint32_t ring_dwords, uint32_t wptr,
++    uint64_t fence_va, uint64_t timeout);
++/* Free ring space in dwords given the read pointer (one slot stays unused so full differs from empty). */
++uint32_t adrenogpu_rb_space(const struct adrenogpu_rb *, uint32_t rptr);
++
++/* Queue one job. On success *new_wptr is the write pointer to program and *ctx_fence the fence to wait for.
++ * Nothing is written to the ring on failure. */
++int adrenogpu_sched_submit(struct adrenogpu_sched *, struct adrenogpu_ctx *, const struct adrenogpu_submit *job,
++    uint32_t rptr, uint64_t now, uint32_t *new_wptr, uint32_t *ctx_fence);
++/* Retire every job whose sequence the GPU has written; returns HUNG if the oldest unfinished job is past its
++ * deadline, OK otherwise. */
++int adrenogpu_sched_poll(struct adrenogpu_sched *, uint64_t now, uint32_t fence_value);
++/* After a GPU reset: the ring is empty again at `wptr`; every pending job fails and its context fence retires so
++ * waiters wake. Returns the number of jobs failed. */
++unsigned adrenogpu_sched_reset(struct adrenogpu_sched *, uint32_t wptr);
++#endif
+diff --git a/bsd/dev/adrenogpu_sched.c b/bsd/dev/adrenogpu_sched.c
+new file mode 100644
+--- /dev/null
++++ b/bsd/dev/adrenogpu_sched.c
+@@ -0,0 +1,101 @@
++/* SPDX-License-Identifier: MIT */
++#include "adrenogpu_sched.h"
++
++int
++adrenogpu_sched_init(struct adrenogpu_sched *s, volatile uint32_t *ring, uint32_t ring_dwords, uint32_t wptr,
++    uint64_t fence_va, uint64_t timeout)
++{
++	if (!s || !ring || ring_dwords < 64u || (ring_dwords & (ring_dwords - 1u)) || wptr >= ring_dwords ||
++	    !fence_va || (fence_va & 3u) || !timeout)
++		return ADRENOGPU_SCHED_EINVAL;
++	s->rb.base = ring;
++	s->rb.size = ring_dwords;
++	s->rb.wptr = wptr;
++	s->fence_va = fence_va;
++	s->timeout = timeout;
++	for (unsigned i = 0; i < ADRENOGPU_SCHED_MAX_JOBS; i++) s->jobs[i].state = ADRENOGPU_JOB_FREE;
++	s->head = s->count = 0;
++	s->next_seq = s->retired_seq = 0;
++	s->submitted = s->retired = s->failed = 0;
++	return ADRENOGPU_SCHED_OK;
++}
++
++uint32_t
++adrenogpu_rb_space(const struct adrenogpu_rb *rb, uint32_t rptr)
++{
++	return (rptr - rb->wptr - 1u) & (rb->size - 1u);
++}
++
++int
++adrenogpu_sched_submit(struct adrenogpu_sched *s, struct adrenogpu_ctx *ctx, const struct adrenogpu_submit *job,
++    uint32_t rptr, uint64_t now, uint32_t *new_wptr, uint32_t *ctx_fence)
++{
++	if (!s || !ctx || !job || !new_wptr || !ctx_fence || rptr >= s->rb.size) return ADRENOGPU_SCHED_EINVAL;
++	if (!adrenogpu_ctx_find(ctx, job->ib_va, 4ull * job->ib_dwords, 0) ||
++	    (job->ib2_va && !adrenogpu_ctx_find(ctx, job->ib2_va, 4ull * job->ib2_dwords, 0)))
++		return ADRENOGPU_SCHED_EUNMAPPED;
++	if (s->count == ADRENOGPU_SCHED_MAX_JOBS) return ADRENOGPU_SCHED_EBUSY;
++	/* The framing carries this scheduler's own fence address and sequence, whatever the caller put there. */
++	struct adrenogpu_submit framed = *job;
++	uint32_t seq = s->next_seq + 1u ? s->next_seq + 1u : 1u;
++	framed.fence_va = s->fence_va;
++	framed.fence_value = seq;
++	uint32_t words[ADRENOGPU_SUBMIT_MAX_DWORDS];
++	size_t n = adrenogpu_ring_build_submit(&framed, words, ADRENOGPU_SUBMIT_MAX_DWORDS);
++	if (!n) return ADRENOGPU_SCHED_EINVAL;
++	if (n > adrenogpu_rb_space(&s->rb, rptr)) return ADRENOGPU_SCHED_EBUSY;
++	uint32_t wptr = s->rb.wptr;
++	for (size_t i = 0; i < n; i++) {
++		s->rb.base[wptr] = words[i];
++		wptr = (wptr + 1u) & (s->rb.size - 1u);
++	}
++	s->rb.wptr = wptr;
++	s->next_seq = seq;
++	struct adrenogpu_job *j = &s->jobs[(s->head + s->count) % ADRENOGPU_SCHED_MAX_JOBS];
++	j->ctx = ctx;
++	j->ctx_fence = adrenogpu_ctx_new_fence(ctx);
++	j->seq = seq;
++	j->end_wptr = wptr;
++	j->deadline = now + s->timeout;
++	j->state = ADRENOGPU_JOB_PENDING;
++	s->count++;
++	s->submitted++;
++	*new_wptr = wptr;
++	*ctx_fence = j->ctx_fence;
++	return ADRENOGPU_SCHED_OK;
++}
++
++int
++adrenogpu_sched_poll(struct adrenogpu_sched *s, uint64_t now, uint32_t fence_value)
++{
++	while (s->count) {
++		struct adrenogpu_job *j = &s->jobs[s->head];
++		if ((int32_t)(fence_value - j->seq) < 0) break; /* the GPU has not got there */
++		adrenogpu_ctx_retire(j->ctx, j->ctx_fence);
++		s->retired_seq = j->seq;
++		j->state = ADRENOGPU_JOB_FREE;
++		s->head = (s->head + 1u) % ADRENOGPU_SCHED_MAX_JOBS;
++		s->count--;
++		s->retired++;
++	}
++	if (s->count && now >= s->jobs[s->head].deadline) return ADRENOGPU_SCHED_HUNG;
++	return ADRENOGPU_SCHED_OK;
++}
++
++unsigned
++adrenogpu_sched_reset(struct adrenogpu_sched *s, uint32_t wptr)
++{
++	unsigned failed = 0;
++	while (s->count) {
++		struct adrenogpu_job *j = &s->jobs[s->head];
++		adrenogpu_ctx_lose(j->ctx, j->ctx_fence);
++		j->state = ADRENOGPU_JOB_FREE;
++		s->head = (s->head + 1u) % ADRENOGPU_SCHED_MAX_JOBS;
++		s->count--;
++		failed++;
++	}
++	s->failed += failed;
++	s->rb.wptr = wptr & (s->rb.size - 1u);
++	s->retired_seq = s->next_seq; /* sequences up to here will never be written */
++	return failed;
++}
 diff --git a/bsd/conf/files b/bsd/conf/files
 --- a/bsd/conf/files
 +++ b/bsd/conf/files
-@@ -115,6 +115,9 @@
+@@ -115,6 +115,10 @@
  bsd/dev/qcom_geni.c			standard
  bsd/dev/fp6_touch.c			standard
  bsd/dev/fp6_keys.c			standard
 +bsd/dev/adrenogpu_vm.c			standard
 +bsd/dev/adrenogpu_ctx.c			standard
 +bsd/dev/adrenogpu_ring.c			standard
++bsd/dev/adrenogpu_sched.c			standard
  bsd/dev/mem.c				standard
  bsd/dev/munge.c 			optional config_requires_u32_munging
  bsd/dev/unix_startup.c			standard
