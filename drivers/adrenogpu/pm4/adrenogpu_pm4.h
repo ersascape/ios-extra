@@ -74,14 +74,44 @@ struct adrenogpu_color_target {
 	unsigned srgb;
 };
 
+/* Load action of the colour target. GENERIC is what Turnip emits on the A810 (has_generic_clear: the resolve
+ * engine's blit event with BLIT_EVENT_CLEAR, tu7_generic_clear_attachment); verified packet for packet. 2D is the
+ * 2D-engine solid fill (r2d_ops, what Turnip uses for vkCmdFillBuffer and Snapintosh's emit_2d_clear uses for the
+ * load action) with flush brackets around it; its register sequence is verified against Turnip's A810 2D fill. */
+enum adrenogpu_clear_mode { ADRENOGPU_CLEAR_NONE = 0, ADRENOGPU_CLEAR_GENERIC, ADRENOGPU_CLEAR_2D };
+
 struct adrenogpu_pass {
 	unsigned width, height;
 	struct adrenogpu_color_target color;
 	uint64_t border_color_va;
+	unsigned clear_mode;   /* enum adrenogpu_clear_mode */
+	float clear_rgba[4];   /* linear RGBA, used when clear_mode is not NONE; 8-bit UNORM targets only */
 };
 
-/* Restore, fd6_emit_sysmem_prep, the attachments and fd6_emit_sysmem, without the load-action clear (the 2D
- * clear is a later step). */
+/* UNORM8 clear words: packed is the generic clear's single word (R in the low byte), words the 2D clear's four
+ * per-channel values. Rounds to nearest even like Mesa's _mesa_lroundevenf of the clamped value times 255. */
+void adrenogpu_pack_clear_unorm8(const float rgba[4], uint32_t *packed, uint32_t words[4]);
+
+/* ---- 2D engine solid fill (RB/GRAS/SP_A2D registers, CP_BLIT SCALE), as r2d_setup/clear_value/dst/coords/run ---- */
+struct adrenogpu_blit_dest {
+	uint64_t va;
+	uint32_t pitch;       /* bytes per row; 0 for a one-row buffer fill */
+	unsigned rb_format;   /* A8XX_E_FMT6_* */
+	unsigned swap, tile_mode;
+	int is_image;         /* images also get RB_A2D_DEST_FLAG_BUFFER_BASE (Turnip's r2d_dst), buffers do not */
+};
+struct adrenogpu_clear_2d {
+	struct adrenogpu_blit_dest dest;
+	unsigned ifmt;            /* A8XX_E_R2D_* */
+	unsigned output_ifmt;     /* A8XX_E_OUTPUT_IFMT_2D_* */
+	uint32_t words[4];        /* RB_A2D_CLEAR_COLOR_DW0..3 */
+	unsigned x, y, w, h;
+};
+void adrenogpu_pm4_emit_clear_2d(struct adrenogpu_cs *, const struct adrenogpu_clear_2d *);
+
+/* Restore, fd6_emit_sysmem_prep, the attachments and fd6_emit_sysmem, then the load-action clear when
+ * pass->clear_mode asks for one (Turnip's order puts the clear before the attachment registers; this builder
+ * emits it last, which leaves the register state at the draw identical). */
 void adrenogpu_pm4_emit_pass_begin(struct adrenogpu_cs *, const struct adrenogpu_pass *,
     const struct adrenogpu_gmem_config *sysmem);
 /* CP_DRAW_INDX_OFFSET, auto-index (no index buffer), visibility use as Turnip emits it. */

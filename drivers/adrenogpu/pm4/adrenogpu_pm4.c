@@ -334,6 +334,8 @@ emit_marker(struct adrenogpu_cs *cs, unsigned mode)
 	PKT7(cs, A8XX_E_CP_SET_MARKER, A8XX_PKT_A8XX_CP_SET_MARKER_0__MODE(mode));
 }
 
+static void emit_pass_clear(struct adrenogpu_cs *cs, const struct adrenogpu_pass *p);
+
 void
 adrenogpu_pm4_emit_pass_begin(struct adrenogpu_cs *cs, const struct adrenogpu_pass *p,
     const struct adrenogpu_gmem_config *sysmem)
@@ -433,6 +435,204 @@ adrenogpu_pm4_emit_pass_begin(struct adrenogpu_cs *cs, const struct adrenogpu_pa
 	R(&r, GRAS_SU_RENDER_CNTL, 0, 0);
 	adrenogpu_cs_crb(cs, &r);
 	emit_lrz_off(cs);
+	emit_pass_clear(cs, p);
+}
+
+/* ---- load-action clear ---- */
+/* Registers the generated A8XX header does not carry (its generator keeps the A8XX-variant view of a6xx.xml and
+ * drops these): offsets and layouts are from Mesa a6xx.xml at the pinned commit, and the sequences below are
+ * checked against Turnip's A810 stream. */
+#define REG_RB_RESOLVE_CNTL_0 0x88d0u
+#define REG_RB_RESOLVE_GMEM_BUFFER_BASE 0x88d6u
+#define REG_RB_RESOLVE_SYSTEM_BUFFER_INFO 0x88d7u /* TILE_MODE 0-1, FLAGS 2, SAMPLES 3-4, SWAP 5-6, FORMAT 7-14 */
+#define REG_RB_RESOLVE_SYSTEM_FLAG_BUFFER_BASE 0x88dcu
+#define REG_RB_RESOLVE_CLEAR_COLOR_DW0 0x88dfu
+#define REG_RB_RESOLVE_OPERATION 0x88e3u         /* TYPE 0-1, SAMPLE_0 2, DEPTH 3, CLEAR_MASK 4-7, LAST 8-9, BUFFER_ID 12-15 */
+#define REG_RB_A2D_DEST_FLAG_BUFFER_BASE 0x8c20u
+#define BLIT_EVENT_CLEAR 2u
+#define COND_EXEC_RENDER_MODE_GMEM_SYSMEM 0x3c000000u /* CP_COND_REG_EXEC_0: MODE RENDER_MODE (3<<28), GMEM, SYSMEM */
+
+/* Round to nearest even of x * 255 for x clamped to [0, 1]. */
+static uint32_t
+unorm8(float x)
+{
+	if (!(x > 0.0f)) return 0;
+	if (x >= 1.0f) return 255;
+	float v = x * 255.0f;
+	uint32_t i = (uint32_t)v;
+	float frac = v - (float)i;
+	if (frac > 0.5f || (frac == 0.5f && (i & 1))) i++;
+	return i;
+}
+
+void
+adrenogpu_pack_clear_unorm8(const float rgba[4], uint32_t *packed, uint32_t words[4])
+{
+	uint32_t b[4];
+	for (unsigned i = 0; i < 4; i++) b[i] = unorm8(rgba[i]);
+	if (packed) *packed = b[0] | b[1] << 8 | b[2] << 16 | b[3] << 24;
+	if (words) for (unsigned i = 0; i < 4; i++) words[i] = b[i];
+}
+
+/* tu7_generic_clear_attachment inside a CP_COND_REG_EXEC (GMEM or SYSMEM): blit scissor, clear value, the resolve
+ * engine's buffer description and operation, then CCU_RESOLVE, and after the block CCU_END_RESOLVE_GROUP. */
+static void
+emit_clear_generic(struct adrenogpu_cs *cs, const struct adrenogpu_pass *p, uint32_t packed)
+{
+	uint32_t body[32];
+	struct adrenogpu_cs sub;
+	struct adrenogpu_regs r;
+	const struct adrenogpu_color_target *c = &p->color;
+	adrenogpu_cs_init(&sub, body, sizeof body / sizeof *body);
+	/* tu6_emit_blit_scissor */
+	memset(&r, 0, sizeof r);
+	R(&r, RB_RESOLVE_CNTL_1, 0, F(RB_RESOLVE_CNTL_1, X, 0) | F(RB_RESOLVE_CNTL_1, Y, 0));
+	R(&r, RB_RESOLVE_CNTL_2, 0, F(RB_RESOLVE_CNTL_2, X, p->width - 1) | F(RB_RESOLVE_CNTL_2, Y, p->height - 1));
+	adrenogpu_cs_pkt4(&sub, &r);
+	memset(&r, 0, sizeof r);
+	adrenogpu_regs_add(&r, REG_RB_RESOLVE_CLEAR_COLOR_DW0, packed);
+	adrenogpu_regs_add(&r, REG_RB_RESOLVE_CLEAR_COLOR_DW0 + 1, 0);
+	adrenogpu_regs_add(&r, REG_RB_RESOLVE_CLEAR_COLOR_DW0 + 2, 0);
+	adrenogpu_regs_add(&r, REG_RB_RESOLVE_CLEAR_COLOR_DW0 + 3, 0);
+	adrenogpu_cs_pkt4(&sub, &r);
+	/* event_blit_setup */
+	memset(&r, 0, sizeof r);
+	R(&r, RB_RESOLVE_GMEM_BUFFER_INFO, 0, F(RB_RESOLVE_GMEM_BUFFER_INFO, SAMPLES, A8XX_E_MSAA_ONE));
+	adrenogpu_cs_pkt4(&sub, &r);
+	memset(&r, 0, sizeof r);
+	adrenogpu_regs_add(&r, REG_RB_RESOLVE_CNTL_0, 0);
+	adrenogpu_cs_pkt4(&sub, &r);
+	memset(&r, 0, sizeof r);
+	adrenogpu_regs_add(&r, REG_RB_RESOLVE_OPERATION, BLIT_EVENT_CLEAR | 0xfu << 4); /* buffer id 0, mask 0xf */
+	adrenogpu_cs_pkt4(&sub, &r);
+	/* event_blit_run: system buffer (info, base, pitch>>6), flag buffer (base, pitch 0), GMEM base 0 */
+	memset(&r, 0, sizeof r);
+	adrenogpu_regs_add(&r, REG_RB_RESOLVE_SYSTEM_BUFFER_INFO, c->tile_mode | c->swap << 5 | c->rb_format << 7);
+	adrenogpu_regs_add(&r, REG_RB_RESOLVE_SYSTEM_BUFFER_INFO + 1, (uint32_t)c->va);
+	adrenogpu_regs_add(&r, REG_RB_RESOLVE_SYSTEM_BUFFER_INFO + 2, (uint32_t)(c->va >> 32));
+	adrenogpu_regs_add(&r, REG_RB_RESOLVE_SYSTEM_BUFFER_INFO + 3, (c->pitch >> 6) & 0xffffu);
+	adrenogpu_cs_pkt4(&sub, &r);
+	memset(&r, 0, sizeof r);
+	adrenogpu_regs_add(&r, REG_RB_RESOLVE_SYSTEM_FLAG_BUFFER_BASE, (uint32_t)c->va);
+	adrenogpu_regs_add(&r, REG_RB_RESOLVE_SYSTEM_FLAG_BUFFER_BASE + 1, (uint32_t)(c->va >> 32));
+	adrenogpu_regs_add(&r, REG_RB_RESOLVE_SYSTEM_FLAG_BUFFER_BASE + 2, 0);
+	adrenogpu_cs_pkt4(&sub, &r);
+	memset(&r, 0, sizeof r);
+	adrenogpu_regs_add(&r, REG_RB_RESOLVE_GMEM_BUFFER_BASE, 0);
+	adrenogpu_cs_pkt4(&sub, &r);
+	adrenogpu_cs_event(&sub, A8XX_E_CCU_RESOLVE);
+	if (sub.err) {
+		cs->err = 1;
+		return;
+	}
+	PKT7(cs, A8XX_E_CP_COND_REG_EXEC, COND_EXEC_RENDER_MODE_GMEM_SYSMEM, (uint32_t)sub.n);
+	for (size_t i = 0; i < sub.n; i++) put(cs, body[i]);
+	/* closing the resolve group is outside the conditional block (tu_emit_resolve_group) */
+	adrenogpu_cs_event(cs, A8XX_E_CCU_END_RESOLVE_GROUP);
+}
+
+void
+adrenogpu_pm4_emit_clear_2d(struct adrenogpu_cs *cs, const struct adrenogpu_clear_2d *c)
+{
+	struct adrenogpu_regs r;
+	const struct adrenogpu_blit_dest *d = &c->dest;
+	if (!c->w || !c->h || c->x + c->w > 16384 || c->y + c->h > 16384) {
+		cs->err = 1;
+		return;
+	}
+	/* r2d_setup_common (no sRGB, no UBWC, no rotation, no scissor) */
+	memset(&r, 0, sizeof r);
+	R(&r, RB_A2D_PIXEL_CNTL, 0, F(RB_A2D_PIXEL_CNTL, PIXEL_OP, A8XX_E_PIXEL_OP_DISABLED));
+	adrenogpu_cs_pkt4(cs, &r);
+	memset(&r, 0, sizeof r);
+	R(&r, RB_A2D_BLT_CNTL, 0, F(RB_A2D_BLT_CNTL, ROTATE, A8XX_E_ROTATE_0) | F(RB_A2D_BLT_CNTL, SOLID_COLOR, 1) |
+	    F(RB_A2D_BLT_CNTL, COLOR_FORMAT, d->rb_format) | F(RB_A2D_BLT_CNTL, MASK, 0xf) | F(RB_A2D_BLT_CNTL, IFMT, c->ifmt));
+	adrenogpu_cs_pkt4(cs, &r);
+	memset(&r, 0, sizeof r);
+	R(&r, GRAS_A2D_BLT_CNTL, 0, F(GRAS_A2D_BLT_CNTL, ROTATE, A8XX_E_ROTATE_0) | F(GRAS_A2D_BLT_CNTL, SOLID_COLOR, 1) |
+	    F(GRAS_A2D_BLT_CNTL, COLOR_FORMAT, d->rb_format) | F(GRAS_A2D_BLT_CNTL, MASK, 0xf) | F(GRAS_A2D_BLT_CNTL, IFMT, c->ifmt));
+	adrenogpu_cs_pkt4(cs, &r);
+	memset(&r, 0, sizeof r);
+	R(&r, TPL1_A2D_BLT_CNTL, 0, F(TPL1_A2D_BLT_CNTL, TYPE, A8XX_E_A6XX_TEX_2D));
+	adrenogpu_cs_pkt4(cs, &r);
+	memset(&r, 0, sizeof r);
+	R(&r, SP_A2D_OUTPUT_INFO, 0, F(SP_A2D_OUTPUT_INFO, IFMT_TYPE, c->output_ifmt) |
+	    F(SP_A2D_OUTPUT_INFO, COLOR_FORMAT, d->rb_format) | F(SP_A2D_OUTPUT_INFO, MASK, 0xf));
+	adrenogpu_cs_pkt4(cs, &r);
+	/* r2d_clear_value */
+	memset(&r, 0, sizeof r);
+	R(&r, RB_A2D_CLEAR_COLOR_DW0, 0, c->words[0]);
+	R(&r, RB_A2D_CLEAR_COLOR_DW1, 0, c->words[1]);
+	R(&r, RB_A2D_CLEAR_COLOR_DW2, 0, c->words[2]);
+	R(&r, RB_A2D_CLEAR_COLOR_DW3, 0, c->words[3]);
+	adrenogpu_cs_pkt4(cs, &r);
+	/* r2d_dst / r2d_dst_buffer: info, base, pitch as consecutive registers; images add the flag buffer base */
+	memset(&r, 0, sizeof r);
+	R(&r, RB_A2D_DEST_BUFFER_INFO, 0, F(RB_A2D_DEST_BUFFER_INFO, COLOR_FORMAT, d->rb_format) |
+	    F(RB_A2D_DEST_BUFFER_INFO, TILE_MODE, d->tile_mode) | F(RB_A2D_DEST_BUFFER_INFO, COLOR_SWAP, d->swap) |
+	    F(RB_A2D_DEST_BUFFER_INFO, SAMPLES, A8XX_E_MSAA_ONE));
+	R64(&r, RB_A2D_DEST_BUFFER_BASE, 0, d->va);
+	R(&r, RB_A2D_DEST_BUFFER_PITCH, 0, F(RB_A2D_DEST_BUFFER_PITCH, VALUE, d->pitch));
+	adrenogpu_cs_pkt4(cs, &r);
+	if (d->is_image) {
+		memset(&r, 0, sizeof r);
+		adrenogpu_regs_add(&r, REG_RB_A2D_DEST_FLAG_BUFFER_BASE, (uint32_t)d->va);
+		adrenogpu_regs_add(&r, REG_RB_A2D_DEST_FLAG_BUFFER_BASE + 1, (uint32_t)(d->va >> 32));
+		adrenogpu_regs_add(&r, REG_RB_A2D_DEST_FLAG_BUFFER_BASE + 2, 0);
+		adrenogpu_cs_pkt4(cs, &r);
+	}
+	/* r2d_coords (no source coordinates for a solid fill) */
+	memset(&r, 0, sizeof r);
+	R(&r, GRAS_A2D_DEST_TL, 0, F(GRAS_A2D_DEST_TL, X, c->x) | F(GRAS_A2D_DEST_TL, Y, c->y));
+	R(&r, GRAS_A2D_DEST_BR, 0, F(GRAS_A2D_DEST_BR, X, c->x + c->w - 1) | F(GRAS_A2D_DEST_BR, Y, c->y + c->h - 1));
+	adrenogpu_cs_pkt4(cs, &r);
+	/* r2d_run */
+	PKT7(cs, A8XX_E_CP_BLIT, A8XX_PKT_CP_BLIT_0__OP(A8XX_E_BLIT_OP_SCALE));
+}
+
+/* Snapintosh's emit_flushes (fd6_emit_flushes<A8XX>) for the colour half, used around the 2D clear. */
+static void
+emit_color_flushes(struct adrenogpu_cs *cs, int cche_and_wfi)
+{
+	adrenogpu_cs_event(cs, A8XX_E_CCU_CLEAN_COLOR);
+	adrenogpu_cs_event(cs, A8XX_E_CCU_INVALIDATE_COLOR);
+	adrenogpu_cs_event(cs, A8XX_E_DUMMY_EVENT);
+	adrenogpu_cs_event(cs, A8XX_E_SUBPASS_FENCE);
+	adrenogpu_cs_event(cs, A8XX_E_DUMMY_EVENT);
+	if (cche_and_wfi) {
+		adrenogpu_cs_wfi(cs);
+		adrenogpu_cs_pkt7(cs, A8XX_E_CP_CCHE_INVALIDATE, NULL, 0);
+		adrenogpu_cs_wfi(cs);
+	}
+}
+
+static void
+emit_pass_clear(struct adrenogpu_cs *cs, const struct adrenogpu_pass *p)
+{
+	uint32_t packed, words[4];
+	if (p->clear_mode == ADRENOGPU_CLEAR_NONE) return;
+	/* Only the 8-bit UNORM path is implemented (and, for the generic clear, verified): other formats and sRGB
+	 * need their own value packing, which is not derived from a Turnip capture yet. */
+	if (p->color.rb_format != A8XX_E_FMT6_8_8_8_8_UNORM || p->color.srgb) {
+		cs->err = 1;
+		return;
+	}
+	adrenogpu_pack_clear_unorm8(p->clear_rgba, &packed, words);
+	if (p->clear_mode == ADRENOGPU_CLEAR_GENERIC) {
+		emit_clear_generic(cs, p, packed);
+	} else if (p->clear_mode == ADRENOGPU_CLEAR_2D) {
+		struct adrenogpu_clear_2d c = { { p->color.va, p->color.pitch, p->color.rb_format, p->color.swap,
+		    p->color.tile_mode, 1 }, A8XX_E_R2D_UNORM8, A8XX_E_OUTPUT_IFMT_2D_FLOAT, { 0 }, 0, 0, p->width, p->height };
+		memcpy(c.words, words, sizeof words);
+		/* The 2D engine writes through the CCU colour cache: drain and clean before, clean after, as the
+		 * Snapintosh emitter brackets it. */
+		emit_color_flushes(cs, 1);
+		adrenogpu_pm4_emit_clear_2d(cs, &c);
+		emit_color_flushes(cs, 0);
+		emit_color_flushes(cs, 1);
+	} else {
+		cs->err = 1;
+	}
 }
 
 void
