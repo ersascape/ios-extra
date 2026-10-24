@@ -129,6 +129,8 @@ adrenogpu_chip_a810(void)
 	struct adrenogpu_chip c;
 	memset(&c, 0, sizeof c);
 	c.num_ccu = 1;
+	c.prim_alloc_threshold = 0x7;                    /* freedreno_devices.py a8xx_base */
+	c.has_implicit_fragface_fragcoord_ij_linear = 1; /* a7xx_gen3, inherited by a8xx */
 	c.sysmem_vpc_attr = 131072; c.sysmem_vpc_pos = 65536; c.sysmem_vpc_bv_pos = 32768;
 	c.sysmem_ccu_color_fraction = A8XX_E_CCU_CACHE_SIZE_FULL; c.sysmem_per_ccu_color = 128 * 1024;
 	c.sysmem_ccu_depth_fraction = A8XX_E_CCU_CACHE_SIZE_FULL; c.sysmem_per_ccu_depth = 256 * 1024;
@@ -633,6 +635,433 @@ emit_pass_clear(struct adrenogpu_cs *cs, const struct adrenogpu_pass *p)
 	} else {
 		cs->err = 1;
 	}
+}
+
+/* ---- shader program state ---- */
+/* Registers the generated A8XX header does not name, at the offsets Turnip's A810 stream writes them (a6xx.xml). */
+#define REG_VPC_SO_MAPPING_WPTR 0x9180u        /* VPC_SO_MAPPING_WPTR */
+#define REG_PC_DGEN_SO_CNTL 0x9b0bu
+#define REG_VPC_STEREO_RENDERING_CNTL 0x931au  /* A7XX variant, also written on the A810 */
+#define REG_VPC_STEREO_RENDERING_VIEWMASK 0x90c1u
+#define INTERP_FLAT 1u                         /* a6xx_varying_interp_mode */
+#define UBO_SIZE_SHIFT 17                      /* A6XX_UBO_1: SIZE in vec4 at bit 17 of the high dword */
+
+#define VALID(r) ((r) != ADRENOGPU_REGID_INVALID)
+
+static unsigned
+last_bit(unsigned v)
+{
+	unsigned n = 0;
+	while (v) {
+		n++;
+		v >>= 1;
+	}
+	return n;
+}
+
+static uint32_t
+sp_xs_config(const struct adrenogpu_xs *x)
+{
+	return A8XX_REG_SP_VS_CONFIG__ENABLED(1) | A8XX_REG_SP_VS_CONFIG__BINDLESS_TEX(x->bindless_tex) |
+	    A8XX_REG_SP_VS_CONFIG__BINDLESS_SAMP(x->bindless_samp) | A8XX_REG_SP_VS_CONFIG__BINDLESS_UAV(x->bindless_uav) |
+	    A8XX_REG_SP_VS_CONFIG__BINDLESS_UBO(x->bindless_ubo) | A8XX_REG_SP_VS_CONFIG__NUAV(x->num_uav) |
+	    A8XX_REG_SP_VS_CONFIG__NTEX(x->num_samp) | A8XX_REG_SP_VS_CONFIG__NSAMP(x->num_samp);
+}
+
+/* tu6_emit_xs_constants for the constant-data UBO: a CP_LOAD_STATE6 with an inline UBO descriptor. */
+static void
+emit_const_ubo(struct adrenogpu_cs *cs, const struct adrenogpu_xs *x, unsigned opcode, unsigned block)
+{
+	if (x->const_ubo_idx < 0) return;
+	uint64_t va = x->base_va + x->const_data_offset;
+	uint32_t size_vec4 = (x->const_data_size + 15) / 16;
+	PKT7(cs, opcode, A8XX_PKT_CP_LOAD_STATE6_0__DST_OFF((uint32_t)x->const_ubo_idx) |
+	    A8XX_PKT_CP_LOAD_STATE6_0__STATE_TYPE(A8XX_E_ST6_UBO) | A8XX_PKT_CP_LOAD_STATE6_0__STATE_SRC(A8XX_E_SS6_DIRECT) |
+	    A8XX_PKT_CP_LOAD_STATE6_0__STATE_BLOCK(block) | A8XX_PKT_CP_LOAD_STATE6_0__NUM_UNIT(1), 0, 0,
+	    (uint32_t)va, (uint32_t)(va >> 32) | size_vec4 << UBO_SIZE_SHIFT);
+}
+
+/* tu6_emit_program_config: SP_MODE_CNTL, SP_UPDATE_CNTL and the per-stage constant/config registers. */
+static void
+emit_program_config(struct adrenogpu_cs *cs, const struct adrenogpu_program *p)
+{
+	struct adrenogpu_regs r = { 0 };
+	R(&r, SP_MODE_CNTL, 0, F(SP_MODE_CNTL, CONSTANT_DEMOTION_ENABLE, 1) | F(SP_MODE_CNTL, ISAMMODE, A8XX_E_ISAMMODE_GL));
+	R(&r, SP_UPDATE_CNTL, 0, F(SP_UPDATE_CNTL, VS_STATE, 1) | F(SP_UPDATE_CNTL, HS_STATE, 1) |
+	    F(SP_UPDATE_CNTL, DS_STATE, 1) | F(SP_UPDATE_CNTL, GS_STATE, 1) | F(SP_UPDATE_CNTL, FS_STATE, 1));
+	R(&r, SP_VS_CONST_CONFIG, 0, F(SP_VS_CONST_CONFIG, CONSTLEN, p->vs.constlen) | F(SP_VS_CONST_CONFIG, ENABLED, 1));
+	R(&r, SP_HS_CONST_CONFIG, 0, 0);
+	R(&r, SP_DS_CONST_CONFIG, 0, 0);
+	R(&r, SP_GS_CONST_CONFIG, 0, 0);
+	R(&r, SP_PS_CONST_CONFIG, 0, F(SP_PS_CONST_CONFIG, CONSTLEN, p->fs.constlen) | F(SP_PS_CONST_CONFIG, ENABLED, 1));
+	R(&r, SP_VS_CONFIG, 0, sp_xs_config(&p->vs));
+	R(&r, SP_HS_CONFIG, 0, 0);
+	R(&r, SP_DS_CONFIG, 0, 0);
+	R(&r, SP_GS_CONFIG, 0, 0);
+	R(&r, SP_PS_CONFIG, 0, sp_xs_config(&p->fs));
+	adrenogpu_cs_crb(cs, &r);
+}
+
+static void
+emit_vs(struct adrenogpu_cs *cs, const struct adrenogpu_program *p)
+{
+	struct adrenogpu_regs r = { 0 };
+	const struct adrenogpu_xs *x = &p->vs;
+	/* tu6_emit_xs, MESA_SHADER_VERTEX */
+	R(&r, SP_VS_CNTL_0, 0, F(SP_VS_CNTL_0, HALFREGFOOTPRINT, x->half_reg_footprint) |
+	    F(SP_VS_CNTL_0, FULLREGFOOTPRINT, x->full_reg_footprint) | F(SP_VS_CNTL_0, BRANCHSTACK, x->branchstack) |
+	    F(SP_VS_CNTL_0, MERGEDREGS, x->mergedregs) | F(SP_VS_CNTL_0, EARLYPREAMBLE, x->early_preamble));
+	R(&r, SP_VS_INSTR_SIZE, 0, x->instrlen);
+	R(&r, SP_VS_PROGRAM_COUNTER_OFFSET, 0, 0);
+	R64(&r, SP_VS_BASE, 0, x->base_va);
+	R(&r, SP_VS_PVT_MEM_PARAM, 0, F(SP_VS_PVT_MEM_PARAM, MEMSIZEPERITEM, x->pvtmem_per_fiber_size));
+	R64(&r, SP_VS_PVT_MEM_BASE, 0, x->pvtmem_va);
+	R(&r, SP_VS_PVT_MEM_SIZE, 0, F(SP_VS_PVT_MEM_SIZE, TOTALPVTMEMSIZE, x->pvtmem_per_sp_size) |
+	    F(SP_VS_PVT_MEM_SIZE, PERWAVEMEMLAYOUT, x->pvtmem_per_wave));
+	R(&r, SP_VS_PVT_MEM_STACK_OFFSET, 0, F(SP_VS_PVT_MEM_STACK_OFFSET, OFFSET, x->pvtmem_per_sp_size));
+	R(&r, SP_VS_VGS_CNTL, 0, 0);
+	adrenogpu_cs_crb(cs, &r);
+	/* tu6_emit_vs with no multiview: view_mask 0 gives disablemultipos (the VS has no multi-position output) and
+	 * views = util_logbase2(0) + 1 */
+	const uint32_t stereo = F(PC_STEREO_RENDERING_CNTL, ENABLE, 0) | F(PC_STEREO_RENDERING_CNTL, DISABLEMULTIPOS, 1) |
+	    F(PC_STEREO_RENDERING_CNTL, VIEWS, 1);
+	memset(&r, 0, sizeof r);
+	R(&r, PC_STEREO_RENDERING_CNTL, 0, stereo);
+	adrenogpu_cs_pkt4(cs, &r);
+	memset(&r, 0, sizeof r);
+	R(&r, VFD_STEREO_RENDERING_CNTL, 0, stereo);
+	adrenogpu_cs_pkt4(cs, &r);
+	memset(&r, 0, sizeof r);
+	adrenogpu_regs_add(&r, REG_VPC_STEREO_RENDERING_CNTL, stereo);
+	adrenogpu_cs_pkt4(cs, &r);
+	memset(&r, 0, sizeof r);
+	adrenogpu_regs_add(&r, REG_VPC_STEREO_RENDERING_VIEWMASK, 0);
+	adrenogpu_cs_pkt4(cs, &r);
+	/* tu6_emit_vfd_dest */
+	memset(&r, 0, sizeof r);
+	R(&r, VFD_CNTL_0, 0, F(VFD_CNTL_0, FETCH_CNT, p->vs_attr_in) | F(VFD_CNTL_0, DECODE_CNT, p->vs_attr_in));
+	adrenogpu_cs_pkt4(cs, &r);
+	memset(&r, 0, sizeof r);
+	R(&r, PC_VS_INPUT_CNTL, 0, F(PC_VS_INPUT_CNTL, INSTR_CNT, p->vs_attr_in) |
+	    F(PC_VS_INPUT_CNTL, SIDEBAND_CNT, VALID(p->vs_vertexid_regid) + VALID(p->vs_instanceid_regid) +
+	    VALID(p->vs_viewid_regid)));
+	adrenogpu_cs_pkt4(cs, &r);
+	if (p->vs_attr_in) {
+		memset(&r, 0, sizeof r);
+		for (unsigned i = 0; i < p->vs_attr_in; i++)
+			R(&r, VFD_DEST_CNTL_INSTR, i, F(VFD_DEST_CNTL_INSTR, WRITEMASK, p->vs_attr[i].writemask) |
+			    F(VFD_DEST_CNTL_INSTR, REGID, p->vs_attr[i].regid));
+		adrenogpu_cs_pkt4(cs, &r);
+	}
+	memset(&r, 0, sizeof r);
+	R(&r, VFD_CNTL_1, 0, F(VFD_CNTL_1, REGID4VTX, p->vs_vertexid_regid) | F(VFD_CNTL_1, REGID4INST, p->vs_instanceid_regid) |
+	    F(VFD_CNTL_1, REGID4PRIMID, p->vs_primid_regid) | F(VFD_CNTL_1, REGID4VIEWID, p->vs_viewid_regid));
+	adrenogpu_cs_pkt4(cs, &r);
+	emit_const_ubo(cs, x, A8XX_E_CP_LOAD_STATE6_GEOM, A8XX_E_SB6_VS_SHADER);
+}
+
+/* tu6_emit_hs, tu6_emit_ds and tu6_emit_gs without a shader: their register ids are all "none". */
+static void
+emit_absent_stages(struct adrenogpu_cs *cs)
+{
+	struct adrenogpu_regs r = { 0 };
+	R(&r, VFD_CNTL_2, 0, F(VFD_CNTL_2, REGID_HSRELPATCHID, ADRENOGPU_REGID_INVALID) |
+	    F(VFD_CNTL_2, REGID_INVOCATIONID, ADRENOGPU_REGID_INVALID));
+	adrenogpu_cs_pkt4(cs, &r);
+	memset(&r, 0, sizeof r);
+	R(&r, VFD_CNTL_3, 0, F(VFD_CNTL_3, REGID_DSPRIMID, ADRENOGPU_REGID_INVALID) |
+	    F(VFD_CNTL_3, REGID_DSRELPATCHID, ADRENOGPU_REGID_INVALID) | F(VFD_CNTL_3, REGID_TESSX, ADRENOGPU_REGID_INVALID) |
+	    F(VFD_CNTL_3, REGID_TESSY, ADRENOGPU_REGID_INVALID));
+	R(&r, VFD_CNTL_4, 0, F(VFD_CNTL_4, REGID_DSVIEWID, ADRENOGPU_REGID_INVALID));
+	adrenogpu_cs_pkt4(cs, &r);
+	memset(&r, 0, sizeof r);
+	R(&r, VFD_CNTL_5, 0, F(VFD_CNTL_5, REGID_GSHEADER, ADRENOGPU_REGID_INVALID) |
+	    F(VFD_CNTL_5, REGID_GSVIEWID, ADRENOGPU_REGID_INVALID));
+	adrenogpu_cs_pkt4(cs, &r);
+}
+
+/* tu6_emit_vpc for a vertex shader as the last geometry stage. */
+static void
+emit_vpc(struct adrenogpu_cs *cs, const struct adrenogpu_program *p)
+{
+	struct { uint8_t regid, compmask, loc; } var[ADRENOGPU_MAX_VARYINGS + 2];
+	unsigned cnt = 0, max_loc = 0;
+	uint32_t interp_modes[8] = { 0 }, ps_repl_modes[8] = { 0 };
+	unsigned interp_regs = 0;
+	struct adrenogpu_regs r;
+
+	/* ir3_link_shaders (pack_vs_out): every varying below total_in, in input order */
+	for (unsigned i = 0; i < p->fs_num_varyings; i++) {
+		const struct adrenogpu_varying *v = &p->fs_varying[i];
+		if (v->inloc >= p->fs_total_in) continue;
+		unsigned top = v->inloc + last_bit(v->compmask);
+		if (top > max_loc) max_loc = top;
+		if (VALID(v->vs_regid)) {
+			var[cnt].regid = v->vs_regid;
+			var[cnt].compmask = v->compmask;
+			var[cnt].loc = v->inloc;
+			cnt++;
+		}
+	}
+	/* the position output follows the varyings (position_loc = max_loc) */
+	const unsigned position_loc = max_loc;
+	if (!VALID(p->vs_position_regid)) {
+		cs->err = 1;
+		return;
+	}
+	max_loc += 4;
+	var[cnt].regid = p->vs_position_regid;
+	var[cnt].compmask = 0xf;
+	var[cnt].loc = (uint8_t)position_loc;
+	cnt++;
+	if (cnt > 32) { /* the SP_VS_OUTPUT_REG / SP_VS_VPC_DEST_REG files hold 32 outputs (tu6_emit_vpc asserts it) */
+		cs->err = 1;
+		return;
+	}
+
+	/* streamout off: VPC_SO_MAPPING_WPTR, VPC_SO_CNTL, PC_DGEN_SO_CNTL */
+	memset(&r, 0, sizeof r);
+	adrenogpu_regs_add(&r, REG_VPC_SO_MAPPING_WPTR, 0);
+	R(&r, VPC_SO_CNTL, 0, 0);
+	adrenogpu_regs_add(&r, REG_PC_DGEN_SO_CNTL, 0);
+	adrenogpu_cs_crb(cs, &r);
+
+	/* tu6_emit_vpc_varying_modes (flat varyings only; point sprites, layer and viewport are refused earlier) */
+	for (unsigned i = 0; i < p->fs_num_varyings; i++) {
+		const struct adrenogpu_varying *v = &p->fs_varying[i];
+		if (v->inloc >= p->fs_total_in) continue;
+		uint32_t interp_mode = 0;
+		unsigned shift = 0;
+		if (v->flat)
+			for (unsigned c = 0; c < 4; c++)
+				if (v->compmask & (1u << c)) {
+					interp_mode |= INTERP_FLAT << shift;
+					shift += 2;
+				}
+		const unsigned bits = (unsigned)__builtin_popcount(v->compmask) * 2;
+		const unsigned inloc = v->inloc * 2u, n = inloc / 32, sh = inloc % 32;
+		interp_modes[n] |= interp_mode << sh;
+		if (sh + bits > 32) {
+			if (n + 1 >= 8) {
+				cs->err = 1;
+				return;
+			}
+			interp_modes[n + 1] |= interp_mode >> (32 - sh);
+		}
+		if (n + 1 > interp_regs) interp_regs = n + 1;
+	}
+	if (interp_regs) {
+		memset(&r, 0, sizeof r);
+		for (unsigned i = 0; i < interp_regs; i++) R(&r, VPC_VARYING_INTERP_MODE_MODE, i, interp_modes[i]);
+		adrenogpu_cs_pkt4(cs, &r);
+		memset(&r, 0, sizeof r);
+		for (unsigned i = 0; i < interp_regs; i++) R(&r, VPC_VARYING_REPLACE_MODE_MODE, i, ps_repl_modes[i]);
+		adrenogpu_cs_pkt4(cs, &r);
+	}
+
+	/* map the last shader's outputs to VPC */
+	const unsigned sp_out_count = (cnt + 1) / 2, sp_vpc_dst_count = (cnt + 3) / 4;
+	uint32_t sp_out[16] = { 0 }, sp_vpc_dst[8] = { 0 };
+	for (unsigned i = 0; i < cnt; i++) {
+		sp_out[i / 2] |= ((uint32_t)var[i].regid | (uint32_t)var[i].compmask << 8) << (16 * (i % 2));
+		sp_vpc_dst[i / 4] |= (uint32_t)var[i].loc << (8 * (i % 4));
+	}
+	memset(&r, 0, sizeof r);
+	for (unsigned i = 0; i < sp_out_count; i++) R(&r, SP_VS_OUTPUT_REG, i, sp_out[i]);
+	for (unsigned i = 0; i < sp_vpc_dst_count; i++) R(&r, SP_VS_VPC_DEST_REG, i, sp_vpc_dst[i]);
+	R(&r, VPC_VS_CNTL, 0, F(VPC_VS_CNTL, STRIDE_IN_VPC, max_loc) | F(VPC_VS_CNTL, POSITIONLOC, position_loc) |
+	    F(VPC_VS_CNTL, PSIZELOC, 0xff) | F(VPC_VS_CNTL, EXTRAPOS, 0));
+	R(&r, VPC_VS_CLIP_CULL_CNTL, 0, F(VPC_VS_CLIP_CULL_CNTL, CLIP_MASK, 0) | F(VPC_VS_CLIP_CULL_CNTL, CLIP_DIST_03_LOC, 0xff) |
+	    F(VPC_VS_CLIP_CULL_CNTL, CLIP_DIST_47_LOC, 0xff));
+	R(&r, GRAS_CL_VS_CLIP_CULL_DISTANCE, 0, 0);
+	R(&r, PC_VS_CNTL, 0, F(PC_VS_CNTL, STRIDE_IN_VPC, max_loc));
+	R(&r, SP_VS_OUTPUT_CNTL, 0, F(SP_VS_OUTPUT_CNTL, OUT, cnt));
+	R(&r, VPC_VS_SIV_CNTL, 0, F(VPC_VS_SIV_CNTL, LAYERLOC, 0xff) | F(VPC_VS_SIV_CNTL, VIEWLOC, 0xff) |
+	    F(VPC_VS_SIV_CNTL, SHADINGRATELOC, 0xff));
+	R(&r, GRAS_SU_VS_SIV_CNTL, 0, 0);
+	adrenogpu_cs_crb(cs, &r);
+}
+
+static void
+emit_fs(struct adrenogpu_cs *cs, const struct adrenogpu_chip *chip, const struct adrenogpu_program *p)
+{
+	struct adrenogpu_regs r = { 0 };
+	const struct adrenogpu_xs *x = &p->fs;
+	const uint8_t *ij = p->fs_ij_regid;
+	enum { PERSP_PIXEL, PERSP_SAMPLE, PERSP_CENTROID, PERSP_CENTER_RHW, LINEAR_PIXEL, LINEAR_CENTROID, LINEAR_SAMPLE };
+	const unsigned total_in = p->fs_total_in;
+	const int enable_varyings = total_in > 0;
+
+	/* tu6_emit_xs, MESA_SHADER_FRAGMENT */
+	R(&r, SP_PS_CNTL_0, 0, F(SP_PS_CNTL_0, HALFREGFOOTPRINT, x->half_reg_footprint) |
+	    F(SP_PS_CNTL_0, FULLREGFOOTPRINT, x->full_reg_footprint) | F(SP_PS_CNTL_0, BRANCHSTACK, x->branchstack) |
+	    F(SP_PS_CNTL_0, THREADSIZE, p->fs_double_threadsize ? A8XX_E_THREAD128 : A8XX_E_THREAD64) |
+	    F(SP_PS_CNTL_0, VARYING, enable_varyings) | F(SP_PS_CNTL_0, LODPIXMASK, p->fs_need_full_quad) |
+	    F(SP_PS_CNTL_0, INOUTREGOVERLAP, 1) | F(SP_PS_CNTL_0, PIXLODENABLE, p->fs_need_pixlod) |
+	    F(SP_PS_CNTL_0, EARLYPREAMBLE, x->early_preamble) | F(SP_PS_CNTL_0, MERGEDREGS, x->mergedregs));
+	R(&r, RB_PS_CNTL, 0, F(RB_PS_CNTL, PIXLODENABLE, p->fs_need_pixlod) | F(RB_PS_CNTL, LODPIXMASK, p->fs_need_full_quad));
+	R(&r, SP_PS_INSTR_SIZE, 0, x->instrlen);
+	R(&r, SP_PS_PROGRAM_COUNTER_OFFSET, 0, 0);
+	R64(&r, SP_PS_BASE, 0, x->base_va);
+	R(&r, SP_PS_PVT_MEM_PARAM, 0, F(SP_PS_PVT_MEM_PARAM, MEMSIZEPERITEM, x->pvtmem_per_fiber_size));
+	R64(&r, SP_PS_PVT_MEM_BASE, 0, x->pvtmem_va);
+	R(&r, SP_PS_PVT_MEM_SIZE, 0, F(SP_PS_PVT_MEM_SIZE, TOTALPVTMEMSIZE, x->pvtmem_per_sp_size) |
+	    F(SP_PS_PVT_MEM_SIZE, PERWAVEMEMLAYOUT, x->pvtmem_per_wave));
+	R(&r, SP_PS_PVT_MEM_STACK_OFFSET, 0, F(SP_PS_PVT_MEM_STACK_OFFSET, OFFSET, x->pvtmem_per_sp_size));
+	R(&r, SP_PS_VGS_CNTL, 0, 0);
+	adrenogpu_cs_crb(cs, &r);
+
+	/* tu6_emit_fs */
+	memset(&r, 0, sizeof r);
+	R(&r, VFD_CNTL_6, 0, 0);
+	adrenogpu_cs_pkt4(cs, &r);
+	memset(&r, 0, sizeof r);
+	R(&r, PC_PS_CNTL, 0, 0);
+	adrenogpu_cs_pkt4(cs, &r);
+	memset(&r, 0, sizeof r);
+	R(&r, GRAS_MODE_CNTL, 0, 0x2);
+	adrenogpu_cs_pkt4(cs, &r);
+
+	/* tu6_emit_fs_inputs, with no sampler prefetch */
+	const unsigned coord = p->fs_coord_regid;
+	const unsigned zwcoord = VALID(coord) ? coord + 2 : ADRENOGPU_REGID_INVALID;
+	memset(&r, 0, sizeof r);
+	R(&r, SP_PS_INITIAL_TEX_LOAD_CNTL, 0, F(SP_PS_INITIAL_TEX_LOAD_CNTL, COUNT, 0) |
+	    F(SP_PS_INITIAL_TEX_LOAD_CNTL, CONSTSLOTID, 0x1ff) | F(SP_PS_INITIAL_TEX_LOAD_CNTL, CONSTSLOTID4COORD, 0x1ff) |
+	    F(SP_PS_INITIAL_TEX_LOAD_CNTL, IJ_WRITE_DISABLE, !VALID(ij[PERSP_PIXEL])));
+	adrenogpu_cs_pkt4(cs, &r);
+	memset(&r, 0, sizeof r);
+	R(&r, SP_LB_PARAM_LIMIT, 0, F(SP_LB_PARAM_LIMIT, PRIMALLOCTHRESHOLD, chip->prim_alloc_threshold));
+	R(&r, SP_REG_PROG_ID_0, 0, F(SP_REG_PROG_ID_0, FACEREGID, p->fs_face_regid) | F(SP_REG_PROG_ID_0, SAMPLEID, p->fs_sampleid_regid) |
+	    F(SP_REG_PROG_ID_0, SAMPLEMASK, p->fs_samplemask_in_regid) | F(SP_REG_PROG_ID_0, CENTERRHW, ij[PERSP_CENTER_RHW]));
+	R(&r, SP_REG_PROG_ID_1, 0, F(SP_REG_PROG_ID_1, IJ_PERSP_PIXEL, ij[PERSP_PIXEL]) | F(SP_REG_PROG_ID_1, IJ_LINEAR_PIXEL, ij[LINEAR_PIXEL]) |
+	    F(SP_REG_PROG_ID_1, IJ_PERSP_CENTROID, ij[PERSP_CENTROID]) | F(SP_REG_PROG_ID_1, IJ_LINEAR_CENTROID, ij[LINEAR_CENTROID]));
+	R(&r, SP_REG_PROG_ID_2, 0, F(SP_REG_PROG_ID_2, IJ_PERSP_SAMPLE, ij[PERSP_SAMPLE]) | F(SP_REG_PROG_ID_2, IJ_LINEAR_SAMPLE, ij[LINEAR_SAMPLE]) |
+	    F(SP_REG_PROG_ID_2, XYCOORDREGID, coord) | F(SP_REG_PROG_ID_2, ZWCOORDREGID, zwcoord));
+	R(&r, SP_REG_PROG_ID_3, 0, F(SP_REG_PROG_ID_3, LINELENGTHREGID, 0xfc) | F(SP_REG_PROG_ID_3, FOVEATIONQUALITYREGID, p->fs_shading_rate_regid));
+	adrenogpu_cs_pkt4(cs, &r);
+	memset(&r, 0, sizeof r);
+	R(&r, RB_LB_PARAM_LIMIT, 0, F(RB_LB_PARAM_LIMIT, PRIMALLOCTHRESHOLD, chip->prim_alloc_threshold));
+	adrenogpu_cs_pkt4(cs, &r);
+	unsigned sysval_regs = 0;
+	for (unsigned i = 0; i < 7; i++)
+		if (VALID(ij[i])) sysval_regs += i == PERSP_CENTER_RHW ? 1 : 2;
+	sysval_regs += VALID(p->fs_face_regid) + VALID(p->fs_sampleid_regid) + VALID(p->fs_samplemask_in_regid) +
+	    VALID(p->fs_shading_rate_regid);
+	sysval_regs += 2 * VALID(coord) + 2 * VALID(zwcoord);
+	memset(&r, 0, sizeof r);
+	R(&r, SP_PS_CNTL_1, 0, F(SP_PS_CNTL_1, SYSVAL_REGS_COUNT, sysval_regs) | F(SP_PS_CNTL_1, DEFER_WAVE_ALLOC_DIS, 1) |
+	    F(SP_PS_CNTL_1, EVICT_BUF_MODE, 1));
+	adrenogpu_cs_pkt4(cs, &r);
+	memset(&r, 0, sizeof r);
+	R(&r, SP_PS_WAVE_CNTL, 0, F(SP_PS_WAVE_CNTL, VARYINGS, enable_varyings));
+	adrenogpu_cs_pkt4(cs, &r);
+	int need_size = !chip->has_implicit_fragface_fragcoord_ij_linear && (p->fs_frag_face || p->fs_fragcoord_compmask != 0);
+	int need_size_persamp = 0;
+	if (VALID(ij[PERSP_CENTER_RHW])) {
+		if (p->fs_sample_shading) need_size_persamp = 1;
+		else need_size = 1;
+	}
+	const unsigned ij_pp = VALID(ij[PERSP_PIXEL]), ij_pc = VALID(ij[PERSP_CENTROID]), ij_ps = VALID(ij[PERSP_SAMPLE]);
+	const unsigned ij_lp = VALID(ij[LINEAR_PIXEL]) || need_size, ij_lc = VALID(ij[LINEAR_CENTROID]),
+	    ij_ls = VALID(ij[LINEAR_SAMPLE]) || need_size_persamp;
+	memset(&r, 0, sizeof r);
+	R(&r, GRAS_CL_INTERP_CNTL, 0, F(GRAS_CL_INTERP_CNTL, IJ_PERSP_PIXEL, ij_pp) | F(GRAS_CL_INTERP_CNTL, IJ_PERSP_CENTROID, ij_pc) |
+	    F(GRAS_CL_INTERP_CNTL, IJ_PERSP_SAMPLE, ij_ps) | F(GRAS_CL_INTERP_CNTL, IJ_LINEAR_PIXEL, ij_lp) |
+	    F(GRAS_CL_INTERP_CNTL, IJ_LINEAR_CENTROID, ij_lc) | F(GRAS_CL_INTERP_CNTL, IJ_LINEAR_SAMPLE, ij_ls) |
+	    F(GRAS_CL_INTERP_CNTL, COORD_MASK, p->fs_fragcoord_compmask) | F(GRAS_CL_INTERP_CNTL, FACENESS, p->fs_frag_face) |
+	    F(GRAS_CL_INTERP_CNTL, CENTERRHW, VALID(ij[PERSP_CENTER_RHW])));
+	adrenogpu_cs_pkt4(cs, &r);
+	memset(&r, 0, sizeof r);
+	R(&r, RB_INTERP_CNTL, 0, F(RB_INTERP_CNTL, IJ_PERSP_PIXEL, ij_pp) | F(RB_INTERP_CNTL, IJ_PERSP_CENTROID, ij_pc) |
+	    F(RB_INTERP_CNTL, IJ_PERSP_SAMPLE, ij_ps) | F(RB_INTERP_CNTL, IJ_LINEAR_PIXEL, ij_lp) |
+	    F(RB_INTERP_CNTL, IJ_LINEAR_CENTROID, ij_lc) | F(RB_INTERP_CNTL, IJ_LINEAR_SAMPLE, ij_ls) |
+	    F(RB_INTERP_CNTL, COORD_MASK, p->fs_fragcoord_compmask) | F(RB_INTERP_CNTL, INTERP_EN, enable_varyings));
+	R(&r, RB_PS_INPUT_CNTL, 0, F(RB_PS_INPUT_CNTL, SAMPLEMASK, VALID(p->fs_samplemask_in_regid)) |
+	    F(RB_PS_INPUT_CNTL, POSTDEPTHCOVERAGE, p->fs_post_depth_coverage) | F(RB_PS_INPUT_CNTL, FACENESS, p->fs_frag_face) |
+	    F(RB_PS_INPUT_CNTL, SAMPLEID, VALID(p->fs_sampleid_regid)) |
+	    F(RB_PS_INPUT_CNTL, FRAGCOORDSAMPLEMODE, p->fs_sample_shading ? A8XX_E_FRAGCOORD_SAMPLE : A8XX_E_FRAGCOORD_CENTER) |
+	    F(RB_PS_INPUT_CNTL, CENTERRHW, VALID(ij[PERSP_CENTER_RHW])) | F(RB_PS_INPUT_CNTL, FOVEATION, VALID(p->fs_shading_rate_regid)));
+	adrenogpu_cs_pkt4(cs, &r);
+	memset(&r, 0, sizeof r);
+	R(&r, RB_PS_SAMPLEFREQ_CNTL, 0, F(RB_PS_SAMPLEFREQ_CNTL, PER_SAMP_MODE, p->fs_sample_shading));
+	adrenogpu_cs_pkt4(cs, &r);
+	memset(&r, 0, sizeof r);
+	R(&r, GRAS_LRZ_PS_INPUT_CNTL, 0, F(GRAS_LRZ_PS_INPUT_CNTL, SAMPLEID, VALID(p->fs_sampleid_regid)) |
+	    F(GRAS_LRZ_PS_INPUT_CNTL, FRAGCOORDSAMPLEMODE, p->fs_sample_shading ? A8XX_E_FRAGCOORD_SAMPLE : A8XX_E_FRAGCOORD_CENTER));
+	adrenogpu_cs_pkt4(cs, &r);
+	memset(&r, 0, sizeof r);
+	R(&r, GRAS_LRZ_PS_SAMPLEFREQ_CNTL, 0, F(GRAS_LRZ_PS_SAMPLEFREQ_CNTL, PER_SAMP_MODE, p->fs_sample_shading));
+	adrenogpu_cs_pkt4(cs, &r);
+	uint32_t varmask[4] = { 0 };
+	for (unsigned i = 0; i < p->fs_num_varyings; i++) {
+		const struct adrenogpu_varying *v = &p->fs_varying[i];
+		if (v->inloc >= total_in) continue;
+		for (unsigned j = 0; j < last_bit(v->compmask); j++) {
+			unsigned loc = v->inloc + j;
+			if (loc < 128) varmask[loc / 32] |= 1u << (loc % 32);
+		}
+	}
+	memset(&r, 0, sizeof r);
+	for (unsigned i = 0; i < 4; i++) R(&r, VPC_VARYING_LM_TRANSFER_CNTL_DISABLE, i, ~varmask[i]);
+	adrenogpu_cs_pkt4(cs, &r);
+	memset(&r, 0, sizeof r);
+	R(&r, VPC_PS_CNTL, 0, F(VPC_PS_CNTL, NUMNONPOSVAR, total_in) | F(VPC_PS_CNTL, PRIMIDLOC, 0xff) |
+	    F(VPC_PS_CNTL, VARYING, total_in != 0) | F(VPC_PS_CNTL, VIEWIDLOC, 0xff));
+	adrenogpu_cs_pkt4(cs, &r);
+
+	/* tu6_emit_fs_outputs */
+	unsigned output_reg_count = 0;
+	for (unsigned i = 0; i < 8; i++)
+		if (VALID(p->fs_color_regid[i]) || ((p->fs_aliased_components >> (4 * i)) & 0xf)) output_reg_count = i + 1;
+	memset(&r, 0, sizeof r);
+	R(&r, SP_PS_OUTPUT_CNTL, 0, F(SP_PS_OUTPUT_CNTL, DUAL_COLOR_IN_ENABLE, p->fs_dual_src_blend) |
+	    F(SP_PS_OUTPUT_CNTL, DEPTH_REGID, p->fs_depth_regid) | F(SP_PS_OUTPUT_CNTL, SAMPMASK_REGID, p->fs_samplemask_regid) |
+	    F(SP_PS_OUTPUT_CNTL, STENCILREF_REGID, p->fs_stencilref_regid));
+	adrenogpu_cs_pkt4(cs, &r);
+	uint32_t render_components = 0;
+	if (output_reg_count) {
+		memset(&r, 0, sizeof r);
+		for (unsigned i = 0; i < output_reg_count; i++) {
+			R(&r, SP_PS_OUTPUT_REG, i, F(SP_PS_OUTPUT_REG, REGID, p->fs_color_regid[i]) |
+			    F(SP_PS_OUTPUT_REG, HALF_PRECISION, p->fs_color_half[i]));
+			if (VALID(p->fs_color_regid[i]) || (p->fs_aliased_components & (0xfu << (4 * i))))
+				render_components |= 0xfu << (4 * i);
+		}
+		adrenogpu_cs_pkt4(cs, &r);
+	}
+	memset(&r, 0, sizeof r);
+	R(&r, SP_PS_OUTPUT_MASK, 0, render_components);
+	adrenogpu_cs_pkt4(cs, &r);
+	memset(&r, 0, sizeof r);
+	R(&r, SP_PS_OUTPUT_CONST_CNTL, 0, F(SP_PS_OUTPUT_CONST_CNTL, ENABLED, p->fs_aliased_components != 0));
+	R(&r, SP_PS_OUTPUT_CONST_MASK, 0, p->fs_aliased_components);
+	adrenogpu_cs_pkt4(cs, &r);
+	memset(&r, 0, sizeof r);
+	R(&r, RB_PS_OUTPUT_CNTL, 0, F(RB_PS_OUTPUT_CNTL, DUAL_COLOR_IN_ENABLE, p->fs_dual_src_blend) |
+	    F(RB_PS_OUTPUT_CNTL, FRAG_WRITES_Z, VALID(p->fs_depth_regid)) |
+	    F(RB_PS_OUTPUT_CNTL, FRAG_WRITES_SAMPMASK, VALID(p->fs_samplemask_regid)) |
+	    F(RB_PS_OUTPUT_CNTL, FRAG_WRITES_STENCILREF, VALID(p->fs_stencilref_regid)));
+	adrenogpu_cs_pkt4(cs, &r);
+	memset(&r, 0, sizeof r);
+	R(&r, RB_PS_OUTPUT_MASK, 0, render_components);
+	adrenogpu_cs_pkt4(cs, &r);
+	emit_const_ubo(cs, x, A8XX_E_CP_LOAD_STATE6_FRAG, A8XX_E_SB6_FS_SHADER);
+}
+
+void
+adrenogpu_pm4_emit_program(struct adrenogpu_cs *cs, const struct adrenogpu_chip *chip, const struct adrenogpu_program *p)
+{
+	if (((p->vs.base_va | p->fs.base_va) & 0x7f) || p->vs_attr_in > ADRENOGPU_MAX_VS_ATTRS ||
+	    p->fs_num_varyings > ADRENOGPU_MAX_VARYINGS || p->fs_total_in > 128 || p->fs_double_threadsize) {
+		cs->err = 1;
+		return;
+	}
+	emit_program_config(cs, p);
+	emit_vs(cs, p);
+	emit_absent_stages(cs);
+	emit_vpc(cs, p);
+	emit_fs(cs, chip, p);
 }
 
 void
